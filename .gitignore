@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data (workspace)
+workspace/abyssal.db
+workspace/abyssal.db-wal
+workspace/abyssal.db-shm
+workspace/snapshots/
+workspace/pdfs/
+workspace/texts/
+workspace/analyses/
+workspace/drafts/
+workspace/articles/
+workspace/decisions/
+workspace/private_docs/
+workspace/logs/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# API keys
+config/abyssal.local.toml
+
+# Electron builder output
+release/
+*.exe
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*

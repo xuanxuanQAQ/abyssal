@@ -1,0 +1,46 @@
+{
+  "name": "abyssal",
+  "version": "0.1.0",
+  "description": "AI-powered academic literature research pipeline",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "dev": "electron . --dev",
+    "build": "tsc",
+    "start": "electron .",
+    "batch": "node dist/cli/batch.js",
+    "package": "electron-builder",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0",
+    "mupdf": "^1.27.0",
+    "@anthropic-ai/sdk": "^0.40",
+    "openai": "^4.70",
+    "@huggingface/transformers": "^3.0",
+    "citeproc": "^2.0",
+    "@retorquere/bibtex-parser": "^7.0",
+    "tesseract.js": "^5.0",
+    "js-yaml": "^4.1",
+    "smol-toml": "^1.0",
+    "docx": "^9.0",
+    "react": "^19.0",
+    "react-dom": "^19.0",
+    "react-pdf": "^9.0",
+    "@tiptap/react": "^2.0",
+    "d3": "^7.0",
+    "recharts": "^2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "electron": "^33.0",
+    "electron-builder": "^25.0",
+    "@modelcontextprotocol/sdk": "^1.0",
+    "@types/better-sqlite3": "^7.0",
+    "@types/d3": "^7.0",
+    "@types/js-yaml": "^4.0",
+    "@types/react": "^19.0",
+    "@types/react-dom": "^19.0",
+    "@types/node": "^22.0"
+  }
+}

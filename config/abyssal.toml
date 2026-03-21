@@ -1,0 +1,58 @@
+[project]
+name = ""
+description = ""
+mode = "anchored"                            # anchored / unanchored
+
+[acquire]
+unpaywall = true
+arxiv = true
+pmc = true
+institutional_proxy = ""
+scihub = true
+max_retries = 3
+download_timeout = 30
+
+[discovery]
+citation_depth = 2
+max_papers_per_seed = 50
+relevance_threshold = 0.3
+
+[analysis]
+max_tokens_per_chunk = 80000
+include_key_references = true
+auto_map_concepts = true
+
+[rag]
+embedding_backend = "api"                    # api / local-onnx
+embedding_model = "text-embedding-3-small"
+embedding_dim = 1536
+chunk_overlap = 200
+default_top_k = 10
+cross_paper_context_k = 5
+
+[language]
+internal = "en"
+output_default = "zh"
+
+[llm]
+default_provider = "claude"                  # claude / openai / deepseek / ollama
+default_model = "claude-sonnet-4-20250514"
+
+[llm.discovery]
+provider = "deepseek"
+model = "deepseek-chat"
+
+[llm.analysis]
+provider = "claude"
+model = "claude-opus-4-20250901"
+
+[llm.article]
+provider = "claude"
+model = "claude-opus-4-20250901"
+
+[api_keys]
+semantic_scholar = ""
+unpaywall_email = ""
+
+[workspace]
+base_dir = "workspace"
