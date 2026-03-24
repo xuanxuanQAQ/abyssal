@@ -1,0 +1,196 @@
+/**
+ * ReaderView — 顶层 Reader 视图容器
+ *
+ * 三面板水平布局：ThumbnailNav + PDFViewport + AnnotationList
+ * 使用 react-resizable-panels 管理面板尺寸。
+ */
+
+import React, { useCallback, useRef, useState } from 'react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { useAppStore } from '../../core/store';
+import { useAnnotations } from '../../core/ipc/hooks/useAnnotations';
+import { usePDFDocument } from './hooks/usePDFDocument';
+import { PDFViewport } from './viewport/PDFViewport';
+import { ThumbnailNav } from './thumbnails/ThumbnailNav';
+import { AnnotationList } from './annotations/AnnotationList';
+import type { ScrollContainerHandle } from './viewport/ScrollContainer';
+
+export function ReaderView() {
+  const selectedPaperId = useAppStore((s) => s.selectedPaperId);
+  const readerThumbsOpen = useAppStore((s) => s.readerThumbsOpen);
+  const readerAnnotationListOpen = useAppStore(
+    (s) => s.readerAnnotationListOpen,
+  );
+
+  const { manager, pageMetadataMap, status, error } =
+    usePDFDocument(selectedPaperId);
+  const { data: annotations = [] } = useAnnotations(selectedPaperId);
+
+  const scrollContainerRef = useRef<ScrollContainerHandle>(null);
+  const [flashingAnnotationId, setFlashingAnnotationId] = useState<
+    string | null
+  >(null);
+
+  const renderThumbnail = useCallback(
+    async (canvas: HTMLCanvasElement, pageNumber: number) => {
+      const doc = manager?.getDocument();
+      if (!doc || !pageMetadataMap) return;
+
+      const page = await doc.getPage(pageNumber);
+      const meta = pageMetadataMap.get(pageNumber);
+      const baseWidth =
+        meta?.baseWidth ?? page.getViewport({ scale: 1 }).width;
+      const scale = 60 / baseWidth;
+      const viewport = page.getViewport({ scale });
+
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.scale(dpr, dpr);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    },
+    [manager, pageMetadataMap],
+  );
+
+  const handleScrollToPage = useCallback((pageNumber: number) => {
+    scrollContainerRef.current?.scrollToPage(pageNumber);
+  }, []);
+
+  const handleScrollToAnnotation = useCallback(
+    (page: number, annotationId: string) => {
+      scrollContainerRef.current?.scrollToPage(page);
+      setFlashingAnnotationId(annotationId);
+      setTimeout(() => setFlashingAnnotationId(null), 1500);
+    },
+    [],
+  );
+
+  if (selectedPaperId == null) {
+    return (
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-muted)',
+          fontSize: 'var(--text-sm)',
+        }}
+      >
+        从 Library 选择论文打开
+      </div>
+    );
+  }
+
+  if (status === 'loading') {
+    return (
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-secondary)',
+          fontSize: 'var(--text-sm)',
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-muted)',
+          fontSize: 'var(--text-sm)',
+        }}
+      >
+        {error ?? 'Failed to load document'}
+      </div>
+    );
+  }
+
+  if (!manager || !pageMetadataMap) {
+    return null;
+  }
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <PanelGroup direction="horizontal" style={{ flex: 1 }}>
+        {readerThumbsOpen && (
+          <>
+            <Panel
+              defaultSize={7}
+              minSize={4}
+              maxSize={10}
+              collapsible
+              style={{
+                background: 'var(--bg-surface-low)',
+                borderRight: '1px solid var(--border-subtle)',
+              }}
+            >
+              <ThumbnailNav
+                pageMetadataMap={pageMetadataMap}
+                annotations={annotations}
+                onScrollToPage={handleScrollToPage}
+                renderThumbnail={renderThumbnail}
+              />
+            </Panel>
+            <PanelResizeHandle
+              style={{
+                width: 1,
+                background: 'var(--border-subtle)',
+              }}
+            />
+          </>
+        )}
+
+        <Panel style={{ overflow: 'hidden' }}>
+          <PDFViewport
+            paperId={selectedPaperId}
+            manager={manager}
+            pageMetadataMap={pageMetadataMap}
+          />
+        </Panel>
+
+        {readerAnnotationListOpen && (
+          <>
+            <PanelResizeHandle
+              style={{
+                width: 1,
+                background: 'var(--border-subtle)',
+              }}
+            />
+            <Panel
+              defaultSize={20}
+              minSize={14}
+              maxSize={28}
+              collapsible
+              style={{
+                background: 'var(--bg-surface-low)',
+                borderLeft: '1px solid var(--border-subtle)',
+              }}
+            >
+              <AnnotationList
+                paperId={selectedPaperId}
+                onScrollToAnnotation={handleScrollToAnnotation}
+              />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
+    </div>
+  );
+}

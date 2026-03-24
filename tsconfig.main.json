@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": [
+    "src/core/**/*.ts",
+    "src/electron/**/*.ts",
+    "src/cli/**/*.ts",
+    "src/mcp-adapter/**/*.ts",
+    "src/shared-types/**/*.ts"
+  ],
+  "exclude": [
+    "src/electron/preload.ts"
+  ]
+}

@@ -1,0 +1,478 @@
+/**
+ * Abyssal 全局样式
+ *
+ * §10 CSS 变量系统（背景/文本/语义色/间距/字号/动画）
+ * §2.1 CSS Grid 骨架
+ * §9.3 拖拽屏蔽规则
+ * §10.3 动画禁用
+ * §14.3 高对比度支持
+ */
+
+/* ═══════════════════════════════════════════
+   §10.1 CSS Custom Properties — Dark 主题
+   ═══════════════════════════════════════════ */
+
+:root,
+[data-theme='dark'] {
+  /* 背景层级（由深到浅，5 级） */
+  --bg-base: #0A0A0B;
+  --bg-surface-lowest: #111113;
+  --bg-surface-low: #18181B;
+  --bg-surface: #1F1F23;
+  --bg-surface-high: #27272C;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(255, 255, 255, 0.10);
+
+  /* 文本层级（4 级） */
+  --text-primary: #EDEDEF;
+  --text-secondary: #A0A0A8;
+  --text-muted: #6B6B76;
+  --text-inverse: #111113;
+
+  /* 边框与分隔线 */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.20);
+
+  color-scheme: dark;
+}
+
+/* ═══════════════════════════════════════════
+   §10.1 Light 主题变体
+   ═══════════════════════════════════════════ */
+
+[data-theme='light'] {
+  --bg-base: #FFFFFF;
+  --bg-surface-lowest: #F8F8FA;
+  --bg-surface-low: #F3F3F5;
+  --bg-surface: #EEEEF0;
+  --bg-surface-high: #E5E5E8;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.08);
+
+  --text-primary: #111113;
+  --text-secondary: #5C5C66;
+  --text-muted: #8E8E99;
+  --text-inverse: #EDEDEF;
+
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-default: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.20);
+
+  color-scheme: light;
+}
+
+/* ═══════════════════════════════════════════
+   通用语义色 + 设计 Token（不随主题变化）
+   ═══════════════════════════════════════════ */
+
+:root {
+  --accent-color: #3B82F6;
+  --accent-hover: #2563EB;
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --info: #6366F1;
+
+  /* 间距系统（4px 网格） */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* 字号系统（桌面应用 13px 基准） */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --leading-xs: 16px;
+  --leading-sm: 18px;
+  --leading-base: 20px;
+  --leading-md: 22px;
+  --leading-lg: 24px;
+  --leading-xl: 28px;
+
+  /* 动画与过渡 */
+  --duration-fast: 100ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --easing-default: cubic-bezier(0.16, 1, 0.3, 1);
+  --easing-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* ── 布局尺寸 ── */
+  --titlebar-height: 44px;
+  --statusbar-height: 24px;
+  --navrail-width: 48px;
+
+  /* ── 阴影 Token ── */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.3);
+
+  /* ── 遮罩层 ── */
+  --overlay-bg: rgba(0, 0, 0, 0.4);
+
+  /* ── 窗口控制 ── */
+  --close-btn-hover: #C42B1C;
+}
+
+/* ═══════════════════════════════════════════
+   基础重置与全局样式
+   ═══════════════════════════════════════════ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  color: var(--text-primary);
+  background-color: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100%;
+}
+
+/* ═══════════════════════════════════════════
+   §2.1 CSS Grid 骨架
+   ═══════════════════════════════════════════ */
+
+.app-shell {
+  display: grid;
+  grid-template-rows: var(--titlebar-height) 1fr var(--statusbar-height);
+  grid-template-columns: var(--navrail-width) 1fr;
+  grid-template-areas:
+    'titlebar  titlebar'
+    'navrail   workspace'
+    'statusbar statusbar';
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-shell__titlebar {
+  grid-area: titlebar;
+}
+
+.app-shell__navrail {
+  grid-area: navrail;
+}
+
+.app-shell__workspace {
+  grid-area: workspace;
+  overflow: hidden;
+  position: relative;
+}
+
+.app-shell__statusbar {
+  grid-area: statusbar;
+}
+
+/* ═══════════════════════════════════════════
+   §3.2 TitleBar 拖拽区域
+   ═══════════════════════════════════════════ */
+
+.titlebar {
+  -webkit-app-region: drag;
+  cursor: default;
+  user-select: none;
+}
+
+.titlebar__interactive {
+  -webkit-app-region: no-drag;
+}
+
+/* ═══════════════════════════════════════════
+   §4 NavRail
+   ═══════════════════════════════════════════ */
+
+.navrail {
+  background-color: var(--bg-surface-lowest);
+  border-right: 1px solid var(--border-subtle);
+}
+
+/* ═══════════════════════════════════════════
+   §6 StatusBar
+   ═══════════════════════════════════════════ */
+
+.statusbar {
+  background-color: var(--bg-surface-lowest);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════
+   §9.3 拖拽期间性能防护
+   ═══════════════════════════════════════════ */
+
+body.is-dragging .mainstage-canvas,
+body.is-dragging .graph-webgl-container,
+body.is-dragging .pdf-render-layer,
+body.is-dragging [data-drag-inert] {
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════
+   §10.3 动画禁用（data-reduce-motion）
+   ═══════════════════════════════════════════ */
+
+[data-reduce-motion] *,
+[data-reduce-motion] *::before,
+[data-reduce-motion] *::after {
+  transition-duration: 0ms !important;
+  animation-duration: 0ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   §14.3 高对比度支持
+   ═══════════════════════════════════════════ */
+
+@media (prefers-contrast: more) {
+  :root {
+    --border-subtle: var(--border-strong);
+    --border-default: var(--border-strong);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent-color) !important;
+    outline-offset: 2px !important;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   焦点环样式
+   ═══════════════════════════════════════════ */
+
+:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+/* ═══════════════════════════════════════════
+   react-resizable-panels 分隔条
+   ═══════════════════════════════════════════ */
+
+/* 水平方向拖拽手柄（左右分割） */
+.panel-resize-handle[data-panel-group-direction="horizontal"] {
+  width: 6px;
+  background: transparent;
+  transition: background-color var(--duration-fast) var(--easing-default);
+  cursor: col-resize;
+}
+
+.panel-resize-handle[data-panel-group-direction="horizontal"]:hover,
+.panel-resize-handle[data-panel-group-direction="horizontal"][data-resize-handle-active] {
+  background-color: var(--accent-color);
+}
+
+/* 垂直方向拖拽手柄（上下分割） */
+.panel-resize-handle[data-panel-group-direction="vertical"] {
+  height: 6px;
+  background: transparent;
+  transition: background-color var(--duration-fast) var(--easing-default);
+  cursor: row-resize;
+  position: relative;
+}
+
+.panel-resize-handle[data-panel-group-direction="vertical"]::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background-color: var(--border-default);
+  transition: background-color var(--duration-fast) var(--easing-default);
+}
+
+.panel-resize-handle[data-panel-group-direction="vertical"]:hover,
+.panel-resize-handle[data-panel-group-direction="vertical"][data-resize-handle-active] {
+  background-color: color-mix(in srgb, var(--accent-color) 15%, transparent);
+}
+
+.panel-resize-handle[data-panel-group-direction="vertical"]:hover::after,
+.panel-resize-handle[data-panel-group-direction="vertical"][data-resize-handle-active]::after {
+  background-color: var(--accent-color);
+}
+
+/* ═══════════════════════════════════════════
+   §8 GlobalSearch 遮罩与弹层
+   z-index 由组件内联样式通过 Z_INDEX 常量设置
+   ═══════════════════════════════════════════ */
+
+.global-search-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+}
+
+.global-search-panel {
+  position: fixed;
+  top: 15vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(640px, 90vw);
+  max-height: min(480px, 70vh);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ═══════════════════════════════════════════
+   滚动条样式
+   ═══════════════════════════════════════════ */
+
+/* Chromium / Electron */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Firefox fallback */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+}
+
+/* ═══════════════════════════════════════════
+   §2.3 响应式折叠 — CSS Media Queries 层
+   ═══════════════════════════════════════════ */
+
+@media (max-width: 1024px) {
+  .context-panel-auto-hide {
+    display: none;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   Shell 组件通用样式
+   ═══════════════════════════════════════════ */
+
+/* 幽灵按钮（无背景按钮 + hover 效果） */
+.ghost-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background-color var(--duration-fast) var(--easing-default);
+}
+
+.ghost-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+/* 窗口关闭按钮特殊 hover */
+.window-close-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+}
+
+.window-close-btn:hover {
+  background-color: var(--close-btn-hover);
+  color: #fff;
+}
+
+/* 窗口控制按钮 hover */
+.window-ctrl-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background-color var(--duration-fast);
+}
+
+.window-ctrl-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+/* NavIcon hover — 非激活态 */
+.nav-icon-btn {
+  transition: background-color var(--duration-fast) var(--easing-default);
+}
+
+.nav-icon-btn:not([aria-selected='true']):hover {
+  background-color: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════
+   无障碍工具类
+   ═══════════════════════════════════════════ */
+
+/* 仅屏幕阅读器可见 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ═══════════════════════════════════════════
+   Keyframe 动画
+   ═══════════════════════════════════════════ */
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

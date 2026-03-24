@@ -1,23 +1,26 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
-    "lib": ["ES2022"],
-    "outDir": "dist",
-    "rootDir": "src",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
       "@core/*": ["src/core/*"],
       "@electron/*": ["src/electron/*"],
-      "@renderer/*": ["src/renderer/*"]
+      "@renderer/*": ["src/renderer/*"],
+      "@shared-types/*": ["src/shared-types/*"],
+      "@test-utils": ["src/__test-utils__"],
+      "@test-utils/*": ["src/__test-utils__/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

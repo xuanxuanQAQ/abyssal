@@ -1,0 +1,218 @@
+/**
+ * ConceptCoverageBar -- Stacked horizontal bar for a single concept's
+ * paper coverage breakdown.
+ *
+ * Segment colors (section 11.2):
+ *   synthesized: var(--success)      green
+ *   analyzed:    var(--accent-color)  blue
+ *   acquired:    var(--warning)       orange
+ *   pending:     var(--text-muted)    gray
+ *   excluded:    var(--danger)        red, semi-transparent
+ *
+ * Shows a warning icon when total coverage is 0 or < 3, and a
+ * "Search Related" button when coverage is zero.
+ *
+ * TODO: Search button triggers discover pipeline (not wired yet).
+ */
+
+import React from 'react';
+
+interface ConceptCoverageBarProps {
+  conceptName: string;
+  conceptId: string;
+  synthesized: number;
+  analyzed: number;
+  acquired: number;
+  pending: number;
+  excluded: number;
+  total: number;
+  onSearchRelated?: (() => void) | undefined;
+}
+
+interface Segment {
+  count: number;
+  color: string;
+  label: string;
+  opacity: number;
+}
+
+export function ConceptCoverageBar({
+  conceptName,
+  conceptId,
+  synthesized,
+  analyzed,
+  acquired,
+  pending,
+  excluded,
+  total,
+  onSearchRelated,
+}: ConceptCoverageBarProps) {
+  const segments: Segment[] = [
+    { count: synthesized, color: 'var(--success)', label: 'Synthesized', opacity: 1 },
+    { count: analyzed, color: 'var(--accent-color)', label: 'Analyzed', opacity: 1 },
+    { count: acquired, color: 'var(--warning)', label: 'Acquired', opacity: 1 },
+    { count: pending, color: 'var(--text-muted)', label: 'Pending', opacity: 1 },
+    { count: excluded, color: 'var(--danger)', label: 'Excluded', opacity: 0.4 },
+  ];
+
+  const nonExcludedTotal = synthesized + analyzed + acquired + pending;
+  const showWarning = total === 0 || nonExcludedTotal < 3;
+  const showSearchButton = total === 0 && onSearchRelated !== undefined;
+
+  return (
+    <div
+      style={{
+        padding: '8px 12px',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-sm)',
+        backgroundColor: 'var(--bg-surface-low)',
+      }}
+    >
+      {/* Header row: concept name + warning + total */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 6,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {showWarning && (
+            <span
+              title={
+                total === 0
+                  ? 'No coverage -- search for related papers'
+                  : 'Low coverage (fewer than 3 papers)'
+              }
+              style={{ fontSize: 14, lineHeight: 1 }}
+            >
+              {'\u26A0'}
+            </span>
+          )}
+          <span
+            style={{
+              fontSize: 'var(--text-sm)',
+              fontWeight: 500,
+              color: 'var(--text-primary)',
+            }}
+          >
+            {conceptName}
+          </span>
+          <span
+            style={{
+              fontSize: 'var(--text-xs)',
+              color: 'var(--text-muted)',
+            }}
+          >
+            ({conceptId})
+          </span>
+        </div>
+
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          {total} paper{total !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Stacked bar */}
+      {total > 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            width: '100%',
+            height: 6,
+            borderRadius: 3,
+            overflow: 'hidden',
+            backgroundColor: 'var(--bg-base)',
+          }}
+        >
+          {segments.map((seg) => {
+            if (seg.count === 0) return null;
+            const pct = (seg.count / total) * 100;
+            return (
+              <div
+                key={seg.label}
+                title={`${seg.label}: ${seg.count}`}
+                style={{
+                  width: `${pct}%`,
+                  height: '100%',
+                  backgroundColor: seg.color,
+                  opacity: seg.opacity,
+                  minWidth: seg.count > 0 ? 2 : 0,
+                }}
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <div
+          style={{
+            width: '100%',
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: 'var(--bg-base)',
+          }}
+        />
+      )}
+
+      {/* Legend row */}
+      {total > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 12,
+            marginTop: 4,
+            flexWrap: 'wrap',
+          }}
+        >
+          {segments
+            .filter((seg) => seg.count > 0)
+            .map((seg) => (
+              <span
+                key={seg.label}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  fontSize: 10,
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    backgroundColor: seg.color,
+                    opacity: seg.opacity,
+                  }}
+                />
+                {seg.label} {seg.count}
+              </span>
+            ))}
+        </div>
+      )}
+
+      {/* Search related button for zero-coverage concepts */}
+      {showSearchButton && (
+        <button
+          type="button"
+          onClick={onSearchRelated}
+          style={{
+            marginTop: 6,
+            padding: '4px 10px',
+            border: '1px solid var(--accent-color)',
+            borderRadius: 'var(--radius-sm)',
+            background: 'none',
+            color: 'var(--accent-color)',
+            fontSize: 'var(--text-xs)',
+            cursor: 'pointer',
+          }}
+        >
+          Search Related Papers
+        </button>
+      )}
+    </div>
+  );
+}
