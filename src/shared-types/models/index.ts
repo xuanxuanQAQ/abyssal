@@ -15,6 +15,10 @@ import type {
   EvidenceStatus,
   RecommendationType,
   ProjectStartMode,
+  Maturity,
+  ConceptChangeType,
+  ConceptHistoryEventType,
+  AdvisoryNotificationType,
 } from '../enums';
 
 // ═══ Paper ═══
@@ -47,9 +51,19 @@ export interface Paper {
 export interface Concept {
   id: string;
   name: string;
+  /** v2.0 中文名 */
+  nameZh: string;
+  /** v2.0 英文名 */
+  nameEn: string;
   description: string;
   parentId: string | null;
   level: number;
+  /** v2.0 成熟度 */
+  maturity: Maturity;
+  /** v2.0 关键词列表 */
+  keywords: string[];
+  /** v2.0 演化历史（JSON 数组） */
+  history: HistoryEntry[];
 }
 
 export interface ConceptFramework {
@@ -203,7 +217,7 @@ export interface SectionVersion {
 export interface GraphNode {
   id: string;
   label: string;
-  type: 'paper' | 'concept';
+  type: 'paper' | 'concept' | 'memo' | 'note';
   metadata?: Record<string, unknown> | undefined;
   /** §1.1 论文节点的 relevance */
   relevance?: import('../enums').Relevance | undefined;
@@ -237,6 +251,8 @@ export interface LayerVisibility {
   conceptAgree: boolean;
   conceptConflict: boolean;
   semanticNeighbor: boolean;
+  /** v2.0 笔记节点层 */
+  notes: boolean;
 }
 
 // ═══ Tag ═══
@@ -420,11 +436,23 @@ export interface SectionContext {
 export interface GraphNodeContext {
   type: 'graphNode';
   nodeId: string;
-  nodeType: 'paper' | 'concept';
+  nodeType: 'paper' | 'concept' | 'memo' | 'note';
 }
 
 export interface EmptyContext {
   type: 'empty';
+}
+
+/** v2.0 Memo 上下文 */
+export interface MemoContext {
+  type: 'memo';
+  memoId: string;
+}
+
+/** v2.0 Note 上下文 */
+export interface NoteContext {
+  type: 'note';
+  noteId: string;
 }
 
 export type ContextSource =
@@ -433,6 +461,8 @@ export type ContextSource =
   | MappingContext
   | SectionContext
   | GraphNodeContext
+  | MemoContext
+  | NoteContext
   | EmptyContext;
 
 // ═══ ProactiveTip（§3.5 Reader AI 提示）═══
@@ -546,4 +576,163 @@ export interface ProjectSetupConfig {
   startMode: ProjectStartMode;
   embeddingModel?: string | undefined;
   initialConcepts?: string[] | undefined;
+}
+
+// ═══ v2.0 概念演化历史 ═══
+
+export interface HistoryEntry {
+  timestamp: string; // ISO 8601
+  type: ConceptHistoryEventType;
+  details: Record<string, unknown>;
+}
+
+// ═══ v2.0 概念草案（创建时使用） ═══
+
+export interface ConceptDraft {
+  nameZh: string;
+  nameEn: string;
+  definition: string;
+  keywords: string[];
+  parentId: string | null;
+}
+
+// ═══ v2.0 概念操作返回 ═══
+
+export interface DefinitionUpdateResult {
+  changeType: ConceptChangeType;
+  affectedMappings: number;
+}
+
+export interface ConceptParentUpdateResult {
+  success: boolean;
+  cycleDetected?: boolean;
+}
+
+export interface MergeResult {
+  migratedMappings: number;
+  resolvedConflicts: number;
+}
+
+export interface SplitResult {
+  concept1: Concept;
+  concept2: Concept;
+}
+
+export interface MergeConflictResolution {
+  mappingId: string;
+  action: 'keep_retain' | 'keep_merge' | 'merge_confidence';
+}
+
+// ═══ v2.0 概念建议 ═══
+
+export interface SuggestedConcept {
+  id: string;
+  term: string;
+  paperCount: number;
+  sourcePaperIds: string[];
+  closestExisting: { conceptId: string; conceptName: string; maturity: Maturity } | null;
+  contextSnippets: string[];
+  suggestedKeywords: string[];
+  status: 'pending' | 'accepted' | 'dismissed';
+}
+
+// ═══ v2.0 碎片笔记（Memo） ═══
+
+export interface Memo {
+  id: string;
+  text: string;
+  paperIds: string[];
+  conceptIds: string[];
+  annotationId: string | null;
+  outlineId: string | null;
+  linkedNoteId: string | null;
+  tags: string[];
+  createdAt: string; // ISO 8601
+  updatedAt: string;
+}
+
+export interface NewMemo {
+  text: string;
+  paperIds?: string[];
+  conceptIds?: string[];
+  annotationId?: string;
+  outlineId?: string;
+  tags?: string[];
+}
+
+export interface MemoFilter {
+  paperIds?: string[];
+  conceptIds?: string[];
+  tags?: string[];
+  searchText?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// ═══ v2.0 结构化笔记（Research Note） ═══
+
+export interface NoteMeta {
+  id: string;
+  title: string;
+  filePath: string;
+  linkedPaperIds: string[];
+  linkedConceptIds: string[];
+  tags: string[];
+  wordCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewNote {
+  title: string;
+  linkedPaperIds?: string[];
+  linkedConceptIds?: string[];
+  tags?: string[];
+  initialContent?: string;
+}
+
+export interface NoteFilter {
+  conceptIds?: string[];
+  paperIds?: string[];
+  tags?: string[];
+  searchText?: string;
+}
+
+export interface SaveNoteResult {
+  chunksUpdated: number;
+  frontmatterValid: boolean;
+  frontmatterError?: string;
+}
+
+// ═══ v2.0 Advisory 通知（事件驱动） ═══
+
+export interface AdvisoryNotification {
+  id: string;
+  type: AdvisoryNotificationType;
+  title: string;
+  description: string;
+  conceptId?: string;
+  conceptName?: string;
+  count?: number;
+  percentage?: number;
+  actionLabel: string;
+  secondaryActionLabel?: string;
+}
+
+// ═══ v2.0 全局搜索结果 ═══
+
+export interface GlobalSearchResult {
+  entityId: string;
+  entityType: 'paper' | 'concept' | 'article' | 'memo' | 'note';
+  title: string;
+  content: string;
+  rank: number;
+}
+
+// ═══ v2.0 Section Quality Report（Corrective RAG） ═══
+
+export interface SectionQualityReport {
+  sectionId: string;
+  coverage: import('../enums').RetrievalCoverage;
+  gaps: string[];
 }

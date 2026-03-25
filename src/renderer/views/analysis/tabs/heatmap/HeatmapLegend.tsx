@@ -19,7 +19,7 @@ interface LegendEntry {
 }
 
 const RELATION_COLORS: LegendEntry[] = (
-  ['supports', 'challenges', 'extends', 'unmapped'] as RelationType[]
+  ['supports', 'challenges', 'extends', 'irrelevant'] as RelationType[]
 ).map((rt) => ({ label: RELATION_LABELS_EN[rt], color: COLORS_MAP[rt] }));
 
 const ADJUDICATION_INDICATORS = [

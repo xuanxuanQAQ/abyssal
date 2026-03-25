@@ -9,11 +9,14 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function computeNodeSize(
-  type: 'paper' | 'concept',
+  type: 'paper' | 'concept' | 'memo' | 'note',
   citationCount?: number,
 ): number {
   if (type === 'concept') {
     return CONCEPT_SIZE;
+  }
+  if (type === 'memo' || type === 'note') {
+    return CONCEPT_SIZE; // same size as concepts for now
   }
   return clamp(
     BASE_SIZE + LOG_SCALE * Math.log(1 + (citationCount ?? 0)),
@@ -36,11 +39,16 @@ export const CONCEPT_LEVEL_COLORS: Record<number, string> = {
 };
 export const DEFAULT_CONCEPT_COLOR = '#C4B5FD';
 
+export const MEMO_COLOR = '#F59E0B';
+export const NOTE_COLOR = '#14B8A6';
+
 export function computeNodeColor(
-  type: 'paper' | 'concept',
+  type: 'paper' | 'concept' | 'memo' | 'note',
   relevance?: string,
   level?: number,
 ): string {
+  if (type === 'memo') return MEMO_COLOR;
+  if (type === 'note') return NOTE_COLOR;
   if (type === 'concept') {
     if (level !== undefined && level in CONCEPT_LEVEL_COLORS) {
       return CONCEPT_LEVEL_COLORS[level] ?? DEFAULT_CONCEPT_COLOR;

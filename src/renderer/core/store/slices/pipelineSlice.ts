@@ -14,6 +14,7 @@ import type { PanelSlice } from './panelSlice';
 import type { SearchSlice } from './searchSlice';
 import type { LibrarySlice } from './librarySlice';
 import type { GraphSlice } from './graphSlice';
+import type { NotesSlice } from './notesSlice';
 
 export interface PipelineSlice {
   activeTasks: Record<string, TaskUIState>;
@@ -25,7 +26,7 @@ export interface PipelineSlice {
 }
 
 export const createPipelineSlice: StateCreator<
-  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice,
+  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice & NotesSlice,
   [['zustand/immer', never]],
   [],
   PipelineSlice

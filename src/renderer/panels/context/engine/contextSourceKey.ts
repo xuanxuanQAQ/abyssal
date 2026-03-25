@@ -19,6 +19,10 @@ export function contextSourceKey(source: ContextSource): string {
       return `section:${source.sectionId}`;
     case 'graphNode':
       return `graphNode:${source.nodeId}`;
+    case 'memo':
+      return `memo:${source.memoId}`;
+    case 'note':
+      return `note:${source.noteId}`;
     case 'empty':
       return 'global';
   }

@@ -1,25 +1,34 @@
 /**
  * PaperTypeCell — 类型徽标（§6.1）
  *
- * Emp/Thr/Rev/Met 彩色徽标。
+ * 显示论文类型的彩色徽标。
+ * 兼容后端 PaperType (journal/conference/book/...) 和前端旧类型 (empirical/theoretical/...)。
  */
 
 import React from 'react';
-import type { PaperType } from '../../../../../shared-types/enums';
 
-const TYPE_CONFIG: Record<PaperType, { label: string; bg: string }> = {
+const TYPE_CONFIG: Record<string, { label: string; bg: string }> = {
+  // 后端类型
+  journal: { label: 'Jnl', bg: 'rgba(59, 130, 246, 0.2)' },
+  conference: { label: 'Conf', bg: 'rgba(139, 92, 246, 0.2)' },
+  book: { label: 'Book', bg: 'rgba(16, 185, 129, 0.2)' },
+  chapter: { label: 'Chap', bg: 'rgba(20, 184, 166, 0.2)' },
+  preprint: { label: 'Pre', bg: 'rgba(245, 158, 11, 0.2)' },
+  review: { label: 'Rev', bg: 'rgba(16, 185, 129, 0.2)' },
+  // 前端旧类型（向后兼容）
   empirical: { label: 'Emp', bg: 'rgba(59, 130, 246, 0.2)' },
   theoretical: { label: 'Thr', bg: 'rgba(139, 92, 246, 0.2)' },
-  review: { label: 'Rev', bg: 'rgba(16, 185, 129, 0.2)' },
   methodological: { label: 'Met', bg: 'rgba(245, 158, 11, 0.2)' },
 };
 
+const FALLBACK = { label: '?', bg: 'rgba(107, 114, 128, 0.2)' };
+
 interface PaperTypeCellProps {
-  paperType: PaperType;
+  paperType: string;
 }
 
 export function PaperTypeCell({ paperType }: PaperTypeCellProps) {
-  const config = TYPE_CONFIG[paperType];
+  const config = TYPE_CONFIG[paperType] ?? FALLBACK;
 
   return (
     <span

@@ -18,6 +18,7 @@ import {
   Network,
   PenTool,
   Settings,
+  StickyNote,
 } from 'lucide-react';
 import { useAppStore } from '../../core/store';
 import { NavIcon } from './NavIcon';
@@ -38,6 +39,7 @@ const NAV_ITEMS: NavItem[] = [
   { icon: <Microscope size={20} />,  label: 'Analysis', viewType: 'analysis', shortcut: 'Ctrl+3' },
   { icon: <Network size={20} />,     label: 'Graph',    viewType: 'graph',    shortcut: 'Ctrl+4' },
   { icon: <PenTool size={20} />,     label: 'Writing',  viewType: 'writing',  shortcut: 'Ctrl+5' },
+  { icon: <StickyNote size={20} />,  label: 'Notes',    viewType: 'notes',    shortcut: 'Ctrl+6' },
 ];
 
 const SETTINGS_ITEM: NavItem = {

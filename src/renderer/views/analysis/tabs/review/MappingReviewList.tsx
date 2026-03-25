@@ -26,7 +26,7 @@ function getRelationIndicator(type: RelationType): { emoji: string; color: strin
     case 'extends':
       return { emoji: '\uD83D\uDD35', color: 'var(--accent-color)', label: 'extends' };
     default:
-      return { emoji: '\u26AA', color: 'var(--text-muted)', label: 'unmapped' };
+      return { emoji: '\u26AA', color: 'var(--text-muted)', label: 'irrelevant' };
   }
 }
 

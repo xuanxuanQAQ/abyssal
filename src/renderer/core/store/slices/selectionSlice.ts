@@ -17,6 +17,7 @@ import type { SearchSlice } from './searchSlice';
 import type { PipelineSlice } from './pipelineSlice';
 import type { LibrarySlice } from './librarySlice';
 import type { GraphSlice } from './graphSlice';
+import type { NotesSlice } from './notesSlice';
 
 export type PaperSelectionMode = 'explicit' | 'allExcept';
 
@@ -36,6 +37,10 @@ export interface SelectionSlice {
   /** 选中节时附带的 articleId（用于 ContextSource 派生） */
   selectedArticleId: string | null;
   focusedGraphNodeId: string | null;
+  /** v2.0 选中碎片笔记 ID */
+  selectedMemoId: string | null;
+  /** v2.0 选中结构化笔记 ID */
+  selectedNoteId: string | null;
 
   selectPaper: (id: string | null) => void;
   togglePaperSelection: (id: string) => void;
@@ -46,6 +51,10 @@ export interface SelectionSlice {
   selectMapping: (id: string | null, paperId?: string, conceptId?: string) => void;
   selectSection: (id: string | null, articleId?: string) => void;
   focusGraphNode: (id: string | null) => void;
+  /** v2.0 选中碎片笔记 */
+  selectMemo: (id: string | null) => void;
+  /** v2.0 选中结构化笔记 */
+  selectNote: (id: string | null) => void;
   clearSelection: () => void;
 }
 
@@ -55,7 +64,8 @@ type FullStore = NavigationSlice &
   SearchSlice &
   PipelineSlice &
   LibrarySlice &
-  GraphSlice;
+  GraphSlice &
+  NotesSlice;
 
 export const createSelectionSlice: StateCreator<
   FullStore,
@@ -76,6 +86,8 @@ export const createSelectionSlice: StateCreator<
   selectedSectionId: null,
   selectedArticleId: null,
   focusedGraphNodeId: null,
+  selectedMemoId: null,
+  selectedNoteId: null,
 
   /** 单击行：切换到 explicit 模式，仅选中此行 */
   selectPaper: (id) =>
@@ -171,6 +183,16 @@ export const createSelectionSlice: StateCreator<
       state.focusedGraphNodeId = id;
     }),
 
+  selectMemo: (id) =>
+    set((state) => {
+      state.selectedMemoId = id;
+    }),
+
+  selectNote: (id) =>
+    set((state) => {
+      state.selectedNoteId = id;
+    }),
+
   clearSelection: () =>
     set((state) => {
       state.selectedPaperId = null;
@@ -185,5 +207,7 @@ export const createSelectionSlice: StateCreator<
       state.selectedSectionId = null;
       state.selectedArticleId = null;
       state.focusedGraphNodeId = null;
+      state.selectedMemoId = null;
+      state.selectedNoteId = null;
     }),
 });

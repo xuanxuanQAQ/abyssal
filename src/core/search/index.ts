@@ -1,29 +1,160 @@
-import type { PaperMetadata, CitationDirection } from '../types';
+// ═══ Search Module — 公共接口 ═══
+//
+// 纯网络 I/O 模块——无数据库依赖、无 LLM 依赖。
+// 全部函数无副作用（不写入数据库、不修改文件系统）。
 
-export async function searchSemanticScholar(query: string, limit: number): Promise<PaperMetadata[]> {
-  throw new Error('Not implemented');
+import type { PaperMetadata } from '../types/paper';
+import type { CitationDirection } from '../types';
+import type { AbyssalConfig } from '../types/config';
+import type { PaperId } from '../types/common';
+import type { Logger } from '../infra/logger';
+import { RateLimiter, createRateLimiter } from '../infra/rate-limiter';
+import { HttpClient } from '../infra/http-client';
+
+import * as ss from './semantic-scholar';
+import * as oa from './openalex';
+import * as ax from './arxiv';
+import { deduplicatePapers } from './dedup';
+import { detectBridgePapers } from './bridge-detection';
+
+// ─── 类型重导出 ───
+
+export type { SSSearchOptions } from './semantic-scholar';
+export type { OASearchOptions } from './openalex';
+export type { ArxivSearchOptions } from './arxiv';
+export { parseAuthorName, parseAuthorNames } from './author-name';
+export { generatePaperId, titleNormalize, normalizeDoi, normalizeArxivId } from './paper-id';
+export { deduplicatePapers } from './dedup';
+export { detectBridgePapers } from './bridge-detection';
+export { rebuildAbstract } from './openalex';
+
+// ═══ SearchService ═══
+
+export class SearchService {
+  private readonly http: HttpClient;
+  private readonly logger: Logger;
+  private readonly config: AbyssalConfig;
+
+  // 速率限制器
+  private readonly ssLimiter: RateLimiter;
+  private readonly oaLimiter: RateLimiter;
+  private readonly axLimiter: RateLimiter;
+
+  private readonly ssApiKey: string | null;
+  private readonly oaEmail: string | null;
+
+  constructor(config: AbyssalConfig, logger: Logger) {
+    this.config = config;
+    this.logger = logger;
+
+    this.http = new HttpClient({
+      logger,
+      userAgentEmail: config.apiKeys.openalexEmail ?? undefined,
+    });
+
+    this.ssApiKey = config.apiKeys.semanticScholarApiKey ?? null;
+    this.oaEmail = config.apiKeys.openalexEmail ?? null;
+
+    this.ssLimiter = this.ssApiKey
+      ? createRateLimiter('semanticScholarWithKey')
+      : createRateLimiter('semanticScholarNoKey');
+    this.oaLimiter = createRateLimiter('openAlex');
+    this.axLimiter = createRateLimiter('arxiv');
+  }
+
+  // ─── §2 Semantic Scholar ───
+
+  async searchSemanticScholar(
+    query: string,
+    options?: ss.SSSearchOptions,
+  ): Promise<PaperMetadata[]> {
+    return ss.searchSemanticScholar(
+      this.http, this.ssLimiter, this.ssApiKey, this.logger,
+      query, options,
+    );
+  }
+
+  async getPaperDetails(identifier: string): Promise<PaperMetadata> {
+    return ss.getPaperDetails(
+      this.http, this.ssLimiter, this.ssApiKey, this.logger,
+      identifier,
+    );
+  }
+
+  async getCitations(
+    s2PaperId: string,
+    direction: CitationDirection,
+    limit?: number,
+  ): Promise<PaperMetadata[]> {
+    return ss.getCitations(
+      this.http, this.ssLimiter, this.ssApiKey, this.logger,
+      s2PaperId, direction, limit,
+    );
+  }
+
+  async getRelatedPapers(s2PaperId: string): Promise<PaperMetadata[]> {
+    return ss.getRelatedPapers(
+      this.http, this.ssLimiter, this.ssApiKey, this.logger,
+      s2PaperId,
+    );
+  }
+
+  async searchByAuthor(
+    authorName: string,
+    affiliationHint?: string,
+    limit?: number,
+  ): Promise<PaperMetadata[]> {
+    return ss.searchByAuthor(
+      this.http, this.ssLimiter, this.ssApiKey, this.logger,
+      authorName, affiliationHint, limit,
+    );
+  }
+
+  // ─── §3 OpenAlex ───
+
+  async searchOpenAlex(
+    concepts: string[],
+    options?: oa.OASearchOptions,
+  ): Promise<PaperMetadata[]> {
+    return oa.searchOpenAlex(
+      this.http, this.oaLimiter, this.oaEmail, this.logger,
+      concepts, options,
+    );
+  }
+
+  // ─── §4 arXiv ───
+
+  async searchArxiv(
+    query: string,
+    options?: ax.ArxivSearchOptions,
+  ): Promise<PaperMetadata[]> {
+    return ax.searchArxiv(
+      this.http, this.axLimiter, this.logger,
+      query, options,
+    );
+  }
+
+  // ─── §5 去重 ───
+
+  deduplicatePapers(papers: PaperMetadata[]): PaperMetadata[] {
+    return deduplicatePapers(papers);
+  }
+
+  // ─── §10 桥梁论文 ───
+
+  detectBridgePapers(
+    seedIds: PaperId[],
+    citationMap: Map<PaperId, PaperId[]>,
+  ): Map<PaperId, number> {
+    return detectBridgePapers(seedIds, citationMap);
+  }
 }
 
-export async function searchOpenAlex(concepts: string[], limit: number): Promise<PaperMetadata[]> {
-  throw new Error('Not implemented');
-}
+// ═══ 工厂函数 ═══
 
-export async function searchArxiv(query: string, limit: number): Promise<PaperMetadata[]> {
-  throw new Error('Not implemented');
-}
-
-export async function getPaperDetails(paperId: string): Promise<PaperMetadata> {
-  throw new Error('Not implemented');
-}
-
-export async function getCitations(paperId: string, direction: CitationDirection): Promise<PaperMetadata[]> {
-  throw new Error('Not implemented');
-}
-
-export async function getRelatedPapers(paperId: string, limit: number): Promise<PaperMetadata[]> {
-  throw new Error('Not implemented');
-}
-
-export async function searchByAuthor(authorName: string): Promise<PaperMetadata[]> {
-  throw new Error('Not implemented');
+export function createSearchService(
+  config: AbyssalConfig,
+  logger: Logger,
+): SearchService {
+  return new SearchService(config, logger);
 }

@@ -5,26 +5,30 @@ import type { PanelSlice } from './panelSlice';
 import type { SearchSlice } from './searchSlice';
 import type { PipelineSlice } from './pipelineSlice';
 import type { LibrarySlice } from './librarySlice';
+import type { NotesSlice } from './notesSlice';
 import type { LayerVisibility } from '../../../../shared-types/models';
 
 export interface GraphSlice {
   layerVisibility: LayerVisibility;
   showConceptNodes: boolean;
+  /** v2.0 笔记节点可见性（默认关闭） */
+  showNoteNodes: boolean;
   similarityThreshold: number;
   focusDepth: '1-hop' | '2-hop' | 'global';
   layoutPaused: boolean;
   graphContextStatus: 'ready' | 'lost' | 'restoring';
   /** 当前焦点节点的类型（Graph 视图点击时设置） */
-  focusedGraphNodeType: 'paper' | 'concept' | null;
+  focusedGraphNodeType: 'paper' | 'concept' | 'memo' | 'note' | null;
 
   setLayerVisibility(visibility: LayerVisibility): void;
   toggleLayer(layer: keyof LayerVisibility): void;
   setShowConceptNodes(show: boolean): void;
+  setShowNoteNodes(show: boolean): void;
   setSimilarityThreshold(threshold: number): void;
   setFocusDepth(depth: '1-hop' | '2-hop' | 'global'): void;
   setLayoutPaused(paused: boolean): void;
   setGraphContextStatus(status: 'ready' | 'lost' | 'restoring'): void;
-  setFocusedGraphNodeType(type: 'paper' | 'concept' | null): void;
+  setFocusedGraphNodeType(type: 'paper' | 'concept' | 'memo' | 'note' | null): void;
 }
 
 type FullStore =
@@ -34,7 +38,8 @@ type FullStore =
   & SearchSlice
   & PipelineSlice
   & LibrarySlice
-  & GraphSlice;
+  & GraphSlice
+  & NotesSlice;
 
 export const createGraphSlice: StateCreator<
   FullStore,
@@ -47,8 +52,10 @@ export const createGraphSlice: StateCreator<
     conceptAgree: true,
     conceptConflict: true,
     semanticNeighbor: false,
+    notes: false,
   },
   showConceptNodes: false,
+  showNoteNodes: false,
   similarityThreshold: 0.5,
   focusDepth: '2-hop',
   layoutPaused: false,
@@ -70,6 +77,12 @@ export const createGraphSlice: StateCreator<
   setShowConceptNodes(show: boolean) {
     set((state) => {
       state.showConceptNodes = show;
+    });
+  },
+
+  setShowNoteNodes(show: boolean) {
+    set((state) => {
+      state.showNoteNodes = show;
     });
   },
 
@@ -97,7 +110,7 @@ export const createGraphSlice: StateCreator<
     });
   },
 
-  setFocusedGraphNodeType(type: 'paper' | 'concept' | null) {
+  setFocusedGraphNodeType(type: 'paper' | 'concept' | 'memo' | 'note' | null) {
     set((state) => {
       state.focusedGraphNodeType = type;
     });

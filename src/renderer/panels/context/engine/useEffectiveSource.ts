@@ -31,6 +31,10 @@ function sourceEquals(a: ContextSource, b: ContextSource): boolean {
       return b.type === 'section' && a.sectionId === b.sectionId;
     case 'graphNode':
       return b.type === 'graphNode' && a.nodeId === b.nodeId;
+    case 'memo':
+      return b.type === 'memo' && a.memoId === b.memoId;
+    case 'note':
+      return b.type === 'note' && a.noteId === b.noteId;
     case 'empty':
       return b.type === 'empty';
   }

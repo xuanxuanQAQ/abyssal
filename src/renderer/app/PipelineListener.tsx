@@ -167,9 +167,33 @@ export function PipelineListener() {
       }
     );
 
+    // v2.0 workflow-complete 事件：批量缓存失效
+    const unsubWorkflowComplete = api.app.onWorkflowComplete(
+      (event: { workflow: WorkflowType; taskId: string }) => {
+        queryClient.invalidateQueries({ queryKey: ['papers'] });
+        queryClient.invalidateQueries({ queryKey: ['mappings'] });
+        queryClient.invalidateQueries({ queryKey: ['suggestedConcepts'] });
+        queryClient.invalidateQueries({ queryKey: ['advisoryNotifications'] });
+      }
+    );
+
+    // v2.0 section-quality 事件：更新 Zustand store
+    const unsubSectionQuality = api.app.onSectionQuality(
+      (event: { sectionId: string; coverage: string; gaps: string[] }) => {
+        const setSectionQualityReport = useAppStore.getState().setSectionQualityReport;
+        setSectionQualityReport(event.sectionId, {
+          sectionId: event.sectionId,
+          coverage: event.coverage as 'sufficient' | 'partial' | 'insufficient',
+          gaps: event.gaps,
+        });
+      }
+    );
+
     return () => {
       unsubProgress();
       unsubStream();
+      unsubWorkflowComplete();
+      unsubSectionQuality();
       // 清理所有挂起的延迟 timer
       for (const timer of pendingTimersRef.current) {
         clearTimeout(timer);

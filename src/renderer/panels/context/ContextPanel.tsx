@@ -25,6 +25,7 @@ import { MappingPane } from './panes/MappingPane';
 import { WritingSectionPane } from './panes/WritingSectionPane';
 import { GraphPaperNodePane } from './panes/GraphPaperNodePane';
 import { GraphConceptNodePane } from './panes/GraphConceptNodePane';
+import { NoteContextPane } from './panes/NoteContextPane';
 import { EmptyPane } from './panes/EmptyPane';
 
 import { AdvisoryNotifications } from './advisory/AdvisoryNotifications';
@@ -60,6 +61,10 @@ function renderContentPane(source: ContextSource): React.ReactNode {
           sectionId={source.sectionId}
         />
       );
+    case 'memo':
+      return <NoteContextPane nodeId={source.memoId} nodeType="memo" />;
+    case 'note':
+      return <NoteContextPane nodeId={source.noteId} nodeType="note" />;
     case 'graphNode':
       return source.nodeType === 'paper' ? (
         <GraphPaperNodePane nodeId={source.nodeId} />

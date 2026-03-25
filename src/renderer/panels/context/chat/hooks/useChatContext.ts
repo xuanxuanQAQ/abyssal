@@ -48,6 +48,14 @@ export function useChatContext(): () => ChatContext {
           context.selectedConceptId = source.nodeId;
         }
         break;
+      case 'memo':
+        // memo context — no specific ChatContext field to populate
+        break;
+      case 'note':
+        // note context — no specific ChatContext field to populate
+        break;
+      case 'empty':
+        break;
     }
 
     return context;

@@ -1,48 +1,192 @@
 /**
- * ConceptMergeDialog -- two-step concept merge flow (v1.2)
+ * ConceptMergeDialog -- 4-step concept merge wizard (v2.0 §2.6)
  *
- * Step 1: Select two concepts -- keep one, merge the other into it.
- * Step 2: Review conflicting mappings and decide keep/discard per mapping.
+ * Step 1: Select target -- current concept is "被合并方", researcher picks "保留方".
+ * Step 2: Conflict resolution -- if same paper mapped to both, list & resolve.
+ * Step 3: Keywords merge preview -- union of both keyword sets, allow removal.
+ * Step 4: Confirm -- operation summary, execute merge.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useReducer, useCallback, useEffect, useMemo } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Merge, AlertTriangle } from 'lucide-react';
+import { X, Merge, AlertTriangle, Search, Check, ChevronRight, ChevronLeft } from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
-import type { Concept, ConceptMapping, MergeDecision } from '../../../../shared-types/models';
+import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
+import type {
+  Concept,
+  ConceptMapping,
+  MergeConflictResolution,
+} from '../../../../shared-types/models';
+import type { Maturity } from '../../../../shared-types/enums';
+
+// ── Props ──
 
 interface ConceptMergeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  concepts: Concept[];
+  /** The concept being merged away (被合并方). */
+  sourceConceptId: string;
 }
 
-type Step = 'select' | 'resolve';
+// ── Reducer ──
+
+type Step = 1 | 2 | 3 | 4;
+
+interface ConflictItem {
+  paperId: string;
+  paperTitle: string;
+  sourceMapping: ConceptMapping;
+  targetMapping: ConceptMapping;
+}
+
+interface MergeState {
+  step: Step;
+  /** The concept to retain (保留方). */
+  retainId: string;
+  searchQuery: string;
+  /** Conflicts: same paper mapped to both concepts. */
+  conflicts: ConflictItem[];
+  /** Resolution per conflict — keyed by paperId. */
+  conflictResolutions: Record<string, 'keep_retain' | 'keep_merge' | 'merge_confidence'>;
+  /** Union of keywords from both concepts; togglable. */
+  mergedKeywords: string[];
+  /** Keywords the user has chosen to remove. */
+  removedKeywords: Set<string>;
+  loading: boolean;
+  error: string | null;
+}
+
+type MergeAction =
+  | { type: 'SET_RETAIN_ID'; id: string }
+  | { type: 'SET_SEARCH_QUERY'; query: string }
+  | { type: 'SET_STEP'; step: Step }
+  | { type: 'SET_CONFLICTS'; conflicts: ConflictItem[] }
+  | { type: 'SET_CONFLICT_RESOLUTION'; paperId: string; action: 'keep_retain' | 'keep_merge' | 'merge_confidence' }
+  | { type: 'SET_MERGED_KEYWORDS'; keywords: string[] }
+  | { type: 'TOGGLE_KEYWORD'; keyword: string }
+  | { type: 'SET_LOADING'; loading: boolean }
+  | { type: 'SET_ERROR'; error: string | null }
+  | { type: 'RESET' };
+
+const initialState: MergeState = {
+  step: 1,
+  retainId: '',
+  searchQuery: '',
+  conflicts: [],
+  conflictResolutions: {},
+  mergedKeywords: [],
+  removedKeywords: new Set(),
+  loading: false,
+  error: null,
+};
+
+function reducer(state: MergeState, action: MergeAction): MergeState {
+  switch (action.type) {
+    case 'SET_RETAIN_ID':
+      return { ...state, retainId: action.id };
+    case 'SET_SEARCH_QUERY':
+      return { ...state, searchQuery: action.query };
+    case 'SET_STEP':
+      return { ...state, step: action.step, error: null };
+    case 'SET_CONFLICTS':
+      return {
+        ...state,
+        conflicts: action.conflicts,
+        conflictResolutions: Object.fromEntries(
+          action.conflicts.map((c) => [c.paperId, 'keep_retain' as const])
+        ),
+      };
+    case 'SET_CONFLICT_RESOLUTION':
+      return {
+        ...state,
+        conflictResolutions: {
+          ...state.conflictResolutions,
+          [action.paperId]: action.action,
+        },
+      };
+    case 'SET_MERGED_KEYWORDS':
+      return { ...state, mergedKeywords: action.keywords, removedKeywords: new Set() };
+    case 'TOGGLE_KEYWORD': {
+      const next = new Set(state.removedKeywords);
+      if (next.has(action.keyword)) {
+        next.delete(action.keyword);
+      } else {
+        next.add(action.keyword);
+      }
+      return { ...state, removedKeywords: next };
+    }
+    case 'SET_LOADING':
+      return { ...state, loading: action.loading };
+    case 'SET_ERROR':
+      return { ...state, error: action.error };
+    case 'RESET':
+      return { ...initialState };
+    default:
+      return state;
+  }
+}
+
+// ── Helpers ──
+
+const MATURITY_LABELS: Record<Maturity, string> = {
+  tentative: '试探性',
+  working: '工作中',
+  established: '已确立',
+};
+
+function formatMaturity(m: Maturity): string {
+  return MATURITY_LABELS[m] ?? m;
+}
+
+const STEP_LABELS: Record<Step, string> = {
+  1: '选择保留方',
+  2: '解决冲突',
+  3: '关键词合并',
+  4: '确认执行',
+};
+
+// ── Component ──
 
 export function ConceptMergeDialog({
   open,
   onOpenChange,
-  concepts,
+  sourceConceptId,
 }: ConceptMergeDialogProps) {
-  const [step, setStep] = useState<Step>('select');
-  const [keepId, setKeepId] = useState<string>('');
-  const [mergeId, setMergeId] = useState<string>('');
-  const [conflicts, setConflicts] = useState<ConceptMapping[]>([]);
-  const [decisions, setDecisions] = useState<Map<string, 'keep' | 'discard'>>(
-    new Map()
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const { data: conceptListData } = useConceptList();
+  const concepts: Concept[] = conceptListData ?? [];
 
-  const reset = useCallback(() => {
-    setStep('select');
-    setKeepId('');
-    setMergeId('');
-    setConflicts([]);
-    setDecisions(new Map());
-    setLoading(false);
-    setError(null);
-  }, []);
+  const sourceConcept = useMemo(
+    () => concepts.find((c) => c.id === sourceConceptId) ?? null,
+    [concepts, sourceConceptId]
+  );
+
+  const retainConcept = useMemo(
+    () => concepts.find((c) => c.id === state.retainId) ?? null,
+    [concepts, state.retainId]
+  );
+
+  // Filter concepts for search (exclude source concept).
+  const filteredConcepts = useMemo(() => {
+    const q = state.searchQuery.toLowerCase().trim();
+    return concepts.filter((c) => {
+      if (c.id === sourceConceptId) return false;
+      if (!q) return true;
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.nameZh.toLowerCase().includes(q) ||
+        c.nameEn.toLowerCase().includes(q) ||
+        c.keywords.some((k) => k.toLowerCase().includes(q))
+      );
+    });
+  }, [concepts, sourceConceptId, state.searchQuery]);
+
+  // Compute mapping counts lazily (we show them in comparison cards).
+  // We don't fetch mappings eagerly — show concept-level data instead.
+  const sourceKeywords = sourceConcept?.keywords ?? [];
+  const retainKeywords = retainConcept?.keywords ?? [];
+
+  const reset = useCallback(() => dispatch({ type: 'RESET' }), []);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -52,119 +196,239 @@ export function ConceptMergeDialog({
     [onOpenChange, reset]
   );
 
-  const handleStartMerge = useCallback(async () => {
-    if (!keepId || !mergeId || keepId === mergeId) return;
-    setLoading(true);
-    setError(null);
+  // ── Step transitions ──
+
+  const goToStep2 = useCallback(async () => {
+    if (!state.retainId || !sourceConceptId) return;
+    dispatch({ type: 'SET_LOADING', loading: true });
+    dispatch({ type: 'SET_ERROR', error: null });
+
     try {
-      const result = await getAPI().db.concepts.merge(keepId, mergeId);
-      if (result.mappings.length > 0) {
-        setConflicts(result.mappings);
-        const initial = new Map<string, 'keep' | 'discard'>();
-        for (const m of result.mappings) {
-          initial.set(m.id, 'keep');
+      // Fetch mappings for both concepts to detect conflicts (same paper).
+      const api = getAPI();
+      const [sourceMappings, retainMappings] = await Promise.all([
+        api.db.mappings.getForConcept(sourceConceptId),
+        api.db.mappings.getForConcept(state.retainId),
+      ]);
+
+      // Build lookup: paperId -> mapping for retain side.
+      const retainByPaper = new Map<string, ConceptMapping>();
+      for (const m of retainMappings) {
+        retainByPaper.set(m.paperId, m);
+      }
+
+      // Detect conflicts.
+      const conflicts: ConflictItem[] = [];
+      for (const sm of sourceMappings) {
+        const rm = retainByPaper.get(sm.paperId);
+        if (rm) {
+          conflicts.push({
+            paperId: sm.paperId,
+            paperTitle: sm.paperId, // Will be resolved to title if available
+            sourceMapping: sm,
+            targetMapping: rm,
+          });
         }
-        setDecisions(initial);
-        setStep('resolve');
+      }
+
+      // Try to resolve paper titles.
+      if (conflicts.length > 0) {
+        try {
+          const paperIds = conflicts.map((c) => c.paperId);
+          const papers = await Promise.all(
+            paperIds.map((pid) => api.db.papers.get(pid).catch(() => null))
+          );
+          const titleMap = new Map<string, string>();
+          for (const p of papers) {
+            if (p) titleMap.set(p.id, p.title);
+          }
+          for (const c of conflicts) {
+            c.paperTitle = titleMap.get(c.paperId) ?? c.paperId;
+          }
+        } catch {
+          // Paper title resolution is best-effort.
+        }
+      }
+
+      dispatch({ type: 'SET_CONFLICTS', conflicts });
+
+      if (conflicts.length > 0) {
+        dispatch({ type: 'SET_STEP', step: 2 });
       } else {
-        handleOpenChange(false);
+        // Skip step 2, go to keywords merge.
+        goToStep3FromConflicts(conflicts);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [keepId, mergeId, handleOpenChange]);
-
-  const handleResolve = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const decisionList: MergeDecision[] = [];
-      for (const [mappingId, action] of decisions) {
-        decisionList.push({ mappingId, action });
-      }
-      await getAPI().db.concepts.resolveMergeConflicts(decisionList);
-      handleOpenChange(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [decisions, handleOpenChange]);
-
-  const setDecision = useCallback(
-    (mappingId: string, action: 'keep' | 'discard') => {
-      setDecisions((prev) => {
-        const next = new Map(prev);
-        next.set(mappingId, action);
-        return next;
+      dispatch({
+        type: 'SET_ERROR',
+        error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      dispatch({ type: 'SET_LOADING', loading: false });
+    }
+  }, [state.retainId, sourceConceptId]);
+
+  const goToStep3FromConflicts = useCallback(
+    (_conflicts?: ConflictItem[]) => {
+      // Compute union of keywords.
+      const union = Array.from(new Set([...sourceKeywords, ...retainKeywords]));
+      dispatch({ type: 'SET_MERGED_KEYWORDS', keywords: union });
+      dispatch({ type: 'SET_STEP', step: 3 });
     },
-    []
+    [sourceKeywords, retainKeywords]
   );
 
-  const keepConcept = concepts.find((c) => c.id === keepId);
-  const mergeConcept = concepts.find((c) => c.id === mergeId);
+  const goToStep3 = useCallback(() => {
+    goToStep3FromConflicts();
+  }, [goToStep3FromConflicts]);
+
+  const goToStep4 = useCallback(() => {
+    dispatch({ type: 'SET_STEP', step: 4 });
+  }, []);
+
+  // ── Execute merge ──
+
+  const executeMerge = useCallback(async () => {
+    dispatch({ type: 'SET_LOADING', loading: true });
+    dispatch({ type: 'SET_ERROR', error: null });
+
+    try {
+      const conflictResolutions: MergeConflictResolution[] = state.conflicts.map(
+        (c) => ({
+          mappingId: c.sourceMapping.id,
+          action: state.conflictResolutions[c.paperId] ?? 'keep_retain',
+        })
+      );
+
+      await getAPI().db.concepts.merge(state.retainId, sourceConceptId, conflictResolutions);
+      handleOpenChange(false);
+    } catch (err) {
+      dispatch({
+        type: 'SET_ERROR',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      dispatch({ type: 'SET_LOADING', loading: false });
+    }
+  }, [state, sourceConceptId, handleOpenChange]);
+
+  // ── Derived values for summary ──
+
+  const finalKeywords = useMemo(
+    () => state.mergedKeywords.filter((k) => !state.removedKeywords.has(k)),
+    [state.mergedKeywords, state.removedKeywords]
+  );
+
+  if (!sourceConcept) return null;
 
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay style={overlayStyle} />
         <Dialog.Content style={contentStyle}>
+          {/* Header */}
           <Dialog.Title style={titleStyle}>
             <Merge size={16} />
-            {step === 'select' ? '合并概念' : '解决映射冲突'}
+            合并概念
           </Dialog.Title>
 
-          {error && (
+          {/* Step indicator */}
+          <div style={stepIndicatorStyle}>
+            {([1, 2, 3, 4] as Step[]).map((s) => (
+              <div
+                key={s}
+                style={{
+                  ...stepDotContainerStyle,
+                  opacity: s === 2 && state.conflicts.length === 0 ? 0.35 : 1,
+                }}
+              >
+                <div
+                  style={{
+                    ...stepDotStyle,
+                    backgroundColor:
+                      s < state.step
+                        ? 'var(--accent-color)'
+                        : s === state.step
+                        ? 'var(--accent-color)'
+                        : 'var(--border-subtle)',
+                    color: s <= state.step ? '#fff' : 'var(--text-muted)',
+                  }}
+                >
+                  {s < state.step ? <Check size={10} /> : s}
+                </div>
+                <span style={stepLabelStyle}>{STEP_LABELS[s]}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Error banner */}
+          {state.error && (
             <div style={errorBannerStyle}>
-              <AlertTriangle size={14} /> {error}
+              <AlertTriangle size={14} /> {state.error}
             </div>
           )}
 
-          {step === 'select' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* ── Step 1: Select target ── */}
+          {state.step === 1 && (
+            <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                选择要保留的概念和要合并（删除）的概念。合并后，被合并概念的所有映射将转移到保留概念。
+                当前概念 <strong>{sourceConcept.name}</strong> 为被合并方。请选择要保留的目标概念（保留方）。
               </p>
 
-              <label style={labelStyle}>
-                保留概念:
-                <select
-                  value={keepId}
-                  onChange={(e) => setKeepId(e.target.value)}
-                  style={selectStyle}
-                >
-                  <option value="">-- 选择 --</option>
-                  {concepts.map((c) => (
-                    <option key={c.id} value={c.id} disabled={c.id === mergeId}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {/* Search input */}
+              <div style={searchContainerStyle}>
+                <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <input
+                  type="text"
+                  placeholder="搜索概念名称或关键词..."
+                  value={state.searchQuery}
+                  onChange={(e) =>
+                    dispatch({ type: 'SET_SEARCH_QUERY', query: e.target.value })
+                  }
+                  style={searchInputStyle}
+                />
+              </div>
 
-              <label style={labelStyle}>
-                合并（删除）概念:
-                <select
-                  value={mergeId}
-                  onChange={(e) => setMergeId(e.target.value)}
-                  style={selectStyle}
-                >
-                  <option value="">-- 选择 --</option>
-                  {concepts.map((c) => (
-                    <option key={c.id} value={c.id} disabled={c.id === keepId}>
+              {/* Concept list */}
+              <div style={conceptListStyle}>
+                {filteredConcepts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    style={{
+                      ...conceptOptionStyle,
+                      borderColor:
+                        state.retainId === c.id
+                          ? 'var(--accent-color)'
+                          : 'var(--border-subtle)',
+                      backgroundColor:
+                        state.retainId === c.id
+                          ? 'rgba(var(--accent-color-rgb, 59,130,246), 0.08)'
+                          : 'var(--bg-surface-low)',
+                    }}
+                    onClick={() => dispatch({ type: 'SET_RETAIN_ID', id: c.id })}
+                  >
+                    <div style={{ fontWeight: 500, fontSize: 'var(--text-sm, 13px)' }}>
                       {c.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                    </div>
+                    <div style={conceptOptionMetaStyle}>
+                      {formatMaturity(c.maturity)} · {c.keywords.length} 关键词
+                    </div>
+                  </button>
+                ))}
+                {filteredConcepts.length === 0 && (
+                  <div style={emptyHintStyle}>无匹配概念</div>
+                )}
+              </div>
 
-              {keepConcept && mergeConcept && (
-                <div style={previewStyle}>
-                  <strong>{mergeConcept.name}</strong> 将被合并到{' '}
-                  <strong>{keepConcept.name}</strong>
+              {/* Comparison cards */}
+              {retainConcept && (
+                <div style={comparisonContainerStyle}>
+                  <ComparisonCard label="被合并方" concept={sourceConcept} variant="danger" />
+                  <div style={arrowStyle}>
+                    <ChevronRight size={20} />
+                  </div>
+                  <ComparisonCard label="保留方" concept={retainConcept} variant="accent" />
                 </div>
               )}
 
@@ -177,64 +441,70 @@ export function ConceptMergeDialog({
                 <button
                   type="button"
                   style={primaryButtonStyle}
-                  disabled={!keepId || !mergeId || keepId === mergeId || loading}
-                  onClick={handleStartMerge}
+                  disabled={!state.retainId || state.loading}
+                  onClick={goToStep2}
                 >
-                  {loading ? '合并中...' : '开始合并'}
+                  {state.loading ? '检测冲突中...' : '下一步'}
+                  {!state.loading && <ChevronRight size={14} />}
                 </button>
               </div>
             </div>
           )}
 
-          {step === 'resolve' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* ── Step 2: Conflict resolution ── */}
+          {state.step === 2 && (
+            <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                以下映射存在冲突，请决定保留或丢弃每条映射:
+                以下论文同时映射到两个概念，请选择每条冲突的处理方式:
               </p>
 
               <div style={conflictListStyle}>
-                {conflicts.map((m) => (
-                  <div key={m.id} style={conflictItemStyle}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>
-                        {m.conceptId} / {m.paperId}
+                {state.conflicts.map((conflict) => (
+                  <div key={conflict.paperId} style={conflictCardStyle}>
+                    <div style={conflictTitleStyle}>{conflict.paperTitle}</div>
+                    <div style={conflictComparisonStyle}>
+                      <div style={conflictSideStyle}>
+                        <span style={conflictSideLabelStyle}>被合并方映射</span>
+                        <span style={conflictDetailStyle}>
+                          {conflict.sourceMapping.relationType} · 置信度{' '}
+                          {conflict.sourceMapping.confidence.toFixed(2)}
+                        </span>
                       </div>
-                      <div
-                        style={{
-                          fontSize: 'var(--text-xs)',
-                          color: 'var(--text-secondary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {m.evidenceText.slice(0, 100)}
-                        {m.evidenceText.length > 100 ? '...' : ''}
+                      <div style={conflictSideStyle}>
+                        <span style={conflictSideLabelStyle}>保留方映射</span>
+                        <span style={conflictDetailStyle}>
+                          {conflict.targetMapping.relationType} · 置信度{' '}
+                          {conflict.targetMapping.confidence.toFixed(2)}
+                        </span>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                      <button
-                        type="button"
-                        style={
-                          decisions.get(m.id) === 'keep'
-                            ? chipActiveStyle
-                            : chipStyle
-                        }
-                        onClick={() => setDecision(m.id, 'keep')}
-                      >
-                        保留
-                      </button>
-                      <button
-                        type="button"
-                        style={
-                          decisions.get(m.id) === 'discard'
-                            ? chipDangerActiveStyle
-                            : chipStyle
-                        }
-                        onClick={() => setDecision(m.id, 'discard')}
-                      >
-                        丢弃
-                      </button>
+                    <div style={conflictActionsStyle}>
+                      {(
+                        [
+                          ['keep_retain', '保留方'],
+                          ['keep_merge', '被合并方'],
+                          ['merge_confidence', '合并置信度'],
+                        ] as const
+                      ).map(([action, label]) => (
+                        <button
+                          key={action}
+                          type="button"
+                          style={
+                            state.conflictResolutions[conflict.paperId] === action
+                              ? chipActiveStyle
+                              : chipStyle
+                          }
+                          onClick={() =>
+                            dispatch({
+                              type: 'SET_CONFLICT_RESOLUTION',
+                              paperId: conflict.paperId,
+                              action,
+                            })
+                          }
+                        >
+                          {label}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -244,22 +514,134 @@ export function ConceptMergeDialog({
                 <button
                   type="button"
                   style={secondaryButtonStyle}
-                  onClick={() => setStep('select')}
+                  onClick={() => dispatch({ type: 'SET_STEP', step: 1 })}
                 >
-                  返回
+                  <ChevronLeft size={14} /> 返回
                 </button>
-                <button
-                  type="button"
-                  style={primaryButtonStyle}
-                  disabled={loading}
-                  onClick={handleResolve}
-                >
-                  {loading ? '处理中...' : '确认决策'}
+                <button type="button" style={primaryButtonStyle} onClick={goToStep3}>
+                  下一步 <ChevronRight size={14} />
                 </button>
               </div>
             </div>
           )}
 
+          {/* ── Step 3: Keywords merge preview ── */}
+          {state.step === 3 && (
+            <div style={stepBodyStyle}>
+              <p style={descriptionStyle}>
+                以下是合并后的关键词列表（两方关键词的并集）。点击关键词可将其移除。
+              </p>
+
+              <div style={keywordsContainerStyle}>
+                {state.mergedKeywords.map((kw) => {
+                  const removed = state.removedKeywords.has(kw);
+                  return (
+                    <button
+                      key={kw}
+                      type="button"
+                      style={{
+                        ...keywordChipStyle,
+                        opacity: removed ? 0.4 : 1,
+                        textDecoration: removed ? 'line-through' : 'none',
+                        borderColor: removed
+                          ? 'var(--border-subtle)'
+                          : 'var(--accent-color)',
+                        backgroundColor: removed
+                          ? 'transparent'
+                          : 'rgba(var(--accent-color-rgb, 59,130,246), 0.08)',
+                      }}
+                      onClick={() =>
+                        dispatch({ type: 'TOGGLE_KEYWORD', keyword: kw })
+                      }
+                    >
+                      {kw}
+                      {!removed && <X size={10} style={{ marginLeft: 4 }} />}
+                    </button>
+                  );
+                })}
+                {state.mergedKeywords.length === 0 && (
+                  <div style={emptyHintStyle}>两个概念均无关键词</div>
+                )}
+              </div>
+
+              <div style={mergeStatStyle}>
+                保留 {finalKeywords.length} / {state.mergedKeywords.length} 个关键词
+              </div>
+
+              <div style={buttonRowStyle}>
+                <button
+                  type="button"
+                  style={secondaryButtonStyle}
+                  onClick={() =>
+                    dispatch({
+                      type: 'SET_STEP',
+                      step: state.conflicts.length > 0 ? 2 : 1,
+                    })
+                  }
+                >
+                  <ChevronLeft size={14} /> 返回
+                </button>
+                <button type="button" style={primaryButtonStyle} onClick={goToStep4}>
+                  下一步 <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 4: Confirm ── */}
+          {state.step === 4 && (
+            <div style={stepBodyStyle}>
+              <p style={descriptionStyle}>请确认以下合并操作:</p>
+
+              <div style={summaryContainerStyle}>
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>被合并概念（将删除）</span>
+                  <span style={summaryValueDangerStyle}>{sourceConcept.name}</span>
+                </div>
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>保留概念</span>
+                  <span style={summaryValueStyle}>{retainConcept?.name ?? '—'}</span>
+                </div>
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>冲突映射</span>
+                  <span style={summaryValueStyle}>
+                    {state.conflicts.length > 0
+                      ? `${state.conflicts.length} 条已解决`
+                      : '无冲突'}
+                  </span>
+                </div>
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>合并后关键词</span>
+                  <span style={summaryValueStyle}>{finalKeywords.length} 个</span>
+                </div>
+              </div>
+
+              <div style={warningBannerStyle}>
+                <AlertTriangle size={14} />
+                此操作不可撤销。被合并概念的所有映射将迁移到保留概念。
+              </div>
+
+              <div style={buttonRowStyle}>
+                <button
+                  type="button"
+                  style={secondaryButtonStyle}
+                  onClick={() => dispatch({ type: 'SET_STEP', step: 3 })}
+                >
+                  <ChevronLeft size={14} /> 返回
+                </button>
+                <button
+                  type="button"
+                  style={dangerButtonStyle}
+                  disabled={state.loading}
+                  onClick={executeMerge}
+                >
+                  {state.loading ? '合并中...' : '确认合并'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Close button */}
           <Dialog.Close asChild>
             <button type="button" style={closeButtonStyle} aria-label="Close">
               <X size={16} />
@@ -268,6 +650,45 @@ export function ConceptMergeDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+// ── Sub-components ──
+
+function ComparisonCard({
+  label,
+  concept,
+  variant,
+}: {
+  label: string;
+  concept: Concept;
+  variant: 'accent' | 'danger';
+}) {
+  const borderColor =
+    variant === 'accent' ? 'var(--accent-color)' : 'var(--danger, #e53e3e)';
+
+  return (
+    <div style={{ ...comparisonCardStyle, borderColor }}>
+      <div style={comparisonCardLabelStyle}>{label}</div>
+      <div style={comparisonCardNameStyle}>{concept.name}</div>
+      <div style={comparisonCardRowStyle}>
+        <span style={comparisonCardFieldStyle}>定义</span>
+        <span style={comparisonCardValueStyle}>
+          {concept.description.slice(0, 60)}
+          {concept.description.length > 60 ? '...' : ''}
+        </span>
+      </div>
+      <div style={comparisonCardRowStyle}>
+        <span style={comparisonCardFieldStyle}>关键词</span>
+        <span style={comparisonCardValueStyle}>
+          {concept.keywords.length > 0 ? concept.keywords.join(', ') : '—'}
+        </span>
+      </div>
+      <div style={comparisonCardRowStyle}>
+        <span style={comparisonCardFieldStyle}>成熟度</span>
+        <span style={comparisonCardValueStyle}>{formatMaturity(concept.maturity)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -289,8 +710,8 @@ const contentStyle: React.CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-md, 8px)',
   padding: 24,
-  width: 520,
-  maxHeight: '80vh',
+  width: 640,
+  maxHeight: '85vh',
   overflowY: 'auto',
   zIndex: 1001,
   boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
@@ -302,8 +723,46 @@ const titleStyle: React.CSSProperties = {
   gap: 8,
   fontSize: 16,
   fontWeight: 600,
-  marginBottom: 16,
+  marginBottom: 12,
   color: 'var(--text-primary)',
+};
+
+const stepIndicatorStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'center',
+  gap: 24,
+  marginBottom: 16,
+  paddingBottom: 12,
+  borderBottom: '1px solid var(--border-subtle)',
+};
+
+const stepDotContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 4,
+};
+
+const stepDotStyle: React.CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: '50%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 11,
+  fontWeight: 600,
+};
+
+const stepLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+};
+
+const stepBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
 };
 
 const descriptionStyle: React.CSSProperties = {
@@ -312,88 +771,229 @@ const descriptionStyle: React.CSSProperties = {
   lineHeight: 1.5,
 };
 
-const labelStyle: React.CSSProperties = {
+const searchContainerStyle: React.CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  fontSize: 'var(--text-sm, 13px)',
-  color: 'var(--text-secondary)',
-};
-
-const selectStyle: React.CSSProperties = {
-  padding: '6px 8px',
+  alignItems: 'center',
+  gap: 8,
+  padding: '6px 10px',
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)',
   backgroundColor: 'var(--bg-surface)',
-  color: 'var(--text-primary)',
-  fontSize: 'var(--text-sm, 13px)',
 };
 
-const previewStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  backgroundColor: 'var(--bg-surface-low)',
-  borderRadius: 'var(--radius-sm, 4px)',
-  fontSize: 'var(--text-sm, 13px)',
-  color: 'var(--text-primary)',
-};
-
-const buttonRowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  gap: 8,
-  marginTop: 8,
-};
-
-const primaryButtonStyle: React.CSSProperties = {
-  padding: '6px 16px',
+const searchInputStyle: React.CSSProperties = {
+  flex: 1,
   border: 'none',
-  borderRadius: 'var(--radius-sm, 4px)',
-  backgroundColor: 'var(--accent-color)',
-  color: '#fff',
+  outline: 'none',
+  backgroundColor: 'transparent',
+  color: 'var(--text-primary)',
   fontSize: 'var(--text-sm, 13px)',
-  cursor: 'pointer',
 };
 
-const secondaryButtonStyle: React.CSSProperties = {
-  padding: '6px 16px',
+const conceptListStyle: React.CSSProperties = {
+  maxHeight: 180,
+  overflowY: 'auto',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+};
+
+const conceptOptionStyle: React.CSSProperties = {
+  padding: '8px 12px',
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)',
-  backgroundColor: 'transparent',
-  color: 'var(--text-secondary)',
-  fontSize: 'var(--text-sm, 13px)',
+  backgroundColor: 'var(--bg-surface-low)',
   cursor: 'pointer',
+  textAlign: 'left',
+  transition: 'border-color 0.15s',
 };
 
-const errorBannerStyle: React.CSSProperties = {
+const conceptOptionMetaStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  marginTop: 2,
+};
+
+const emptyHintStyle: React.CSSProperties = {
+  padding: 16,
+  textAlign: 'center',
+  color: 'var(--text-muted)',
+  fontSize: 'var(--text-sm, 13px)',
+};
+
+// Comparison cards
+const comparisonContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'stretch',
+  gap: 8,
+};
+
+const arrowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
-  padding: '8px 12px',
-  backgroundColor: 'var(--danger-bg, rgba(255,0,0,0.1))',
-  color: 'var(--danger, #e53e3e)',
-  borderRadius: 'var(--radius-sm, 4px)',
-  fontSize: 'var(--text-sm, 13px)',
-  marginBottom: 12,
+  color: 'var(--text-muted)',
+  flexShrink: 0,
 };
 
+const comparisonCardStyle: React.CSSProperties = {
+  flex: 1,
+  padding: '10px 12px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'var(--bg-surface-low)',
+};
+
+const comparisonCardLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  fontWeight: 600,
+  marginBottom: 4,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+};
+
+const comparisonCardNameStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 600,
+  color: 'var(--text-primary)',
+  marginBottom: 8,
+};
+
+const comparisonCardRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 6,
+  marginBottom: 3,
+  fontSize: 'var(--text-xs, 11px)',
+};
+
+const comparisonCardFieldStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+  width: 42,
+};
+
+const comparisonCardValueStyle: React.CSSProperties = {
+  color: 'var(--text-secondary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+// Conflict styles
 const conflictListStyle: React.CSSProperties = {
   maxHeight: 300,
   overflowY: 'auto',
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
+  gap: 8,
 };
 
-const conflictItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '8px 10px',
+const conflictCardStyle: React.CSSProperties = {
+  padding: '10px 12px',
   backgroundColor: 'var(--bg-surface-low)',
   borderRadius: 'var(--radius-sm, 4px)',
   border: '1px solid var(--border-subtle)',
 };
 
+const conflictTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 500,
+  color: 'var(--text-primary)',
+  marginBottom: 8,
+};
+
+const conflictComparisonStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 12,
+  marginBottom: 8,
+};
+
+const conflictSideStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};
+
+const conflictSideLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  fontWeight: 600,
+};
+
+const conflictDetailStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-secondary)',
+};
+
+const conflictActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 6,
+};
+
+// Keywords
+const keywordsContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  maxHeight: 200,
+  overflowY: 'auto',
+  padding: '8px 0',
+};
+
+const keywordChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '3px 10px',
+  border: '1px solid var(--accent-color)',
+  borderRadius: 12,
+  backgroundColor: 'transparent',
+  color: 'var(--text-primary)',
+  fontSize: 'var(--text-xs, 11px)',
+  cursor: 'pointer',
+  transition: 'opacity 0.15s',
+};
+
+const mergeStatStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  textAlign: 'right',
+};
+
+// Summary
+const summaryContainerStyle: React.CSSProperties = {
+  padding: '12px 14px',
+  backgroundColor: 'var(--bg-surface-low)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  border: '1px solid var(--border-subtle)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+};
+
+const summaryRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+};
+
+const summaryLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  color: 'var(--text-muted)',
+};
+
+const summaryValueStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 500,
+  color: 'var(--text-primary)',
+};
+
+const summaryValueDangerStyle: React.CSSProperties = {
+  ...summaryValueStyle,
+  color: 'var(--danger, #e53e3e)',
+};
+
+// Chips
 const chipStyle: React.CSSProperties = {
   padding: '2px 10px',
   border: '1px solid var(--border-subtle)',
@@ -411,11 +1011,72 @@ const chipActiveStyle: React.CSSProperties = {
   color: '#fff',
 };
 
-const chipDangerActiveStyle: React.CSSProperties = {
-  ...chipStyle,
-  borderColor: 'var(--danger, #e53e3e)',
+// Banners
+const errorBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 12px',
+  backgroundColor: 'var(--danger-bg, rgba(255,0,0,0.1))',
+  color: 'var(--danger, #e53e3e)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  fontSize: 'var(--text-sm, 13px)',
+  marginBottom: 8,
+};
+
+const warningBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 12px',
+  backgroundColor: 'rgba(234, 179, 8, 0.1)',
+  color: 'var(--warning, #d69e2e)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  fontSize: 'var(--text-sm, 13px)',
+};
+
+// Buttons
+const buttonRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: 8,
+  marginTop: 8,
+};
+
+const primaryButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '6px 16px',
+  border: 'none',
+  borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'var(--accent-color)',
+  color: '#fff',
+  fontSize: 'var(--text-sm, 13px)',
+  cursor: 'pointer',
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '6px 16px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 'var(--text-sm, 13px)',
+  cursor: 'pointer',
+};
+
+const dangerButtonStyle: React.CSSProperties = {
+  padding: '6px 16px',
+  border: 'none',
+  borderRadius: 'var(--radius-sm, 4px)',
   backgroundColor: 'var(--danger, #e53e3e)',
   color: '#fff',
+  fontSize: 'var(--text-sm, 13px)',
+  cursor: 'pointer',
 };
 
 const closeButtonStyle: React.CSSProperties = {

@@ -1,0 +1,193 @@
+// ═══ 结构化笔记管理 ═══
+// §6: createNote / onNoteFileChanged / upgradeFromMemo / upgradeToTentativeConcept
+//
+// 文件系统安全协议 (§6.1/6.3 改进)：
+//   调用方（orchestrator）必须遵循 temp file 两阶段提交：
+//     1. 写内容到 workspace/notes/.tmp_{uuid}.md
+//     2. 调用 createNote() 写入数据库（使用最终 filePath，非 .tmp）
+//     3. 数据库提交成功后 → fs.renameSync(.tmp → 最终路径)
+//     4. 数据库回滚 → 删除 .tmp 文件
+//   下次启动时清理残留 .tmp_* 文件（由 orchestrator 负责）。
+
+import type Database from 'better-sqlite3';
+import type { NoteId, PaperId, ConceptId, MemoId } from '../../types/common';
+import type { ResearchNote } from '../../types/note';
+import type { TextChunk } from '../../types/chunk';
+import type { ConceptDefinition } from '../../types/concept';
+import { fromRow, now } from '../row-mapper';
+import { insertChunksBatch, deleteChunksByPrefix } from './chunks';
+import { addConcept } from './concepts';
+
+/** 生成笔记文件的临时文件名前缀 */
+export const NOTE_TEMP_PREFIX = '.tmp_';
+
+/** 检查文件名是否为临时文件（用于启动时清理） */
+export function isTempNoteFile(fileName: string): boolean {
+  return fileName.startsWith(NOTE_TEMP_PREFIX);
+}
+
+// ─── §6.1 createNote ───
+
+export function createNote(
+  db: Database.Database,
+  note: Omit<ResearchNote, 'createdAt' | 'updatedAt'>,
+  chunks: TextChunk[],
+  embeddings: (Float32Array | null)[],
+): void {
+  const timestamp = now();
+
+  const createFn = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO research_notes (
+        id, file_path, title, linked_paper_ids, linked_concept_ids,
+        tags, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      note.id,
+      note.filePath,
+      note.title,
+      JSON.stringify(note.linkedPaperIds),
+      JSON.stringify(note.linkedConceptIds),
+      JSON.stringify(note.tags),
+      timestamp,
+      timestamp,
+    );
+
+    if (chunks.length > 0) {
+      insertChunksBatch(db, chunks, embeddings);
+    }
+  });
+
+  createFn();
+}
+
+// ─── §6.2 onNoteFileChanged ───
+
+export function onNoteFileChanged(
+  db: Database.Database,
+  noteId: NoteId,
+  frontmatter: {
+    title: string;
+    linkedPaperIds: PaperId[];
+    linkedConceptIds: ConceptId[];
+    tags: string[];
+  },
+  newChunks: TextChunk[],
+  newEmbeddings: (Float32Array | null)[],
+): void {
+  const timestamp = now();
+
+  const updateFn = db.transaction(() => {
+    // 更新 research_notes 元数据
+    db.prepare(`
+      UPDATE research_notes
+      SET title = ?, linked_paper_ids = ?, linked_concept_ids = ?,
+          tags = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      frontmatter.title,
+      JSON.stringify(frontmatter.linkedPaperIds),
+      JSON.stringify(frontmatter.linkedConceptIds),
+      JSON.stringify(frontmatter.tags),
+      timestamp,
+      noteId,
+    );
+
+    // 删除旧 chunk + vec
+    deleteChunksByPrefix(db, `note__${noteId}__`);
+
+    // 写入新 chunk + vec
+    if (newChunks.length > 0) {
+      insertChunksBatch(db, newChunks, newEmbeddings);
+    }
+  });
+
+  updateFn();
+}
+
+// ─── §6.3 upgradeFromMemo ───
+// 文件系统操作由调用方在事务外完成
+
+export interface UpgradeFromMemoResult {
+  noteId: NoteId;
+  filePath: string;
+}
+
+export function linkMemoToNote(
+  db: Database.Database,
+  memoId: MemoId,
+  noteId: NoteId,
+): void {
+  const timestamp = now();
+
+  // 追加 noteId 到 memo 的 linkedNoteIds
+  db.prepare(`
+    UPDATE research_memos
+    SET linked_note_ids = json_insert(linked_note_ids, '$[#]', ?),
+        updated_at = ?
+    WHERE id = ?
+  `).run(noteId, timestamp, memoId);
+}
+
+// ─── §6.4 upgradeToTentativeConcept ───
+// TODO: Markdown 文件读取由调用方（orchestrator）完成
+
+export function linkNoteToConcept(
+  db: Database.Database,
+  noteId: NoteId,
+  conceptId: ConceptId,
+): void {
+  const timestamp = now();
+
+  db.prepare(`
+    UPDATE research_notes
+    SET linked_concept_ids = json_insert(linked_concept_ids, '$[#]', ?),
+        updated_at = ?
+    WHERE id = ?
+  `).run(conceptId, timestamp, noteId);
+}
+
+// ─── 查询 ───
+
+export function getNote(
+  db: Database.Database,
+  id: NoteId,
+): ResearchNote | null {
+  const row = db
+    .prepare('SELECT * FROM research_notes WHERE id = ?')
+    .get(id) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return fromRow<ResearchNote>(row);
+}
+
+export function getNoteByFilePath(
+  db: Database.Database,
+  filePath: string,
+): ResearchNote | null {
+  const row = db
+    .prepare('SELECT * FROM research_notes WHERE file_path = ?')
+    .get(filePath) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return fromRow<ResearchNote>(row);
+}
+
+export function getAllNotes(
+  db: Database.Database,
+): ResearchNote[] {
+  const rows = db
+    .prepare('SELECT * FROM research_notes ORDER BY updated_at DESC')
+    .all() as Record<string, unknown>[];
+  return rows.map((r) => fromRow<ResearchNote>(r));
+}
+
+export function deleteNote(
+  db: Database.Database,
+  id: NoteId,
+): number {
+  const deleteFn = db.transaction(() => {
+    deleteChunksByPrefix(db, `note__${id}__`);
+    return db.prepare('DELETE FROM research_notes WHERE id = ?').run(id).changes;
+  });
+
+  return deleteFn();
+}

@@ -138,7 +138,7 @@ export function EmptyPane() {
       </div>
 
       {/* 引导列表 */}
-      <div style={{ width: '100%', maxWidth: 220, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ width: '100%', maxWidth: 220, display: 'flex', flexDirection: 'column', gap: 4, userSelect: 'none' }}>
         {guideItems.map((item, i) => (
           <div
             key={i}

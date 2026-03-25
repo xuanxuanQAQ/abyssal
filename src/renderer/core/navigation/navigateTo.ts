@@ -26,6 +26,9 @@ export function resolveTargetView(target: NavigationTarget): ViewType {
       return 'writing';
     case 'graph':
       return 'graph';
+    case 'note':
+    case 'memo':
+      return 'notes';
   }
 }
 
@@ -50,6 +53,8 @@ export function applyNavigation(
       selectedConceptId: string | null;
       selectedSectionId: string | null;
       focusedGraphNodeId: string | null;
+      selectedNoteId: string | null;
+      selectedMemoId: string | null;
     }>
   ) => void
 ): void {
@@ -81,6 +86,12 @@ export function applyNavigation(
       break;
     case 'graph':
       partial.focusedGraphNodeId = target.focusNodeId;
+      break;
+    case 'note':
+      partial.selectedNoteId = target.noteId;
+      break;
+    case 'memo':
+      partial.selectedMemoId = target.memoId;
       break;
   }
 

@@ -15,12 +15,16 @@ import {
   CELL_GAP,
   CONCEPT_GROUP_GAP,
 } from './layoutConstants';
+import { MaturityBadge } from '../../../../../shared/MaturityBadge';
+import type { Maturity } from '../../../../../../shared-types/enums';
 
 interface ConceptInfo {
   id: string;
   name: string;
   parentId: string | null;
   level: number;
+  /** v2.0 成熟度 */
+  maturity?: Maturity;
 }
 
 interface ConceptGroup {
@@ -145,10 +149,20 @@ export function RowHeader({
           );
         })}
 
-        {/* Individual concept rows */}
+        {/* Individual concept rows — v2.0 maturity visual signals */}
         {concepts.map((concept, idx) => {
           const yOffset = rowOffsets[idx] ?? 0;
           const isHovered = hoveredRow === idx;
+          const maturity = concept.maturity ?? 'established';
+
+          // §1.3 maturity-specific row styling
+          const maturityBg =
+            maturity === 'tentative' ? 'rgba(59, 130, 246, 0.05)' :
+            isHovered ? 'var(--bg-hover)' : 'transparent';
+          const maturityBorderBottom =
+            maturity === 'tentative' ? '1px dashed rgba(59, 130, 246, 0.3)' : undefined;
+          const maturityLeftBar =
+            maturity === 'working' ? '2px solid #F59E0B' : undefined;
 
           return (
             <div
@@ -161,12 +175,15 @@ export function RowHeader({
                 height: CELL_HEIGHT,
                 display: 'flex',
                 alignItems: 'center',
+                gap: 4,
                 padding: '0 8px',
                 paddingLeft: 8 + concept.level * 12,
                 fontSize: 12,
                 lineHeight: `${CELL_HEIGHT}px`,
                 color: 'var(--text-primary)',
-                backgroundColor: isHovered ? 'var(--bg-hover)' : 'transparent',
+                backgroundColor: isHovered ? 'var(--bg-hover)' : maturityBg,
+                borderBottom: maturityBorderBottom,
+                borderLeft: maturityLeftBar,
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -175,6 +192,7 @@ export function RowHeader({
               }}
               title={concept.name}
             >
+              <MaturityBadge maturity={maturity} size="sm" />
               {concept.name}
             </div>
           );

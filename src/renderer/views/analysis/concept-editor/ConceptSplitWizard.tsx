@@ -1,63 +1,187 @@
 /**
- * ConceptSplitWizard -- two-step concept split flow (v1.2)
+ * ConceptSplitWizard -- 3-step concept split wizard (v2.0 §2.6)
  *
- * Step 1: Define new concepts (name + description for each).
- * Step 2: Assign existing mappings from the original concept to the new concepts.
+ * Step 1: Define new concepts -- two name + definition inputs. Can copy from original.
+ * Step 2: Assign mappings -- dual-column transfer list. "AI 预分配" placeholder for 20+ items.
+ * Step 3: Confirm -- summary + execute split.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useReducer, useCallback, useMemo } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Scissors, Plus, Trash2, AlertTriangle } from 'lucide-react';
+import {
+  X,
+  Scissors,
+  AlertTriangle,
+  Copy,
+  ChevronRight,
+  ChevronLeft,
+  Check,
+  Sparkles,
+  ArrowRight,
+  ArrowLeft,
+} from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
+import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
 import type {
   Concept,
   ConceptMapping,
-  NewConceptDef,
-  MappingAssignment,
+  ConceptDraft,
 } from '../../../../shared-types/models';
+
+// ── Props ──
 
 interface ConceptSplitWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  concept: Concept | null;
+  /** The concept being split. */
+  conceptId: string;
 }
 
-type Step = 'define' | 'assign';
+// ── Reducer ──
+
+type Step = 1 | 2 | 3;
 
 interface DraftConcept {
-  tempId: string;
   name: string;
-  description: string;
+  definition: string;
 }
+
+/** Where a mapping is assigned: 'a1' | 'a2' | 'both'. */
+type AssignTarget = 'a1' | 'a2' | 'both';
+
+interface SplitState {
+  step: Step;
+  /** Draft for concept A1 (first new concept). */
+  draft1: DraftConcept;
+  /** Draft for concept A2 (second new concept). */
+  draft2: DraftConcept;
+  /** Original concept's mappings fetched from backend. */
+  mappings: ConceptMapping[];
+  /** Paper titles keyed by paperId (best-effort). */
+  paperTitles: Record<string, string>;
+  /** Assignment of each mapping id -> 'a1' | 'a2' | 'both'. */
+  assignments: Record<string, AssignTarget>;
+  loading: boolean;
+  aiLoading: boolean;
+  error: string | null;
+}
+
+type SplitAction =
+  | { type: 'SET_STEP'; step: Step }
+  | { type: 'UPDATE_DRAFT'; which: 1 | 2; field: 'name' | 'definition'; value: string }
+  | { type: 'COPY_FROM_ORIGINAL'; which: 1 | 2; name: string; definition: string }
+  | { type: 'SET_MAPPINGS'; mappings: ConceptMapping[]; paperTitles: Record<string, string> }
+  | { type: 'ASSIGN_MAPPING'; mappingId: string; target: AssignTarget }
+  | { type: 'ASSIGN_ALL'; target: AssignTarget }
+  | { type: 'BULK_ASSIGN'; assignments: Record<string, AssignTarget> }
+  | { type: 'SET_LOADING'; loading: boolean }
+  | { type: 'SET_AI_LOADING'; loading: boolean }
+  | { type: 'SET_ERROR'; error: string | null }
+  | { type: 'RESET' };
+
+const emptyDraft: DraftConcept = { name: '', definition: '' };
+
+const initialState: SplitState = {
+  step: 1,
+  draft1: { ...emptyDraft },
+  draft2: { ...emptyDraft },
+  mappings: [],
+  paperTitles: {},
+  assignments: {},
+  loading: false,
+  aiLoading: false,
+  error: null,
+};
+
+function reducer(state: SplitState, action: SplitAction): SplitState {
+  switch (action.type) {
+    case 'SET_STEP':
+      return { ...state, step: action.step, error: null };
+    case 'UPDATE_DRAFT': {
+      const key = action.which === 1 ? 'draft1' : 'draft2';
+      return {
+        ...state,
+        [key]: { ...state[key], [action.field]: action.value },
+      };
+    }
+    case 'COPY_FROM_ORIGINAL': {
+      const key = action.which === 1 ? 'draft1' : 'draft2';
+      return {
+        ...state,
+        [key]: { name: action.name, definition: action.definition },
+      };
+    }
+    case 'SET_MAPPINGS': {
+      // Default: all assigned to 'a1'.
+      const assignments: Record<string, AssignTarget> = {};
+      for (const m of action.mappings) {
+        assignments[m.id] = 'a1';
+      }
+      return {
+        ...state,
+        mappings: action.mappings,
+        paperTitles: action.paperTitles,
+        assignments,
+      };
+    }
+    case 'ASSIGN_MAPPING':
+      return {
+        ...state,
+        assignments: { ...state.assignments, [action.mappingId]: action.target },
+      };
+    case 'ASSIGN_ALL': {
+      const next: Record<string, AssignTarget> = {};
+      for (const id of Object.keys(state.assignments)) {
+        next[id] = action.target;
+      }
+      return { ...state, assignments: next };
+    }
+    case 'BULK_ASSIGN':
+      return { ...state, assignments: { ...state.assignments, ...action.assignments } };
+    case 'SET_LOADING':
+      return { ...state, loading: action.loading };
+    case 'SET_AI_LOADING':
+      return { ...state, aiLoading: action.loading };
+    case 'SET_ERROR':
+      return { ...state, error: action.error };
+    case 'RESET':
+      return { ...initialState };
+    default:
+      return state;
+  }
+}
+
+// ── Helpers ──
+
+const STEP_LABELS: Record<Step, string> = {
+  1: '定义新概念',
+  2: '分配映射',
+  3: '确认执行',
+};
+
+const TARGET_LABELS: Record<AssignTarget, string> = {
+  a1: '概念 A1',
+  a2: '概念 A2',
+  both: '两者',
+};
+
+// ── Component ──
 
 export function ConceptSplitWizard({
   open,
   onOpenChange,
-  concept,
+  conceptId,
 }: ConceptSplitWizardProps) {
-  const [step, setStep] = useState<Step>('define');
-  const [drafts, setDrafts] = useState<DraftConcept[]>([
-    { tempId: 'draft-1', name: '', description: '' },
-    { tempId: 'draft-2', name: '', description: '' },
-  ]);
-  const [mappings, setMappings] = useState<ConceptMapping[]>([]);
-  const [assignments, setAssignments] = useState<Map<string, string>>(
-    new Map()
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const { data: conceptListData } = useConceptList();
+  const concepts: Concept[] = conceptListData ?? [];
 
-  const reset = useCallback(() => {
-    setStep('define');
-    setDrafts([
-      { tempId: 'draft-1', name: '', description: '' },
-      { tempId: 'draft-2', name: '', description: '' },
-    ]);
-    setMappings([]);
-    setAssignments(new Map());
-    setLoading(false);
-    setError(null);
-  }, []);
+  const originalConcept = useMemo(
+    () => concepts.find((c) => c.id === conceptId) ?? null,
+    [concepts, conceptId]
+  );
+
+  const reset = useCallback(() => dispatch({ type: 'RESET' }), []);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -67,169 +191,321 @@ export function ConceptSplitWizard({
     [onOpenChange, reset]
   );
 
-  const addDraft = useCallback(() => {
-    setDrafts((prev) => [
-      ...prev,
-      {
-        tempId: `draft-${Date.now()}`,
-        name: '',
-        description: '',
-      },
-    ]);
-  }, []);
+  // Validation: both drafts must have name and definition.
+  const draftsValid =
+    state.draft1.name.trim().length > 0 &&
+    state.draft1.definition.trim().length > 0 &&
+    state.draft2.name.trim().length > 0 &&
+    state.draft2.definition.trim().length > 0;
 
-  const removeDraft = useCallback((tempId: string) => {
-    setDrafts((prev) => {
-      if (prev.length <= 2) return prev;
-      return prev.filter((d) => d.tempId !== tempId);
-    });
-  }, []);
+  // ── Step transitions ──
 
-  const updateDraft = useCallback(
-    (tempId: string, field: 'name' | 'description', value: string) => {
-      setDrafts((prev) =>
-        prev.map((d) => (d.tempId === tempId ? { ...d, [field]: value } : d))
-      );
-    },
-    []
-  );
+  const goToStep2 = useCallback(async () => {
+    dispatch({ type: 'SET_LOADING', loading: true });
+    dispatch({ type: 'SET_ERROR', error: null });
 
-  const allDraftsValid = drafts.every(
-    (d) => d.name.trim().length > 0 && d.description.trim().length > 0
-  );
-
-  const handleSplit = useCallback(async () => {
-    if (!concept) return;
-    setLoading(true);
-    setError(null);
     try {
-      const newConcepts: NewConceptDef[] = drafts.map((d) => ({
-        name: d.name.trim(),
-        description: d.description.trim(),
-      }));
-      const result = await getAPI().db.concepts.split(concept.id, newConcepts);
-      if (result.mappings.length > 0) {
-        setMappings(result.mappings);
-        const initial = new Map<string, string>();
-        const firstDraftId = drafts[0]?.tempId ?? '';
-        for (const m of result.mappings) {
-          initial.set(m.id, firstDraftId);
+      const api = getAPI();
+      const mappings: ConceptMapping[] =
+        await api.db.mappings.getForConcept(conceptId);
+
+      // Resolve paper titles (best-effort).
+      let paperTitles: Record<string, string> = {};
+      if (mappings.length > 0) {
+        try {
+          const paperIds = [...new Set(mappings.map((m) => m.paperId))];
+          const papers = await Promise.all(
+            paperIds.map((pid) => api.db.papers.get(pid).catch(() => null))
+          );
+          paperTitles = Object.fromEntries(
+            papers.filter((p): p is NonNullable<typeof p> => p !== null).map((p) => [p.id, p.title])
+          );
+        } catch {
+          // Paper title resolution is best-effort.
         }
-        setAssignments(initial);
-        setStep('assign');
-      } else {
-        handleOpenChange(false);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [concept, drafts, handleOpenChange]);
 
-  const handleReassign = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+      dispatch({ type: 'SET_MAPPINGS', mappings, paperTitles });
+      dispatch({ type: 'SET_STEP', step: 2 });
+    } catch (err) {
+      dispatch({
+        type: 'SET_ERROR',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      dispatch({ type: 'SET_LOADING', loading: false });
+    }
+  }, [conceptId]);
+
+  const goToStep3 = useCallback(() => {
+    dispatch({ type: 'SET_STEP', step: 3 });
+  }, []);
+
+  // ── AI pre-assignment (placeholder) ──
+
+  const handleAIPreAssign = useCallback(async () => {
+    dispatch({ type: 'SET_AI_LOADING', loading: true });
+    dispatch({ type: 'SET_ERROR', error: null });
+
     try {
-      const assignmentList: MappingAssignment[] = [];
-      for (const [mappingId, targetTempId] of assignments) {
-        const draftIndex = drafts.findIndex((d) => d.tempId === targetTempId);
-        // The backend should return real IDs after split; here we use index-based placeholder
-        const targetConceptId = `new-concept-${draftIndex}`;
-        assignmentList.push({ mappingId, targetConceptId });
-      }
-      await getAPI().db.concepts.reassignMappings(assignmentList);
+      // TODO: Call LLM to auto-assign mappings based on concept definitions.
+      // For now, simulate a basic heuristic: alternate between a1 and a2.
+      const newAssignments: Record<string, AssignTarget> = {};
+      state.mappings.forEach((m, idx) => {
+        newAssignments[m.id] = idx % 2 === 0 ? 'a1' : 'a2';
+      });
+      dispatch({ type: 'BULK_ASSIGN', assignments: newAssignments });
+    } catch (err) {
+      dispatch({
+        type: 'SET_ERROR',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      dispatch({ type: 'SET_AI_LOADING', loading: false });
+    }
+  }, [state.mappings]);
+
+  // ── Execute split ──
+
+  const executeSplit = useCallback(async () => {
+    if (!originalConcept) return;
+    dispatch({ type: 'SET_LOADING', loading: true });
+    dispatch({ type: 'SET_ERROR', error: null });
+
+    try {
+      const concept1Draft: ConceptDraft = {
+        nameZh: state.draft1.name,
+        nameEn: '',
+        definition: state.draft1.definition,
+        keywords: [],
+        parentId: originalConcept.parentId,
+      };
+      const concept2Draft: ConceptDraft = {
+        nameZh: state.draft2.name,
+        nameEn: '',
+        definition: state.draft2.definition,
+        keywords: [],
+        parentId: originalConcept.parentId,
+      };
+
+      // Build mapping assignments array from the Record<string, AssignTarget>.
+      // The API expects MappingAssignment[] where targetConceptId is populated after split;
+      // since we don't know the new concept IDs yet, we use 'a1'/'a2' as placeholders
+      // and let the backend resolve them.
+      const mappingAssignments: import('../../../../shared-types/models').MappingAssignment[] =
+        Object.entries(state.assignments).map(([mappingId, target]) => ({
+          mappingId,
+          targetConceptId: target, // 'a1' | 'a2' | 'both' — backend interprets these
+        }));
+
+      await getAPI().db.concepts.split(
+        conceptId,
+        concept1Draft,
+        concept2Draft,
+        mappingAssignments
+      );
       handleOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      dispatch({
+        type: 'SET_ERROR',
+        error: err instanceof Error ? err.message : String(err),
+      });
     } finally {
-      setLoading(false);
+      dispatch({ type: 'SET_LOADING', loading: false });
     }
-  }, [assignments, drafts, handleOpenChange]);
+  }, [originalConcept, state, conceptId, handleOpenChange]);
 
-  if (!concept) return null;
+  // ── Derived counts for summary ──
+
+  const assignmentCounts = useMemo(() => {
+    let a1 = 0;
+    let a2 = 0;
+    let both = 0;
+    for (const target of Object.values(state.assignments)) {
+      if (target === 'a1') a1++;
+      else if (target === 'a2') a2++;
+      else both++;
+    }
+    return { a1, a2, both };
+  }, [state.assignments]);
+
+  // Group mappings by assignment for dual-column view.
+  const columnA1 = useMemo(
+    () =>
+      state.mappings.filter(
+        (m) => state.assignments[m.id] === 'a1' || state.assignments[m.id] === 'both'
+      ),
+    [state.mappings, state.assignments]
+  );
+
+  const columnA2 = useMemo(
+    () =>
+      state.mappings.filter(
+        (m) => state.assignments[m.id] === 'a2' || state.assignments[m.id] === 'both'
+      ),
+    [state.mappings, state.assignments]
+  );
+
+  if (!originalConcept) return null;
 
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay style={overlayStyle} />
         <Dialog.Content style={contentStyle}>
+          {/* Header */}
           <Dialog.Title style={titleStyle}>
             <Scissors size={16} />
-            {step === 'define'
-              ? `拆分概念: ${concept.name}`
-              : '分配映射到新概念'}
+            拆分概念: {originalConcept.name}
           </Dialog.Title>
 
-          {error && (
+          {/* Step indicator */}
+          <div style={stepIndicatorStyle}>
+            {([1, 2, 3] as Step[]).map((s) => (
+              <div key={s} style={stepDotContainerStyle}>
+                <div
+                  style={{
+                    ...stepDotStyle,
+                    backgroundColor:
+                      s < state.step
+                        ? 'var(--accent-color)'
+                        : s === state.step
+                        ? 'var(--accent-color)'
+                        : 'var(--border-subtle)',
+                    color: s <= state.step ? '#fff' : 'var(--text-muted)',
+                  }}
+                >
+                  {s < state.step ? <Check size={10} /> : s}
+                </div>
+                <span style={stepLabelStyle}>{STEP_LABELS[s]}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Error banner */}
+          {state.error && (
             <div style={errorBannerStyle}>
-              <AlertTriangle size={14} /> {error}
+              <AlertTriangle size={14} /> {state.error}
             </div>
           )}
 
-          {step === 'define' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* ── Step 1: Define new concepts ── */}
+          {state.step === 1 && (
+            <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                将 <strong>{concept.name}</strong>{' '}
-                拆分为多个新概念。请为每个新概念定义名称和描述（至少两个）。
+                将 <strong>{originalConcept.name}</strong>{' '}
+                拆分为两个新概念。请为每个新概念定义名称和定义。
               </p>
 
-              <div style={draftListStyle}>
-                {drafts.map((draft, idx) => (
-                  <div key={draft.tempId} style={draftItemStyle}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        marginBottom: 6,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 'var(--text-xs, 11px)',
-                          color: 'var(--text-muted)',
-                          fontWeight: 600,
-                        }}
-                      >
-                        新概念 #{idx + 1}
-                      </span>
-                      {drafts.length > 2 && (
-                        <button
-                          type="button"
-                          style={iconBtnStyle}
-                          onClick={() => removeDraft(draft.tempId)}
-                          title="移除"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="概念名称"
-                      value={draft.name}
-                      onChange={(e) =>
-                        updateDraft(draft.tempId, 'name', e.target.value)
-                      }
-                      style={inputStyle}
-                    />
-                    <textarea
-                      placeholder="概念描述"
-                      value={draft.description}
-                      onChange={(e) =>
-                        updateDraft(draft.tempId, 'description', e.target.value)
-                      }
-                      style={textareaStyle}
-                      rows={2}
-                    />
-                  </div>
-                ))}
+              {/* Draft A1 */}
+              <div style={draftCardStyle}>
+                <div style={draftHeaderStyle}>
+                  <span style={draftLabelStyle}>新概念 A1</span>
+                  <button
+                    type="button"
+                    style={copyButtonStyle}
+                    title="从原概念复制"
+                    onClick={() =>
+                      dispatch({
+                        type: 'COPY_FROM_ORIGINAL',
+                        which: 1,
+                        name: originalConcept.name,
+                        definition: originalConcept.description,
+                      })
+                    }
+                  >
+                    <Copy size={12} /> 从原概念复制
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  placeholder="概念名称"
+                  value={state.draft1.name}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'UPDATE_DRAFT',
+                      which: 1,
+                      field: 'name',
+                      value: e.target.value,
+                    })
+                  }
+                  style={inputStyle}
+                />
+                <textarea
+                  placeholder="概念定义"
+                  value={state.draft1.definition}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'UPDATE_DRAFT',
+                      which: 1,
+                      field: 'definition',
+                      value: e.target.value,
+                    })
+                  }
+                  style={textareaStyle}
+                  rows={3}
+                />
               </div>
 
-              <button type="button" style={addButtonStyle} onClick={addDraft}>
-                <Plus size={12} /> 添加概念
-              </button>
+              {/* Draft A2 */}
+              <div style={draftCardStyle}>
+                <div style={draftHeaderStyle}>
+                  <span style={draftLabelStyle}>新概念 A2</span>
+                  <button
+                    type="button"
+                    style={copyButtonStyle}
+                    title="从原概念复制"
+                    onClick={() =>
+                      dispatch({
+                        type: 'COPY_FROM_ORIGINAL',
+                        which: 2,
+                        name: originalConcept.name,
+                        definition: originalConcept.description,
+                      })
+                    }
+                  >
+                    <Copy size={12} /> 从原概念复制
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  placeholder="概念名称"
+                  value={state.draft2.name}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'UPDATE_DRAFT',
+                      which: 2,
+                      field: 'name',
+                      value: e.target.value,
+                    })
+                  }
+                  style={inputStyle}
+                />
+                <textarea
+                  placeholder="概念定义"
+                  value={state.draft2.definition}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'UPDATE_DRAFT',
+                      which: 2,
+                      field: 'definition',
+                      value: e.target.value,
+                    })
+                  }
+                  style={textareaStyle}
+                  rows={3}
+                />
+              </div>
+
+              {/* Original concept reference */}
+              <div style={originalRefStyle}>
+                <div style={originalRefLabelStyle}>原概念参考</div>
+                <div style={originalRefNameStyle}>{originalConcept.name}</div>
+                <div style={originalRefDescStyle}>
+                  {originalConcept.description.slice(0, 120)}
+                  {originalConcept.description.length > 120 ? '...' : ''}
+                </div>
+              </div>
 
               <div style={buttonRowStyle}>
                 <Dialog.Close asChild>
@@ -240,87 +516,224 @@ export function ConceptSplitWizard({
                 <button
                   type="button"
                   style={primaryButtonStyle}
-                  disabled={!allDraftsValid || loading}
-                  onClick={handleSplit}
+                  disabled={!draftsValid || state.loading}
+                  onClick={goToStep2}
                 >
-                  {loading ? '拆分中...' : '下一步: 分配映射'}
+                  {state.loading ? '加载映射中...' : '下一步'}
+                  {!state.loading && <ChevronRight size={14} />}
                 </button>
               </div>
             </div>
           )}
 
-          {step === 'assign' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* ── Step 2: Assign mappings ── */}
+          {state.step === 2 && (
+            <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                将原概念的映射分配到拆分后的新概念:
+                将原概念的映射分配到新概念。点击映射卡片上的按钮进行分配。
               </p>
 
-              <div style={assignListStyle}>
-                {mappings.map((m) => (
-                  <div key={m.id} style={assignItemStyle}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: 'var(--text-sm, 13px)',
-                          fontWeight: 500,
-                        }}
-                      >
-                        {m.relationType} (conf: {m.confidence.toFixed(2)})
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 'var(--text-xs, 11px)',
-                          color: 'var(--text-secondary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {m.evidenceText.slice(0, 80)}
-                        {m.evidenceText.length > 80 ? '...' : ''}
-                      </div>
-                    </div>
-                    <select
-                      value={assignments.get(m.id) ?? ''}
-                      onChange={(e) => {
-                        setAssignments((prev) => {
-                          const next = new Map(prev);
-                          next.set(m.id, e.target.value);
-                          return next;
-                        });
-                      }}
-                      style={assignSelectStyle}
-                    >
-                      {drafts.map((d) => (
-                        <option key={d.tempId} value={d.tempId}>
-                          {d.name || '(unnamed)'}
-                        </option>
-                      ))}
-                    </select>
+              {/* AI pre-assign button (shown when 20+ mappings) */}
+              {state.mappings.length >= 20 && (
+                <button
+                  type="button"
+                  style={aiButtonStyle}
+                  disabled={state.aiLoading}
+                  onClick={handleAIPreAssign}
+                >
+                  <Sparkles size={14} />
+                  {state.aiLoading ? 'AI 预分配中...' : 'AI 预分配'}
+                </button>
+              )}
+
+              {/* Dual-column layout */}
+              <div style={dualColumnContainerStyle}>
+                {/* Column A1 */}
+                <div style={columnStyle}>
+                  <div style={columnHeaderStyle}>
+                    <span style={columnTitleStyle}>
+                      {state.draft1.name || '概念 A1'}
+                    </span>
+                    <span style={columnCountStyle}>{assignmentCounts.a1 + assignmentCounts.both} 条</span>
                   </div>
-                ))}
+                  <div style={columnListStyle}>
+                    {columnA1.map((m) => (
+                      <MappingCard
+                        key={`a1-${m.id}`}
+                        mapping={m}
+                        paperTitle={state.paperTitles[m.paperId]}
+                        currentTarget={state.assignments[m.id] ?? 'a1'}
+                        onAssign={(target) =>
+                          dispatch({
+                            type: 'ASSIGN_MAPPING',
+                            mappingId: m.id,
+                            target,
+                          })
+                        }
+                      />
+                    ))}
+                    {columnA1.length === 0 && (
+                      <div style={emptyColumnStyle}>暂无映射</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Column A2 */}
+                <div style={columnStyle}>
+                  <div style={columnHeaderStyle}>
+                    <span style={columnTitleStyle}>
+                      {state.draft2.name || '概念 A2'}
+                    </span>
+                    <span style={columnCountStyle}>{assignmentCounts.a2 + assignmentCounts.both} 条</span>
+                  </div>
+                  <div style={columnListStyle}>
+                    {columnA2.map((m) => (
+                      <MappingCard
+                        key={`a2-${m.id}`}
+                        mapping={m}
+                        paperTitle={state.paperTitles[m.paperId]}
+                        currentTarget={state.assignments[m.id] ?? 'a1'}
+                        onAssign={(target) =>
+                          dispatch({
+                            type: 'ASSIGN_MAPPING',
+                            mappingId: m.id,
+                            target,
+                          })
+                        }
+                      />
+                    ))}
+                    {columnA2.length === 0 && (
+                      <div style={emptyColumnStyle}>暂无映射</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Unassigned count / bulk actions */}
+              <div style={bulkActionsStyle}>
+                <span style={bulkStatStyle}>
+                  A1: {assignmentCounts.a1} · A2: {assignmentCounts.a2} · 两者: {assignmentCounts.both}
+                </span>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button
+                    type="button"
+                    style={tinyButtonStyle}
+                    onClick={() => dispatch({ type: 'ASSIGN_ALL', target: 'a1' })}
+                  >
+                    全部 → A1
+                  </button>
+                  <button
+                    type="button"
+                    style={tinyButtonStyle}
+                    onClick={() => dispatch({ type: 'ASSIGN_ALL', target: 'a2' })}
+                  >
+                    全部 → A2
+                  </button>
+                </div>
+              </div>
+
+              {state.mappings.length === 0 && (
+                <div style={emptyHintStyle}>原概念暂无映射，可直接进入下一步。</div>
+              )}
+
+              <div style={buttonRowStyle}>
+                <button
+                  type="button"
+                  style={secondaryButtonStyle}
+                  onClick={() => dispatch({ type: 'SET_STEP', step: 1 })}
+                >
+                  <ChevronLeft size={14} /> 返回
+                </button>
+                <button type="button" style={primaryButtonStyle} onClick={goToStep3}>
+                  下一步 <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step 3: Confirm ── */}
+          {state.step === 3 && (
+            <div style={stepBodyStyle}>
+              <p style={descriptionStyle}>请确认以下拆分操作:</p>
+
+              <div style={summaryContainerStyle}>
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>原概念（将删除）</span>
+                  <span style={summaryValueDangerStyle}>{originalConcept.name}</span>
+                </div>
+                <div style={summaryDividerStyle} />
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>新概念 A1</span>
+                  <span style={summaryValueStyle}>{state.draft1.name}</span>
+                </div>
+                <div style={summarySubRowStyle}>
+                  <span style={summarySubLabelStyle}>定义</span>
+                  <span style={summarySubValueStyle}>
+                    {state.draft1.definition.slice(0, 80)}
+                    {state.draft1.definition.length > 80 ? '...' : ''}
+                  </span>
+                </div>
+                <div style={summarySubRowStyle}>
+                  <span style={summarySubLabelStyle}>映射数</span>
+                  <span style={summarySubValueStyle}>
+                    {assignmentCounts.a1 + assignmentCounts.both} 条
+                  </span>
+                </div>
+                <div style={summaryDividerStyle} />
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>新概念 A2</span>
+                  <span style={summaryValueStyle}>{state.draft2.name}</span>
+                </div>
+                <div style={summarySubRowStyle}>
+                  <span style={summarySubLabelStyle}>定义</span>
+                  <span style={summarySubValueStyle}>
+                    {state.draft2.definition.slice(0, 80)}
+                    {state.draft2.definition.length > 80 ? '...' : ''}
+                  </span>
+                </div>
+                <div style={summarySubRowStyle}>
+                  <span style={summarySubLabelStyle}>映射数</span>
+                  <span style={summarySubValueStyle}>
+                    {assignmentCounts.a2 + assignmentCounts.both} 条
+                  </span>
+                </div>
+                {assignmentCounts.both > 0 && (
+                  <>
+                    <div style={summaryDividerStyle} />
+                    <div style={summarySubRowStyle}>
+                      <span style={summarySubLabelStyle}>同属两者的映射</span>
+                      <span style={summarySubValueStyle}>{assignmentCounts.both} 条</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div style={warningBannerStyle}>
+                <AlertTriangle size={14} />
+                此操作不可撤销。原概念将被删除，映射将分配到新概念。
               </div>
 
               <div style={buttonRowStyle}>
                 <button
                   type="button"
                   style={secondaryButtonStyle}
-                  onClick={() => setStep('define')}
+                  onClick={() => dispatch({ type: 'SET_STEP', step: 2 })}
                 >
-                  返回
+                  <ChevronLeft size={14} /> 返回
                 </button>
                 <button
                   type="button"
-                  style={primaryButtonStyle}
-                  disabled={loading}
-                  onClick={handleReassign}
+                  style={dangerButtonStyle}
+                  disabled={state.loading}
+                  onClick={executeSplit}
                 >
-                  {loading ? '处理中...' : '确认分配'}
+                  {state.loading ? '拆分中...' : '确认拆分'}
                 </button>
               </div>
             </div>
           )}
 
+          {/* Close button */}
           <Dialog.Close asChild>
             <button type="button" style={closeButtonStyle} aria-label="Close">
               <X size={16} />
@@ -329,6 +742,47 @@ export function ConceptSplitWizard({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+// ── Sub-components ──
+
+function MappingCard({
+  mapping,
+  paperTitle,
+  currentTarget,
+  onAssign,
+}: {
+  mapping: ConceptMapping;
+  paperTitle?: string | undefined;
+  currentTarget: AssignTarget;
+  onAssign: (target: AssignTarget) => void;
+}) {
+  return (
+    <div style={mappingCardStyle}>
+      <div style={mappingCardBodyStyle}>
+        <div style={mappingCardTitleStyle}>
+          {paperTitle ?? mapping.paperId}
+        </div>
+        <div style={mappingCardMetaStyle}>
+          {mapping.relationType} · 置信度 {mapping.confidence.toFixed(2)}
+        </div>
+      </div>
+      <div style={mappingCardActionsStyle}>
+        {(['a1', 'a2', 'both'] as AssignTarget[]).map((target) => (
+          <button
+            key={target}
+            type="button"
+            style={
+              currentTarget === target ? chipActiveStyle : chipStyle
+            }
+            onClick={() => onAssign(target)}
+          >
+            {TARGET_LABELS[target]}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -350,8 +804,8 @@ const contentStyle: React.CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-md, 8px)',
   padding: 24,
-  width: 560,
-  maxHeight: '80vh',
+  width: 700,
+  maxHeight: '85vh',
   overflowY: 'auto',
   zIndex: 1001,
   boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
@@ -363,8 +817,46 @@ const titleStyle: React.CSSProperties = {
   gap: 8,
   fontSize: 16,
   fontWeight: 600,
-  marginBottom: 16,
+  marginBottom: 12,
   color: 'var(--text-primary)',
+};
+
+const stepIndicatorStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'center',
+  gap: 32,
+  marginBottom: 16,
+  paddingBottom: 12,
+  borderBottom: '1px solid var(--border-subtle)',
+};
+
+const stepDotContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 4,
+};
+
+const stepDotStyle: React.CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: '50%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 11,
+  fontWeight: 600,
+};
+
+const stepLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+};
+
+const stepBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
 };
 
 const descriptionStyle: React.CSSProperties = {
@@ -373,36 +865,58 @@ const descriptionStyle: React.CSSProperties = {
   lineHeight: 1.5,
 };
 
-const draftListStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-  maxHeight: 320,
-  overflowY: 'auto',
-};
-
-const draftItemStyle: React.CSSProperties = {
-  padding: '10px 12px',
+// Draft cards
+const draftCardStyle: React.CSSProperties = {
+  padding: '12px 14px',
   backgroundColor: 'var(--bg-surface-low)',
   borderRadius: 'var(--radius-sm, 4px)',
   border: '1px solid var(--border-subtle)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+};
+
+const draftHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+};
+
+const draftLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+};
+
+const copyButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 8px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'transparent',
+  color: 'var(--accent-color)',
+  fontSize: 'var(--text-xs, 11px)',
+  cursor: 'pointer',
 };
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  padding: '5px 8px',
+  padding: '6px 8px',
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)',
   backgroundColor: 'var(--bg-surface)',
   color: 'var(--text-primary)',
   fontSize: 'var(--text-sm, 13px)',
-  marginBottom: 6,
   boxSizing: 'border-box',
 };
 
 const textareaStyle: React.CSSProperties = {
   width: '100%',
-  padding: '5px 8px',
+  padding: '6px 8px',
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)',
   backgroundColor: 'var(--bg-surface)',
@@ -412,20 +926,268 @@ const textareaStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-const addButtonStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 4,
-  padding: '6px 12px',
+const originalRefStyle: React.CSSProperties = {
+  padding: '8px 12px',
+  backgroundColor: 'var(--bg-surface-low)',
+  borderRadius: 'var(--radius-sm, 4px)',
   border: '1px dashed var(--border-subtle)',
+};
+
+const originalRefLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  fontWeight: 600,
+  marginBottom: 4,
+};
+
+const originalRefNameStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 500,
+  color: 'var(--text-primary)',
+  marginBottom: 4,
+};
+
+const originalRefDescStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-secondary)',
+  lineHeight: 1.4,
+};
+
+// Dual-column
+const dualColumnContainerStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 12,
+};
+
+const columnStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 0,
+};
+
+const columnHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: '6px 10px',
+  backgroundColor: 'var(--bg-surface-low)',
+  borderRadius: 'var(--radius-sm, 4px) var(--radius-sm, 4px) 0 0',
+  border: '1px solid var(--border-subtle)',
+  borderBottom: 'none',
+};
+
+const columnTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 600,
+  color: 'var(--text-primary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const columnCountStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+};
+
+const columnListStyle: React.CSSProperties = {
+  maxHeight: 240,
+  overflowY: 'auto',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '0 0 var(--radius-sm, 4px) var(--radius-sm, 4px)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 0,
+};
+
+const emptyColumnStyle: React.CSSProperties = {
+  padding: 20,
+  textAlign: 'center',
+  color: 'var(--text-muted)',
+  fontSize: 'var(--text-xs, 11px)',
+};
+
+// Mapping card
+const mappingCardStyle: React.CSSProperties = {
+  padding: '8px 10px',
+  borderBottom: '1px solid var(--border-subtle)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+};
+
+const mappingCardBodyStyle: React.CSSProperties = {
+  minWidth: 0,
+};
+
+const mappingCardTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 500,
+  color: 'var(--text-primary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const mappingCardMetaStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-secondary)',
+};
+
+const mappingCardActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 4,
+};
+
+// Bulk actions
+const bulkActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+};
+
+const bulkStatStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+};
+
+const tinyButtonStyle: React.CSSProperties = {
+  padding: '2px 8px',
+  border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)',
   backgroundColor: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 'var(--text-xs, 11px)',
+  cursor: 'pointer',
+};
+
+// AI button
+const aiButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  padding: '6px 14px',
+  border: '1px dashed var(--accent-color)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'rgba(var(--accent-color-rgb, 59,130,246), 0.05)',
   color: 'var(--accent-color)',
   fontSize: 'var(--text-sm, 13px)',
   cursor: 'pointer',
 };
 
+const emptyHintStyle: React.CSSProperties = {
+  padding: 16,
+  textAlign: 'center',
+  color: 'var(--text-muted)',
+  fontSize: 'var(--text-sm, 13px)',
+};
+
+// Chips
+const chipStyle: React.CSSProperties = {
+  padding: '1px 8px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 10,
+  backgroundColor: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 'var(--text-xs, 11px)',
+  cursor: 'pointer',
+};
+
+const chipActiveStyle: React.CSSProperties = {
+  ...chipStyle,
+  borderColor: 'var(--accent-color)',
+  backgroundColor: 'var(--accent-color)',
+  color: '#fff',
+};
+
+// Summary
+const summaryContainerStyle: React.CSSProperties = {
+  padding: '12px 14px',
+  backgroundColor: 'var(--bg-surface-low)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  border: '1px solid var(--border-subtle)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+};
+
+const summaryRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+};
+
+const summaryLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  color: 'var(--text-muted)',
+};
+
+const summaryValueStyle: React.CSSProperties = {
+  fontSize: 'var(--text-sm, 13px)',
+  fontWeight: 500,
+  color: 'var(--text-primary)',
+};
+
+const summaryValueDangerStyle: React.CSSProperties = {
+  ...summaryValueStyle,
+  color: 'var(--danger, #e53e3e)',
+};
+
+const summarySubRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  paddingLeft: 12,
+};
+
+const summarySubLabelStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-muted)',
+};
+
+const summarySubValueStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs, 11px)',
+  color: 'var(--text-secondary)',
+  maxWidth: '60%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const summaryDividerStyle: React.CSSProperties = {
+  height: 1,
+  backgroundColor: 'var(--border-subtle)',
+  margin: '4px 0',
+};
+
+// Banners
+const errorBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 12px',
+  backgroundColor: 'var(--danger-bg, rgba(255,0,0,0.1))',
+  color: 'var(--danger, #e53e3e)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  fontSize: 'var(--text-sm, 13px)',
+  marginBottom: 8,
+};
+
+const warningBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 12px',
+  backgroundColor: 'rgba(234, 179, 8, 0.1)',
+  color: 'var(--warning, #d69e2e)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  fontSize: 'var(--text-sm, 13px)',
+};
+
+// Buttons
 const buttonRowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'flex-end',
@@ -434,6 +1196,9 @@ const buttonRowStyle: React.CSSProperties = {
 };
 
 const primaryButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
   padding: '6px 16px',
   border: 'none',
   borderRadius: 'var(--radius-sm, 4px)',
@@ -444,6 +1209,9 @@ const primaryButtonStyle: React.CSSProperties = {
 };
 
 const secondaryButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
   padding: '6px 16px',
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)',
@@ -453,55 +1221,14 @@ const secondaryButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-const errorBannerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '8px 12px',
-  backgroundColor: 'var(--danger-bg, rgba(255,0,0,0.1))',
-  color: 'var(--danger, #e53e3e)',
-  borderRadius: 'var(--radius-sm, 4px)',
-  fontSize: 'var(--text-sm, 13px)',
-  marginBottom: 12,
-};
-
-const iconBtnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 2,
-  background: 'none',
+const dangerButtonStyle: React.CSSProperties = {
+  padding: '6px 16px',
   border: 'none',
-  color: 'var(--text-muted)',
+  borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'var(--danger, #e53e3e)',
+  color: '#fff',
+  fontSize: 'var(--text-sm, 13px)',
   cursor: 'pointer',
-};
-
-const assignListStyle: React.CSSProperties = {
-  maxHeight: 320,
-  overflowY: 'auto',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-};
-
-const assignItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '8px 10px',
-  backgroundColor: 'var(--bg-surface-low)',
-  borderRadius: 'var(--radius-sm, 4px)',
-  border: '1px solid var(--border-subtle)',
-};
-
-const assignSelectStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm, 4px)',
-  backgroundColor: 'var(--bg-surface)',
-  color: 'var(--text-primary)',
-  fontSize: 'var(--text-xs, 11px)',
-  flexShrink: 0,
 };
 
 const closeButtonStyle: React.CSSProperties = {

@@ -46,7 +46,7 @@ function getRelationLabel(type: RelationType): string {
     case 'extends':
       return 'extends';
     default:
-      return 'unmapped';
+      return 'irrelevant';
   }
 }
 

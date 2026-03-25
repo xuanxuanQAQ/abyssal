@@ -65,16 +65,66 @@ const abyssalAPI = {
         ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_GET_FRAMEWORK),
       updateFramework: (fw: unknown) =>
         ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_UPDATE_FRAMEWORK, fw),
-      merge: (keepId: string, mergeId: string) =>
-        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_MERGE, keepId, mergeId),
+      merge: (keepId: string, mergeId: string, conflictResolutions: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_MERGE, keepId, mergeId, conflictResolutions),
       resolveMergeConflicts: (decisions: unknown) =>
         ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_RESOLVE_MERGE, decisions),
-      split: (conceptId: string, newConcepts: unknown) =>
-        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_SPLIT, conceptId, newConcepts),
+      split: (conceptId: string, concept1: unknown, concept2: unknown, mappingAssignments: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_SPLIT, conceptId, concept1, concept2, mappingAssignments),
       reassignMappings: (assignments: unknown) =>
         ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_REASSIGN, assignments),
       search: (query: string) =>
         ipcRenderer.invoke('db:concepts:search', query),
+      create: (draft: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_CREATE, draft),
+      updateMaturity: (conceptId: string, maturity: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_UPDATE_MATURITY, conceptId, maturity),
+      updateDefinition: (conceptId: string, newDefinition: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_UPDATE_DEFINITION, conceptId, newDefinition),
+      updateParent: (conceptId: string, newParentId: string | null) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_UPDATE_PARENT, conceptId, newParentId),
+      getHistory: (conceptId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_CONCEPTS_GET_HISTORY, conceptId),
+    },
+    memos: {
+      list: (filter?: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_LIST, filter),
+      get: (memoId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_GET, memoId),
+      create: (memo: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_CREATE, memo),
+      update: (memoId: string, patch: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_UPDATE, memoId, patch),
+      delete: (memoId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_DELETE, memoId),
+      upgradeToNote: (memoId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_UPGRADE_TO_NOTE, memoId),
+      upgradeToConcept: (memoId: string, draft: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_MEMOS_UPGRADE_TO_CONCEPT, memoId, draft),
+    },
+    notes: {
+      list: (filter?: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_NOTES_LIST, filter),
+      get: (noteId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_NOTES_GET, noteId),
+      create: (note: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_NOTES_CREATE, note),
+      updateMeta: (noteId: string, patch: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_NOTES_UPDATE_META, noteId, patch),
+      delete: (noteId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_NOTES_DELETE, noteId),
+      upgradeToConcept: (noteId: string, draft: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_NOTES_UPGRADE_TO_CONCEPT, noteId, draft),
+    },
+    suggestedConcepts: {
+      list: () =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_SUGGESTED_CONCEPTS_LIST),
+      accept: (suggestedId: string, draft: unknown) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_SUGGESTED_CONCEPTS_ACCEPT, suggestedId, draft),
+      dismiss: (suggestedId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_SUGGESTED_CONCEPTS_DISMISS, suggestedId),
+      restore: (suggestedId: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.DB_SUGGESTED_CONCEPTS_RESTORE, suggestedId),
     },
     mappings: {
       getForPaper: (paperId: string) =>
@@ -229,6 +279,10 @@ const abyssalAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.FS_LIST_SNAPSHOTS),
     cleanupSnapshots: (policy: unknown) =>
       ipcRenderer.invoke(IPC_CHANNELS.FS_CLEANUP_SNAPSHOTS, policy),
+    readNoteFile: (noteId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.FS_READ_NOTE_FILE, noteId),
+    saveNoteFile: (noteId: string, content: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.FS_SAVE_NOTE_FILE, noteId, content),
   },
 
   advisory: {
@@ -236,6 +290,11 @@ const abyssalAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.ADVISORY_GET_RECOMMENDATIONS),
     execute: (id: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.ADVISORY_EXECUTE, id),
+    getNotifications: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.ADVISORY_GET_NOTIFICATIONS),
+    onNotificationsUpdated: createEventListener(
+      IPC_CHANNELS.ADVISORY_NOTIFICATIONS_UPDATED_EVENT
+    ),
   },
 
   app: {
@@ -250,6 +309,14 @@ const abyssalAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.APP_LIST_PROJECTS),
     createProject: (config: unknown) =>
       ipcRenderer.invoke(IPC_CHANNELS.APP_CREATE_PROJECT, config),
+    globalSearch: (query: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.APP_GLOBAL_SEARCH, query),
+    onWorkflowComplete: createEventListener(
+      IPC_CHANNELS.PIPELINE_WORKFLOW_COMPLETE_EVENT
+    ),
+    onSectionQuality: createEventListener(
+      IPC_CHANNELS.PIPELINE_SECTION_QUALITY_EVENT
+    ),
     window: {
       minimize: () =>
         ipcRenderer.invoke(IPC_CHANNELS.APP_WINDOW_MINIMIZE),

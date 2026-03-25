@@ -13,6 +13,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "sourceMap": true,
+    "types": ["vitest/globals"],
     "baseUrl": ".",
     "paths": {
       "@core/*": ["src/core/*"],

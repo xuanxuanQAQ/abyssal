@@ -32,3 +32,30 @@ export function useExecuteRecommendation() {
     onError: (err) => handleError(err),
   });
 }
+
+// ── v2.0 Event-Driven Advisory Notifications ──
+
+import { useEffect } from 'react';
+import type { AdvisoryNotification } from '../../../../shared-types/models';
+
+export function useAdvisoryNotifications() {
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
+    queryKey: ['advisoryNotifications'],
+    queryFn: () => getAPI().advisory.getNotifications(),
+    staleTime: Infinity, // purely event-driven, no polling
+  });
+
+  // Listen for push events from main process
+  useEffect(() => {
+    const unsub = getAPI().advisory.onNotificationsUpdated(
+      (notifications: AdvisoryNotification[]) => {
+        queryClient.setQueryData(['advisoryNotifications'], notifications);
+      },
+    );
+    return unsub;
+  }, [queryClient]);
+
+  return query;
+}

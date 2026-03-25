@@ -14,6 +14,8 @@ import {
   FileText,
   Lightbulb,
   PenTool,
+  StickyNote,
+  BookOpen,
   Zap,
   X,
   Loader2,
@@ -22,14 +24,13 @@ import { useAppStore } from '../../core/store';
 import { useHotkey } from '../../core/hooks/useHotkey';
 import { getAPI } from '../../core/ipc/bridge';
 import { Z_INDEX } from '../../styles/zIndex';
-import type { Paper, Concept } from '../../../shared-types/models';
-import type { SectionSearchResult } from '../../../shared-types/ipc';
+import type { GlobalSearchResult } from '../../../shared-types/models';
 
 // ═══ 搜索结果类型 ═══
 
 interface SearchResultItem {
   id: string;
-  type: 'paper' | 'concept' | 'section' | 'command';
+  type: 'paper' | 'concept' | 'section' | 'command' | 'memo' | 'note';
   title: string;
   subtitle?: string;
   icon: React.ReactNode;
@@ -141,7 +142,7 @@ export function GlobalSearch() {
       if (!target) continue;
 
       let key: string;
-      let displayType: 'paper' | 'concept' | 'section';
+      let displayType: 'paper' | 'concept' | 'section' | 'memo' | 'note';
       if (target.type === 'paper') {
         key = `paper:${target.id}`;
         displayType = 'paper';
@@ -151,6 +152,12 @@ export function GlobalSearch() {
       } else if (target.type === 'section') {
         key = `section:${target.sectionId}`;
         displayType = 'section';
+      } else if (target.type === 'memo') {
+        key = `memo:${target.memoId}`;
+        displayType = 'memo';
+      } else if (target.type === 'note') {
+        key = `note:${target.noteId}`;
+        displayType = 'note';
       } else {
         key = `graph:${target.focusNodeId}`;
         displayType = 'paper';
@@ -166,6 +173,8 @@ export function GlobalSearch() {
         icon:
           displayType === 'paper' ? <FileText size={14} /> :
           displayType === 'concept' ? <Lightbulb size={14} /> :
+          displayType === 'memo' ? <StickyNote size={14} /> :
+          displayType === 'note' ? <BookOpen size={14} /> :
           <PenTool size={14} />,
         action: () => {
           closeGlobalSearch();
@@ -205,67 +214,89 @@ export function GlobalSearch() {
         const api = getAPI();
         const query = globalSearchQuery;
 
-        // 并行查询三个数据源
-        const [papers, concepts, sections] = await Promise.all([
-          api.db.papers.list({ searchQuery: query, limit: 5 }).catch(() => [] as Paper[]),
-          api.db.concepts.search(query).catch(() =>
-            // fallback: 如果后端无 search 方法，回退到客户端过滤
-            api.db.concepts.list().then((list) =>
-              list
-                .filter(
-                  (c) =>
-                    c.name.toLowerCase().includes(query.toLowerCase()) ||
-                    (c.description?.toLowerCase().includes(query.toLowerCase()) ?? false)
-                )
-                .slice(0, 5)
-            ).catch(() => [] as Concept[])
-          ),
-          api.db.articles.search(query).catch(() => [] as SectionSearchResult[]),
-        ]);
+        // 统一全局搜索 API
+        const searchResults = await api.app.globalSearch(query).catch(() => [] as GlobalSearchResult[]);
 
         // stale query guard — 丢弃过时结果
         if (thisQueryId !== queryIdRef.current) return;
 
         const items: SearchResultItem[] = [];
 
-        for (const p of papers) {
+        // 按 entityType 分组: papers, concepts, articles, memos, notes
+        const grouped = {
+          paper: searchResults.filter((r) => r.entityType === 'paper'),
+          concept: searchResults.filter((r) => r.entityType === 'concept'),
+          article: searchResults.filter((r) => r.entityType === 'article'),
+          memo: searchResults.filter((r) => r.entityType === 'memo'),
+          note: searchResults.filter((r) => r.entityType === 'note'),
+        };
+
+        for (const p of grouped.paper) {
           items.push({
-            id: `paper:${p.id}`,
+            id: `paper:${p.entityId}`,
             type: 'paper',
             title: p.title,
-            subtitle: p.authors.join(', '),
+            subtitle: p.content,
             icon: <FileText size={14} />,
             action: () => {
               closeGlobalSearch();
-              navigateTo({ type: 'paper', id: p.id, view: 'reader' });
+              navigateTo({ type: 'paper', id: p.entityId, view: 'reader' });
             },
           });
         }
 
-        for (const c of concepts) {
+        for (const c of grouped.concept) {
           items.push({
-            id: `concept:${c.id}`,
+            id: `concept:${c.entityId}`,
             type: 'concept',
-            title: c.name,
-            subtitle: c.description,
+            title: c.title,
+            subtitle: c.content,
             icon: <Lightbulb size={14} />,
             action: () => {
               closeGlobalSearch();
-              navigateTo({ type: 'concept', id: c.id });
+              navigateTo({ type: 'concept', id: c.entityId });
             },
           });
         }
 
-        for (const s of sections) {
+        for (const s of grouped.article) {
           items.push({
-            id: `section:${s.sectionId}`,
+            id: `section:${s.entityId}`,
             type: 'section',
             title: s.title,
-            subtitle: s.snippet,
+            subtitle: s.content,
             icon: <PenTool size={14} />,
             action: () => {
               closeGlobalSearch();
-              navigateTo({ type: 'section', articleId: s.articleId, sectionId: s.sectionId });
+              navigateTo({ type: 'section', articleId: s.entityId, sectionId: s.entityId });
+            },
+          });
+        }
+
+        for (const m of grouped.memo) {
+          items.push({
+            id: `memo:${m.entityId}`,
+            type: 'memo',
+            title: m.title,
+            subtitle: m.content,
+            icon: <span role="img" aria-label="memo">💡</span>,
+            action: () => {
+              closeGlobalSearch();
+              navigateTo({ type: 'memo', memoId: m.entityId });
+            },
+          });
+        }
+
+        for (const n of grouped.note) {
+          items.push({
+            id: `note:${n.entityId}`,
+            type: 'note',
+            title: n.title,
+            subtitle: n.content,
+            icon: <span role="img" aria-label="note">📓</span>,
+            action: () => {
+              closeGlobalSearch();
+              navigateTo({ type: 'note', noteId: n.entityId });
             },
           });
         }
@@ -382,7 +413,7 @@ export function GlobalSearch() {
             aria-controls="global-search-results"
             value={globalSearchQuery}
             onChange={(e) => setGlobalSearchQuery(e.target.value)}
-            placeholder={isCommandMode ? '输入命令…' : '搜索论文、概念、文章…'}
+            placeholder={isCommandMode ? '输入命令…' : '搜索论文、概念、文章、笔记…'}
             style={{
               flex: 1,
               background: 'none',

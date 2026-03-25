@@ -2,6 +2,7 @@ import React from 'react';
 import { HeatmapTab } from './tabs/heatmap/HeatmapTab';
 import { PaperReviewTab } from './tabs/review/PaperReviewTab';
 import { CoverageTab } from './tabs/coverage/CoverageTab';
+import { ConceptsTab } from './tabs/concepts/ConceptsTab';
 import { useActiveTab, type AnalysisTabType } from './hooks/useActiveTab';
 import { useAnalysisNavigation } from './hooks/useAnalysisNavigation';
 
@@ -9,9 +10,10 @@ const TAB_LABELS: Record<AnalysisTabType, string> = {
   heatmap: 'Heatmap',
   review: 'Paper Review',
   coverage: 'Coverage',
+  concepts: 'Concepts',
 };
 
-const TAB_KEYS: readonly AnalysisTabType[] = ['heatmap', 'review', 'coverage'] as const;
+const TAB_KEYS: readonly AnalysisTabType[] = ['heatmap', 'review', 'coverage', 'concepts'] as const;
 
 export function AnalysisView() {
   const { activeTab, switchTab } = useActiveTab();
@@ -69,6 +71,7 @@ export function AnalysisView() {
         {/* Paper Review and Coverage unmount/remount on switch */}
         {activeTab === 'review' && <PaperReviewTab />}
         {activeTab === 'coverage' && <CoverageTab />}
+        {activeTab === 'concepts' && <ConceptsTab />}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Lightbulb,
@@ -10,9 +10,11 @@ import {
   Split,
   AlertTriangle,
   FileText,
+  Bell,
 } from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
-import type { Recommendation } from '../../../../shared-types/models';
+import { useAdvisoryNotifications } from '../../../core/ipc/hooks/useAdvisory';
+import type { Recommendation, AdvisoryNotification } from '../../../../shared-types/models';
 import type { RecommendationType } from '../../../../shared-types/enums';
 
 function getTypeIcon(type: RecommendationType) {
@@ -54,8 +56,12 @@ export function AdvisoryNotifications() {
     setDismissed((prev) => new Set(prev).add(id));
   }, []);
 
-  const visible = recommendations?.filter((r) => !dismissed.has(r.id)) ?? [];
-  if (visible.length === 0) return null;
+  const { data: notifications } = useAdvisoryNotifications();
+
+  const visibleRecs = recommendations?.filter((r) => !dismissed.has(r.id)) ?? [];
+  const visibleNotifs = notifications?.filter((n) => !dismissed.has(n.id)) ?? [];
+
+  if (visibleRecs.length === 0 && visibleNotifs.length === 0) return null;
 
   return (
     <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -72,7 +78,7 @@ export function AdvisoryNotifications() {
         AI 建议
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {visible.slice(0, 3).map((rec) => (
+        {visibleRecs.slice(0, 3).map((rec) => (
           <AdvisoryCard
             key={rec.id}
             recommendation={rec}
@@ -80,6 +86,9 @@ export function AdvisoryNotifications() {
             onExecute={(id) => executeMutation.mutate(id)}
             executing={executeMutation.isPending}
           />
+        ))}
+        {visibleNotifs.slice(0, 3).map((notif) => (
+          <NotificationCard key={notif.id} notification={notif} onDismiss={dismiss} />
         ))}
       </div>
     </div>
@@ -188,6 +197,54 @@ function AdvisoryCard({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** v2.0 Notification card for event-driven advisory notifications */
+function NotificationCard({
+  notification,
+  onDismiss,
+}: {
+  notification: AdvisoryNotification;
+  onDismiss: (id: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        padding: '8px 10px',
+        backgroundColor: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+        <span style={{ color: 'var(--accent-color)', flexShrink: 0, marginTop: 1 }}>
+          <Bell size={13} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
+            {notification.title}
+          </div>
+          <div style={{ color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+            {notification.description}
+          </div>
+        </div>
+        <button
+          onClick={() => onDismiss(notification.id)}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+            padding: 2,
+            flexShrink: 0,
+          }}
+        >
+          <X size={12} />
+        </button>
+      </div>
     </div>
   );
 }

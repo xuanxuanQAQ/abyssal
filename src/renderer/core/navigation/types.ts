@@ -33,9 +33,23 @@ export interface GraphFocusTarget {
   focusNodeId: string;
 }
 
+/** v2.0 跳转到结构化笔记 */
+export interface NoteTarget {
+  type: 'note';
+  noteId: string;
+}
+
+/** v2.0 跳转到碎片笔记 */
+export interface MemoTarget {
+  type: 'memo';
+  memoId: string;
+}
+
 /** 导航目标联合类型 */
 export type NavigationTarget =
   | PaperTarget
   | ConceptTarget
   | SectionTarget
-  | GraphFocusTarget;
+  | GraphFocusTarget
+  | NoteTarget
+  | MemoTarget;

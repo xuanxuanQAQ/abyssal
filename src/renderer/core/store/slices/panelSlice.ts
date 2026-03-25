@@ -18,6 +18,7 @@ import type { SearchSlice } from './searchSlice';
 import type { PipelineSlice } from './pipelineSlice';
 import type { LibrarySlice } from './librarySlice';
 import type { GraphSlice } from './graphSlice';
+import type { NotesSlice } from './notesSlice';
 import type { ContextSource, ProactiveTip } from '../../../../shared-types/models';
 
 export interface PanelSlice {
@@ -75,7 +76,7 @@ export interface PanelSlice {
 }
 
 export const createPanelSlice: StateCreator<
-  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice,
+  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice & NotesSlice,
   [['zustand/immer', never]],
   [],
   PanelSlice

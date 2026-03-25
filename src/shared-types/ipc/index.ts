@@ -7,6 +7,7 @@ import type {
   AdjudicationDecision,
   PipelineStatus,
   ExportFormat,
+  Maturity,
 } from '../enums';
 
 // Re-export ViewType for convenience
@@ -51,6 +52,24 @@ import type {
   Recommendation,
   CleanupPolicy,
   ProjectSetupConfig,
+  // v2.0
+  Memo,
+  NewMemo,
+  MemoFilter,
+  NoteMeta,
+  NewNote,
+  NoteFilter,
+  SaveNoteResult,
+  SuggestedConcept,
+  ConceptDraft,
+  DefinitionUpdateResult,
+  ConceptParentUpdateResult,
+  MergeResult,
+  SplitResult,
+  MergeConflictResolution,
+  HistoryEntry,
+  AdvisoryNotification,
+  GlobalSearchResult,
 } from '../models';
 
 // ═══ IPC 通道名常量 ═══
@@ -178,6 +197,53 @@ export const IPC_CHANNELS = {
 
   // 项目初始化
   APP_CREATE_PROJECT: 'app:createProject',
+
+  // ═══ v2.0 新增 ═══
+
+  // db:memos 域
+  DB_MEMOS_LIST: 'db:memos:list',
+  DB_MEMOS_GET: 'db:memos:get',
+  DB_MEMOS_CREATE: 'db:memos:create',
+  DB_MEMOS_UPDATE: 'db:memos:update',
+  DB_MEMOS_DELETE: 'db:memos:delete',
+  DB_MEMOS_UPGRADE_TO_NOTE: 'db:memos:upgradeToNote',
+  DB_MEMOS_UPGRADE_TO_CONCEPT: 'db:memos:upgradeToConcept',
+
+  // db:notes 域
+  DB_NOTES_LIST: 'db:notes:list',
+  DB_NOTES_GET: 'db:notes:get',
+  DB_NOTES_CREATE: 'db:notes:create',
+  DB_NOTES_UPDATE_META: 'db:notes:updateMeta',
+  DB_NOTES_DELETE: 'db:notes:delete',
+  DB_NOTES_UPGRADE_TO_CONCEPT: 'db:notes:upgradeToConcept',
+
+  // fs:notes 域
+  FS_READ_NOTE_FILE: 'fs:readNoteFile',
+  FS_SAVE_NOTE_FILE: 'fs:saveNoteFile',
+
+  // db:suggestedConcepts 域
+  DB_SUGGESTED_CONCEPTS_LIST: 'db:suggestedConcepts:list',
+  DB_SUGGESTED_CONCEPTS_ACCEPT: 'db:suggestedConcepts:accept',
+  DB_SUGGESTED_CONCEPTS_DISMISS: 'db:suggestedConcepts:dismiss',
+  DB_SUGGESTED_CONCEPTS_RESTORE: 'db:suggestedConcepts:restore',
+
+  // db:concepts v2.0 扩展
+  DB_CONCEPTS_CREATE: 'db:concepts:create',
+  DB_CONCEPTS_UPDATE_MATURITY: 'db:concepts:updateMaturity',
+  DB_CONCEPTS_UPDATE_DEFINITION: 'db:concepts:updateDefinition',
+  DB_CONCEPTS_UPDATE_PARENT: 'db:concepts:updateParent',
+  DB_CONCEPTS_GET_HISTORY: 'db:concepts:getHistory',
+
+  // Advisory v2.0 事件
+  ADVISORY_GET_NOTIFICATIONS: 'advisory:getNotifications',
+  ADVISORY_NOTIFICATIONS_UPDATED_EVENT: 'advisory:notifications-updated$event',
+
+  // Pipeline v2.0 事件
+  PIPELINE_WORKFLOW_COMPLETE_EVENT: 'pipeline:workflow-complete$event',
+  PIPELINE_SECTION_QUALITY_EVENT: 'pipeline:section-quality$event',
+
+  // 全局搜索（FTS5）
+  APP_GLOBAL_SEARCH: 'app:globalSearch',
 } as const;
 
 // ═══ Filter / Query 参数 ═══
@@ -200,6 +266,8 @@ export interface GraphFilter {
   hopDepth?: 1 | 2 | 'global';
   layers?: LayerVisibility;
   similarityThreshold?: number;
+  /** v2.0 是否包含笔记节点 */
+  includeNotes?: boolean;
 }
 
 export interface RAGFilter {
@@ -319,12 +387,49 @@ export interface AbyssalAPI {
       getFramework(): Promise<ConceptFramework>;
       updateFramework(fw: ConceptFramework): Promise<AffectedMappings>;
       search(query: string): Promise<Concept[]>;
-      /** v1.2 概念合并 */
-      merge(keepId: string, mergeId: string): Promise<ConflictingMappings>;
+      /** v2.0 创建概念 */
+      create(draft: ConceptDraft): Promise<Concept>;
+      /** v2.0 更新成熟度 */
+      updateMaturity(conceptId: string, maturity: Maturity): Promise<{ historyEntry: HistoryEntry }>;
+      /** v2.0 更新定义（含语义判定） */
+      updateDefinition(conceptId: string, newDefinition: string): Promise<DefinitionUpdateResult>;
+      /** v2.0 更新父节点（含环路检测） */
+      updateParent(conceptId: string, newParentId: string | null): Promise<ConceptParentUpdateResult>;
+      /** v2.0 获取演化历史 */
+      getHistory(conceptId: string): Promise<HistoryEntry[]>;
+      /** v2.0 合并（新 4 步） */
+      merge(retainId: string, mergeId: string, conflictResolutions: MergeConflictResolution[]): Promise<MergeResult>;
+      /** v2.0 拆分（新 3 步） */
+      split(originalId: string, concept1: ConceptDraft, concept2: ConceptDraft, mappingAssignments: MappingAssignment[]): Promise<SplitResult>;
+      /** @deprecated v1.2 — 保留向后兼容 */
       resolveMergeConflicts(decisions: MergeDecision[]): Promise<void>;
-      /** v1.2 概念拆分 */
-      split(conceptId: string, newConcepts: NewConceptDef[]): Promise<MappingsToReassign>;
       reassignMappings(assignments: MappingAssignment[]): Promise<void>;
+    };
+    /** v2.0 碎片笔记 */
+    memos: {
+      list(filter?: MemoFilter): Promise<Memo[]>;
+      get(memoId: string): Promise<Memo>;
+      create(memo: NewMemo): Promise<Memo>;
+      update(memoId: string, patch: Partial<Memo>): Promise<Memo>;
+      delete(memoId: string): Promise<void>;
+      upgradeToNote(memoId: string): Promise<{ noteId: string; filePath: string }>;
+      upgradeToConcept(memoId: string, draft: ConceptDraft): Promise<Concept>;
+    };
+    /** v2.0 结构化笔记 */
+    notes: {
+      list(filter?: NoteFilter): Promise<NoteMeta[]>;
+      get(noteId: string): Promise<NoteMeta>;
+      create(note: NewNote): Promise<{ noteId: string; filePath: string }>;
+      updateMeta(noteId: string, patch: Partial<NoteMeta>): Promise<NoteMeta>;
+      delete(noteId: string): Promise<void>;
+      upgradeToConcept(noteId: string, draft: ConceptDraft): Promise<Concept>;
+    };
+    /** v2.0 概念建议队列 */
+    suggestedConcepts: {
+      list(): Promise<SuggestedConcept[]>;
+      accept(suggestedId: string, draft: ConceptDraft): Promise<Concept>;
+      dismiss(suggestedId: string): Promise<void>;
+      restore(suggestedId: string): Promise<void>;
     };
     mappings: {
       getForPaper(paperId: string): Promise<ConceptMapping[]>;
@@ -415,12 +520,19 @@ export interface AbyssalAPI {
     listSnapshots(): Promise<SnapshotInfo[]>;
     /** v1.2 快照清理 */
     cleanupSnapshots(policy: CleanupPolicy): Promise<void>;
+    /** v2.0 读取笔记文件内容 */
+    readNoteFile(noteId: string): Promise<string>;
+    /** v2.0 保存笔记文件内容 */
+    saveNoteFile(noteId: string, content: string): Promise<SaveNoteResult>;
   };
 
   /** v1.2 Advisory Agent */
   advisory: {
     getRecommendations(): Promise<Recommendation[]>;
     execute(id: string): Promise<string>;
+    /** v2.0 事件驱动通知 */
+    getNotifications(): Promise<AdvisoryNotification[]>;
+    onNotificationsUpdated(cb: (notifications: AdvisoryNotification[]) => void): UnsubscribeFn;
   };
 
   app: {
@@ -431,6 +543,11 @@ export interface AbyssalAPI {
     listProjects(): Promise<ProjectInfo[]>;
     /** v1.2 创建项目 */
     createProject(config: ProjectSetupConfig): Promise<ProjectInfo>;
+    /** v2.0 全局搜索（FTS5） */
+    globalSearch(query: string): Promise<GlobalSearchResult[]>;
+    /** v2.0 Pipeline 事件 */
+    onWorkflowComplete(cb: (event: { workflow: WorkflowType; taskId: string }) => void): UnsubscribeFn;
+    onSectionQuality(cb: (event: { sectionId: string; coverage: string; gaps: string[] }) => void): UnsubscribeFn;
     window: {
       minimize(): Promise<void>;
       toggleMaximize(): Promise<boolean>;

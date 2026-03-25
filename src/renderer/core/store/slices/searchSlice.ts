@@ -11,6 +11,7 @@ import type { PanelSlice } from './panelSlice';
 import type { PipelineSlice } from './pipelineSlice';
 import type { LibrarySlice } from './librarySlice';
 import type { GraphSlice } from './graphSlice';
+import type { NotesSlice } from './notesSlice';
 
 export interface SearchSlice {
   globalSearchOpen: boolean;
@@ -26,7 +27,7 @@ export interface SearchSlice {
 }
 
 export const createSearchSlice: StateCreator<
-  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice,
+  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice & NotesSlice,
   [['zustand/immer', never]],
   [],
   SearchSlice

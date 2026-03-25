@@ -10,11 +10,30 @@
  *  vitest:  const paper = makePaper({ id: 'x', title: 'y' });
  */
 import type { PaperMetadata, TextChunk, Annotation, ConceptDefinition, ConceptMapping } from '@core/types';
+import {
+  asPaperId,
+  asChunkId,
+  asConceptId,
+  asAnnotationId,
+  type PaperId,
+  type ConceptId,
+} from '@core/types';
 
 let _seq = 0;
 /** 自增 ID，避免测试间冲突 */
 function nextId(prefix = 'test'): string {
   return `${prefix}_${++_seq}`;
+}
+
+/** 生成 12 字符十六进制的假 PaperId */
+function nextPaperId(): PaperId {
+  const hex = (++_seq).toString(16).padStart(12, '0');
+  return asPaperId(hex);
+}
+
+/** 生成合法 ConceptId */
+function nextConceptId(): ConceptId {
+  return asConceptId(`test_concept_${++_seq}`);
 }
 
 /** 重置计数器（在需要确定性 ID 的测试中调用） */
@@ -26,12 +45,33 @@ export function resetFixtureSeq(): void {
 
 export function makePaper(overrides: Partial<PaperMetadata> = {}): PaperMetadata {
   return {
-    id: nextId('paper'),
+    id: nextPaperId(),
     title: 'A Test Paper on Unit Testing',
-    authors: ['Alice', 'Bob'],
+    authors: ['Alice, A.', 'Bob, B.'],
     year: 2024,
+    doi: null,
+    arxivId: null,
+    venue: null,
+    journal: null,
+    volume: null,
+    issue: null,
+    pages: null,
+    publisher: null,
+    isbn: null,
+    edition: null,
+    editors: null,
+    bookTitle: null,
+    series: null,
+    issn: null,
+    pmid: null,
+    pmcid: null,
+    url: null,
+    abstract: null,
+    citationCount: null,
     paperType: 'journal',
     source: 'semantic_scholar',
+    bibtexKey: null,
+    biblioComplete: false,
     ...overrides,
   };
 }
@@ -39,15 +79,23 @@ export function makePaper(overrides: Partial<PaperMetadata> = {}): PaperMetadata
 // ── TextChunk ──
 
 export function makeChunk(overrides: Partial<TextChunk> = {}): TextChunk {
-  const id = nextId('chunk');
+  const id = asChunkId(nextId('chunk'));
   return {
     chunkId: id,
-    paperId: nextId('paper'),
-    section: 'Introduction',
+    paperId: nextPaperId(),
+    sectionLabel: 'introduction',
+    sectionTitle: 'Introduction',
+    sectionType: 'introduction',
     pageStart: 1,
     pageEnd: 2,
     text: `Sample chunk text for ${id}`,
     tokenCount: 128,
+    source: 'paper',
+    positionRatio: null,
+    parentChunkId: null,
+    chunkIndex: null,
+    contextBefore: null,
+    contextAfter: null,
     ...overrides,
   };
 }
@@ -56,11 +104,16 @@ export function makeChunk(overrides: Partial<TextChunk> = {}): TextChunk {
 
 export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
   return {
-    paperId: nextId('paper'),
+    id: asAnnotationId(++_seq),
+    paperId: nextPaperId(),
     page: 1,
-    rect: [0, 0, 100, 20],
-    text: 'highlighted text',
+    rect: { x0: 0, y0: 0, x1: 100, y1: 20 },
+    selectedText: 'highlighted text',
     type: 'highlight',
+    color: '#FFEB3B',
+    comment: null,
+    conceptId: null,
+    createdAt: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -68,14 +121,21 @@ export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation 
 // ── Concept ──
 
 export function makeConcept(overrides: Partial<ConceptDefinition> = {}): ConceptDefinition {
-  const id = nextId('concept');
+  const id = nextConceptId();
   return {
     id,
     nameZh: '测试概念',
     nameEn: 'Test Concept',
     layer: 'core',
     definition: 'A concept used in testing',
-    keywords: ['test', 'unit'],
+    searchKeywords: ['test', 'unit'],
+    maturity: 'tentative',
+    parentId: null,
+    history: [],
+    deprecated: false,
+    deprecatedAt: null,
+    deprecatedReason: null,
+    createdAt: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -84,10 +144,21 @@ export function makeConcept(overrides: Partial<ConceptDefinition> = {}): Concept
 
 export function makeMapping(overrides: Partial<ConceptMapping> = {}): ConceptMapping {
   return {
-    conceptId: nextId('concept'),
+    paperId: nextPaperId(),
+    conceptId: nextConceptId(),
     relation: 'supports',
     confidence: 0.85,
-    evidence: 'The paper provides empirical evidence.',
+    evidence: {
+      en: 'The paper provides empirical evidence.',
+      original: '论文提供了实证证据。',
+      originalLang: 'zh-CN',
+      chunkId: null,
+      page: null,
+      annotationId: null,
+    },
+    annotationId: null,
+    reviewed: false,
+    reviewedAt: null,
     ...overrides,
   };
 }

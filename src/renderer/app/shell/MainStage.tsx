@@ -43,6 +43,9 @@ const WritingView = createPreloadableLazy(() =>
 const AnalysisView = createPreloadableLazy(() =>
   import('../../views/analysis/AnalysisView').then((m) => ({ default: m.AnalysisView as React.ComponentType })),
 );
+const NotesView = createPreloadableLazy(() =>
+  import('../../views/notes/NotesView').then((m) => ({ default: m.NotesView as React.ComponentType })),
+);
 
 function SettingsViewPlaceholder() {
   return (
@@ -66,6 +69,7 @@ const VIEW_CONFIG: Record<ViewType, ViewConfig> = {
   analysis: { component: AnalysisView, keepAlive: true, preload: AnalysisView.preload },
   graph:    { component: GraphView, keepAlive: false, preload: GraphView.preload }, // WebGL 上下文不兼容 display:none
   writing:  { component: WritingView, keepAlive: true, preload: WritingView.preload },
+  notes:    { component: NotesView, keepAlive: true, preload: NotesView.preload },
   settings: { component: SettingsViewPlaceholder, keepAlive: false },
 };
 

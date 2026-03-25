@@ -1,0 +1,44 @@
+/**
+ * ConceptsTab — 概念框架管理器（§2）
+ *
+ * 左侧: ConceptTree (280px) + SuggestedConceptQueue
+ * 右侧: ConceptDetail 面板
+ */
+
+import React from 'react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { useAppStore } from '../../../../core/store';
+import { ConceptTree } from './ConceptTree';
+import { ConceptDetail } from './ConceptDetail';
+import { SuggestedConceptQueue } from './SuggestedConceptQueue';
+
+export function ConceptsTab() {
+  const selectedConceptId = useAppStore((s) => s.selectedConceptId);
+
+  return (
+    <PanelGroup direction="horizontal" style={{ height: '100%' }}>
+      {/* Left: Tree + Suggestions */}
+      <Panel id="concept-tree" defaultSize={35} minSize={20} order={1}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflow: 'auto' }}>
+            <ConceptTree />
+          </div>
+          <SuggestedConceptQueue />
+        </div>
+      </Panel>
+
+      <PanelResizeHandle className="panel-resize-handle" />
+
+      {/* Right: Detail */}
+      <Panel id="concept-detail" defaultSize={65} minSize={30} order={2}>
+        {selectedConceptId ? (
+          <ConceptDetail conceptId={selectedConceptId} />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
+            选择左侧概念查看详情
+          </div>
+        )}
+      </Panel>
+    </PanelGroup>
+  );
+}

@@ -30,14 +30,16 @@ const BASE_COLORS: Record<RelationType, string> = {
   supports: 'rgba(34,197,94',
   challenges: 'rgba(239,68,68',
   extends: 'rgba(99,102,241',
-  unmapped: 'rgba(156,163,175',
+  operationalizes: 'rgba(168,85,247',
+  irrelevant: 'rgba(156,163,175',
 };
 
 const RELATION_ABBREV: Record<RelationType, string> = {
   supports: 'S',
   challenges: 'C',
   extends: 'E',
-  unmapped: 'U',
+  operationalizes: 'O',
+  irrelevant: 'U',
 };
 
 const ADJUDICATION_INDICATOR: Record<AdjudicationStatus, string> = {
@@ -51,12 +53,12 @@ const MIN_OPACITY = 0.15;
 
 function getCellBgColor(relationType: RelationType, confidence: number): string {
   const alpha = MIN_OPACITY + confidence * (1.0 - MIN_OPACITY);
-  const base = BASE_COLORS[relationType] ?? BASE_COLORS.unmapped;
+  const base = BASE_COLORS[relationType] ?? BASE_COLORS.irrelevant;
   return `${base},${alpha.toFixed(3)})`;
 }
 
 function getSquareColor(relationType: RelationType): string {
-  return `${BASE_COLORS[relationType] ?? BASE_COLORS.unmapped},1)`;
+  return `${BASE_COLORS[relationType] ?? BASE_COLORS.irrelevant},1)`;
 }
 
 // ═══ Styles ═══

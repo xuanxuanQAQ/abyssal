@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 
-export type AnalysisTabType = 'heatmap' | 'review' | 'coverage';
+export type AnalysisTabType = 'heatmap' | 'review' | 'coverage' | 'concepts';
 
 export function useActiveTab(initialTab: AnalysisTabType = 'heatmap') {
   const [activeTab, setActiveTab] = useState<AnalysisTabType>(initialTab);

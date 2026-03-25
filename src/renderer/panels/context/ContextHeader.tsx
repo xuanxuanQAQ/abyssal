@@ -48,6 +48,16 @@ function resolveEntityName(source: ContextSource): { icon: React.ReactNode; name
         icon: source.nodeType === 'paper' ? <FileText size={14} /> : <Lightbulb size={14} />,
         name: source.nodeId.slice(0, 12) + '…',
       };
+    case 'memo':
+      return {
+        icon: <PenTool size={14} />,
+        name: `备忘 ${source.memoId.slice(0, 12)}…`,
+      };
+    case 'note':
+      return {
+        icon: <FileText size={14} />,
+        name: `笔记 ${source.noteId.slice(0, 12)}…`,
+      };
     case 'empty':
       return {
         icon: null,

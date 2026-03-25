@@ -16,6 +16,8 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
   const toggleLayer = useAppStore((s) => s.toggleLayer);
   const showConceptNodes = useAppStore((s) => s.showConceptNodes);
   const setShowConceptNodes = useAppStore((s) => s.setShowConceptNodes);
+  const showNoteNodes = useAppStore((s) => s.showNoteNodes);
+  const setShowNoteNodes = useAppStore((s) => s.setShowNoteNodes);
 
   return (
     <div
@@ -108,6 +110,26 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
               style={{ width: 16, height: 16, margin: 0 }}
             />
             Show Concept Nodes
+          </label>
+
+          {/* Show Note Nodes */}
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 'var(--text-sm)',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showNoteNodes}
+              onChange={(e) => setShowNoteNodes(e.target.checked)}
+              style={{ width: 16, height: 16, margin: 0 }}
+            />
+            Show Note Nodes
           </label>
 
           {/* Divider */}

@@ -1,12 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true,
-    "declarationMap": true
+    "noEmit": true
   },
   "include": [
     "src/core/**/*.ts",
@@ -16,6 +11,7 @@
     "src/shared-types/**/*.ts"
   ],
   "exclude": [
-    "src/electron/preload.ts"
+    "src/**/*.test.ts",
+    "src/__test-utils__/**"
   ]
 }

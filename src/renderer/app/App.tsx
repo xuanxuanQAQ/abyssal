@@ -19,7 +19,7 @@
  * </AbyssalQueryProvider>
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
 import { AbyssalQueryProvider } from './QueryProvider';
@@ -29,6 +29,8 @@ import { ThemeProvider } from '../core/context/ThemeContext';
 import { LayoutProvider } from '../core/context/LayoutContext';
 import { KeybindingProvider } from '../core/context/KeybindingContext';
 import { MainLayout } from './shell/MainLayout';
+import { MemoQuickInput } from '../views/notes/memo/MemoQuickInput';
+import { useAppStore } from '../core/store';
 import { ProjectSetupWizard } from './wizard/ProjectSetupWizard';
 import { useProjectSetup } from './wizard/useProjectSetup';
 
@@ -73,6 +75,19 @@ function AppShell() {
     void queryClient.invalidateQueries({ queryKey: ['projects'] });
   }, [queryClient]);
 
+  // Ctrl+Shift+N / Cmd+Shift+N 快捷键打开 MemoQuickInput
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
+        e.preventDefault();
+        const store = useAppStore.getState();
+        store.setMemoQuickInputOpen(!store.memoQuickInputOpen);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   return (
     <>
       <PipelineListener />
@@ -82,6 +97,7 @@ function AppShell() {
         toastOptions={{ style: TOAST_STYLE }}
       />
       <MainLayout />
+      <MemoQuickInput />
       <ProjectSetupWizard
         open={showWizard}
         onOpenChange={setShowWizard}

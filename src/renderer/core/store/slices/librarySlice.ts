@@ -12,6 +12,7 @@ import type { GraphSlice } from './graphSlice';
 import type { PanelSlice } from './panelSlice';
 import type { SearchSlice } from './searchSlice';
 import type { PipelineSlice } from './pipelineSlice';
+import type { NotesSlice } from './notesSlice';
 
 export type LibraryGroupType = 'smart' | 'tag' | 'search';
 
@@ -38,7 +39,8 @@ type FullStore = NavigationSlice &
   SearchSlice &
   PipelineSlice &
   LibrarySlice &
-  GraphSlice;
+  GraphSlice &
+  NotesSlice;
 
 export const createLibrarySlice: StateCreator<
   FullStore,

@@ -15,6 +15,7 @@ import type { SearchSlice } from './searchSlice';
 import type { PipelineSlice } from './pipelineSlice';
 import type { LibrarySlice } from './librarySlice';
 import type { GraphSlice } from './graphSlice';
+import type { NotesSlice } from './notesSlice';
 
 export interface NavigationSlice {
   activeView: ViewType;
@@ -28,7 +29,7 @@ export interface NavigationSlice {
 }
 
 export const createNavigationSlice: StateCreator<
-  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice,
+  NavigationSlice & SelectionSlice & PanelSlice & SearchSlice & PipelineSlice & LibrarySlice & GraphSlice & NotesSlice,
   [['zustand/immer', never]],
   [],
   NavigationSlice

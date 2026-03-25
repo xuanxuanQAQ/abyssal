@@ -18,12 +18,15 @@ export type FulltextStatus =
   | 'failed'
   | 'not_attempted';
 
-/** 论文类型 */
+/** 论文类型（与后端 core/types/paper.ts 统一） */
 export type PaperType =
-  | 'empirical'
-  | 'theoretical'
+  | 'journal'
+  | 'conference'
+  | 'book'
+  | 'chapter'
+  | 'preprint'
   | 'review'
-  | 'methodological';
+  | 'unknown';
 
 /** MainStage 视图类型 */
 export type ViewType =
@@ -32,6 +35,7 @@ export type ViewType =
   | 'analysis'
   | 'graph'
   | 'writing'
+  | 'notes'
   | 'settings';
 
 /** 管线工作流类型 */
@@ -42,12 +46,13 @@ export type WorkflowType =
   | 'synthesize'
   | 'generate';
 
-/** 映射关系类型 */
+/** 映射关系类型（与后端 core/types/mapping.ts 统一） */
 export type RelationType =
   | 'supports'
   | 'challenges'
   | 'extends'
-  | 'unmapped';
+  | 'operationalizes'
+  | 'irrelevant';
 
 /** 裁决决策 */
 export type AdjudicationDecision = 'accept' | 'reject' | 'revise';
@@ -103,3 +108,32 @@ export type RecommendationType =
   | 'review_mapping'
   | 'fill_evidence_gap'
   | 'general';
+
+// ═══ v2.0 新增枚举 ═══
+
+/** 概念成熟度 */
+export type Maturity = 'tentative' | 'working' | 'established';
+
+/** 概念定义变更类型 */
+export type ConceptChangeType = 'additive' | 'breaking';
+
+/** 概念历史变更事件类型 */
+export type ConceptHistoryEventType =
+  | 'created'
+  | 'definition_refined'
+  | 'keywords_added'
+  | 'keywords_removed'
+  | 'maturity_upgraded'
+  | 'maturity_downgraded'
+  | 'merged_from'
+  | 'split_into'
+  | 'parent_changed'
+  | 'deprecated';
+
+/** Advisory 通知卡片类型 */
+export type AdvisoryNotificationType =
+  | 'concept_suggestion'
+  | 'coverage_gap'
+  | 'maturity_upgrade'
+  | 'high_rejection'
+  | 'stale_synthesis';

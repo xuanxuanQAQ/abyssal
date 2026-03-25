@@ -12,7 +12,7 @@ interface CellTooltipProps {
 }
 
 const RELATION_LABELS: Record<RelationType, { text: string; color: string }> = Object.fromEntries(
-  (['supports', 'challenges', 'extends', 'unmapped'] as RelationType[]).map((rt) => [
+  (['supports', 'challenges', 'extends', 'operationalizes', 'irrelevant'] as RelationType[]).map((rt) => [
     rt,
     { text: RELATION_LABELS_ZH[rt], color: RELATION_COLORS[rt] },
   ])

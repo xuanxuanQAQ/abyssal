@@ -28,8 +28,8 @@ describe('PaperMetadata fixture', () => {
 
 describe('TextChunk fixture', () => {
   it('should carry section and token info', () => {
-    const chunk = makeChunk({ section: 'Methods', tokenCount: 256 });
-    expect(chunk.section).toBe('Methods');
+    const chunk = makeChunk({ sectionLabel: 'method', tokenCount: 256 });
+    expect(chunk.sectionLabel).toBe('method');
     expect(chunk.tokenCount).toBe(256);
     expect(chunk.text).toContain(chunk.chunkId);
   });
@@ -39,7 +39,8 @@ describe('Annotation fixture', () => {
   it('should default to highlight type', () => {
     const ann = makeAnnotation();
     expect(ann.type).toBe('highlight');
-    expect(ann.rect).toHaveLength(4);
+    expect(ann.rect).toHaveProperty('x0');
+    expect(ann.rect).toHaveProperty('y1');
   });
 });
 

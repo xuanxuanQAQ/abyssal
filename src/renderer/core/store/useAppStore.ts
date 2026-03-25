@@ -32,6 +32,10 @@ import {
   createGraphSlice,
   type GraphSlice,
 } from './slices/graphSlice';
+import {
+  createNotesSlice,
+  type NotesSlice,
+} from './slices/notesSlice';
 
 export type AppStoreState = NavigationSlice &
   SelectionSlice &
@@ -39,7 +43,8 @@ export type AppStoreState = NavigationSlice &
   SearchSlice &
   PipelineSlice &
   LibrarySlice &
-  GraphSlice;
+  GraphSlice &
+  NotesSlice;
 
 export const useAppStore = create<AppStoreState>()(
   devtools(
@@ -52,6 +57,7 @@ export const useAppStore = create<AppStoreState>()(
         ...createPipelineSlice(...args),
         ...createLibrarySlice(...args),
         ...createGraphSlice(...args),
+        ...createNotesSlice(...args),
       }))
     ),
     { name: 'AppStore', enabled: process.env.NODE_ENV === 'development' }
@@ -105,12 +111,19 @@ export function resetAppStoreForProjectSwitch(): void {
     libraryColumnSizing: {},
     expandedRowIds: {},
     // GraphSlice
-    layerVisibility: { citation: true, conceptAgree: true, conceptConflict: true, semanticNeighbor: false },
+    layerVisibility: { citation: true, conceptAgree: true, conceptConflict: true, semanticNeighbor: false, notes: false },
     showConceptNodes: false,
+    showNoteNodes: false,
     similarityThreshold: 0.5,
     focusDepth: '2-hop',
     layoutPaused: false,
     graphContextStatus: 'ready',
     focusedGraphNodeType: null,
+    // NotesSlice
+    memoQuickInputOpen: false,
+    sectionQualityReports: {},
+    // SelectionSlice v2.0
+    selectedMemoId: null,
+    selectedNoteId: null,
   });
 }

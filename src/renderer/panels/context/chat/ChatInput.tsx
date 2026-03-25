@@ -33,6 +33,10 @@ function getPlaceholder(source: ContextSource): string {
       return '询问写作建议或请求 AI 协助…';
     case 'graphNode':
       return '询问关于这个节点的问题…';
+    case 'memo':
+      return '询问关于这条备忘的问题…';
+    case 'note':
+      return '询问关于这篇笔记的问题…';
     case 'empty':
       return '向 AI 助手提问…';
   }
