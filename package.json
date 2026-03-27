@@ -94,6 +94,11 @@
     "zod": "^4.3.6",
     "zustand": "^5.0"
   },
+  "overrides": {
+    "openai": {
+      "zod": "$zod"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/sdk": "^1.0",
