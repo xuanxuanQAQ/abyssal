@@ -22,7 +22,9 @@ export async function tryUnpaywall(
   try {
     await limiter.acquire();
 
-    const url = `${UNPAYWALL_API}/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`;
+    // DOI 中的 '/' 是路径分隔符，不能被编码为 %2F；只编码其他特殊字符
+    const encodedDoi = doi.split('/').map(encodeURIComponent).join('/');
+    const url = `${UNPAYWALL_API}/${encodedDoi}?email=${encodeURIComponent(email)}`;
     const data = await http.requestJson<{
       best_oa_location?: {
         url_for_pdf?: string | null;

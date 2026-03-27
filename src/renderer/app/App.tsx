@@ -33,6 +33,7 @@ import { MemoQuickInput } from '../views/notes/memo/MemoQuickInput';
 import { useAppStore } from '../core/store';
 import { ProjectSetupWizard } from './wizard/ProjectSetupWizard';
 import { useProjectSetup } from './wizard/useProjectSetup';
+import { DbChangeListener } from '../core/ipc/useDbChangeListener';
 
 /** Toast 全局样式 — 模块级常量避免每次渲染重建 */
 const TOAST_STYLE: React.CSSProperties = {
@@ -66,14 +67,24 @@ export function App() {
 
 /** 内层组件：在 Provider 树内使用 hooks */
 function AppShell() {
-  const { showWizard, setShowWizard } = useProjectSetup();
+  const { showWizard: autoShowWizard } = useProjectSetup();
+  const projectWizardOpen = useAppStore((s) => s.projectWizardOpen);
+  const setProjectWizardOpen = useAppStore((s) => s.setProjectWizardOpen);
   const queryClient = useQueryClient();
+
+  // 自动弹出向导（首次启动无项目时）
+  useEffect(() => {
+    if (autoShowWizard) {
+      setProjectWizardOpen(true);
+    }
+  }, [autoShowWizard, setProjectWizardOpen]);
 
   const handleWizardComplete = useCallback(() => {
     // 项目创建完成后刷新项目信息
     void queryClient.invalidateQueries({ queryKey: ['projectInfo'] });
     void queryClient.invalidateQueries({ queryKey: ['projects'] });
-  }, [queryClient]);
+    setProjectWizardOpen(false);
+  }, [queryClient, setProjectWizardOpen]);
 
   // Ctrl+Shift+N / Cmd+Shift+N 快捷键打开 MemoQuickInput
   useEffect(() => {
@@ -90,6 +101,7 @@ function AppShell() {
 
   return (
     <>
+      <DbChangeListener />
       <PipelineListener />
       <Toaster
         position="bottom-right"
@@ -99,8 +111,8 @@ function AppShell() {
       <MainLayout />
       <MemoQuickInput />
       <ProjectSetupWizard
-        open={showWizard}
-        onOpenChange={setShowWizard}
+        open={projectWizardOpen}
+        onOpenChange={setProjectWizardOpen}
         onComplete={handleWizardComplete}
       />
     </>

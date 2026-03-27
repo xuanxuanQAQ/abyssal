@@ -35,6 +35,8 @@ import { useTextSelection } from '../selection/useTextSelection';
 import { selectionToAnnotationPosition } from '../selection/selectionToAnnotation';
 import type { AnnotationPosition } from '../../../../shared-types/models';
 import type { HighlightColor } from '../../../../shared-types/enums';
+import { useConceptList as useConcepts } from '../../../core/ipc/hooks/useConcepts';
+import type { Concept } from '../../../../shared-types/models';
 
 export interface PDFViewportProps {
   paperId: string;
@@ -102,6 +104,9 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
   // Annotations
   const { data: annotations = [] } = useAnnotations(paperId);
   const annotationCRUD = useAnnotationCRUD(paperId);
+
+  // Concepts (for ConceptSelector and concept tag colors)
+  const { data: conceptsData } = useConcepts();
 
   // Text selection
   const textSelection = useTextSelection();
@@ -389,7 +394,7 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
             if (!open) setPendingConceptPosition(null);
           }}
           anchorRect={selectionToolbarPosition}
-          concepts={[]} /* TODO: useConcepts() hook */
+          concepts={(conceptsData ?? []) as Concept[]}
           onSelect={(conceptId) => {
             annotationCRUD.createConceptTag(
               pendingConceptPosition.page,

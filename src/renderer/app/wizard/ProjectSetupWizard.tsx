@@ -85,6 +85,13 @@ export function ProjectSetupWizard({
           : {}),
       };
       const project = await getAPI().app.createProject(config);
+
+      // 切换到新创建的工作区（热切换，无需重启）
+      const wsPath = (project as unknown as Record<string, unknown>)['workspacePath'] as string | undefined;
+      if (wsPath) {
+        await getAPI().workspace.switch(wsPath);
+      }
+
       onComplete(project);
       onOpenChange(false);
     } catch (err) {

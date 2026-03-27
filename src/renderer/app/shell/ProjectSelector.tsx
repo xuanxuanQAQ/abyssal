@@ -2,7 +2,7 @@
  * ProjectSelector — 项目选择下拉按钮（§3.4）
  *
  * 显示当前项目名称，点击弹出项目列表。
- * 项目切换时清空 TanStack Query 缓存 + 重置 Zustand Store。
+ * 工作区热切换：无需重启 app，主进程切换 DB 后通知 renderer 刷新。
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -11,10 +11,7 @@ import { FolderOpen, Plus, ChevronDown } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { getAPI } from '../../core/ipc/bridge';
-import { resetAppStoreForProjectSwitch } from '../../core/store';
-import { useReaderStore } from '../../core/store/useReaderStore';
-import { useEditorStore } from '../../core/store/useEditorStore';
-import { useChatStore } from '../../core/store/useChatStore';
+import { resetAppStoreForProjectSwitch, useAppStore } from '../../core/store';
 import type { ProjectInfo } from '../../../shared-types/models';
 import { Z_INDEX } from '../../styles/zIndex';
 
@@ -33,6 +30,24 @@ export function ProjectSelector() {
       });
   }, []);
 
+  // 监听工作区热切换事件 — 主进程切换完成后刷新前端
+  useEffect(() => {
+    const unsub = getAPI().workspace.onSwitched((event) => {
+      // 清空所有缓存 + 重置 store
+      queryClient.clear();
+      resetAppStoreForProjectSwitch();
+
+      // 更新当前项目显示
+      setCurrentProject({ name: event.name, paperCount: 0, conceptCount: 0, lastModified: new Date().toISOString() });
+
+      // 重新拉取真实数据
+      getAPI().app.getProjectInfo().then(setCurrentProject).catch(() => {});
+
+      toast.success(`已切换到：${event.name}`);
+    });
+    return unsub;
+  }, [queryClient]);
+
   // 加载项目列表
   const loadProjects = useCallback(async () => {
     try {
@@ -43,45 +58,30 @@ export function ProjectSelector() {
     }
   }, []);
 
-  /**
-   * §3.4 项目切换流程
-   * 1. 调用 switchProject IPC
-   * 2. queryClient.clear()
-   * 3. 重置所有 Zustand Store（集中式方法）
-   * 4. 导航到 Library
-   */
   const handleSwitchProject = useCallback(
     async (projectPath: string) => {
       try {
-        await getAPI().app.switchProject(projectPath);
-
-        // 清空 TanStack Query 缓存
-        queryClient.clear();
-
-        // 重置所有 Zustand Store — 集中式 reset，避免遗漏新增字段
-        resetAppStoreForProjectSwitch();
-        useReaderStore.getState().resetReader();
-        useEditorStore.getState().resetEditor();
-        useChatStore.getState().clearChatHistory();
-
-        // 刷新当前项目信息
-        const info = await getAPI().app.getProjectInfo();
-        setCurrentProject(info);
-
-        toast.success('项目已切换');
+        await getAPI().workspace.switch(projectPath);
+        // renderer 侧刷新由 onSwitched 事件处理
       } catch (err) {
         toast.error(`项目切换失败：${err instanceof Error ? err.message : '未知错误'}`);
       }
     },
-    [queryClient]
+    [],
   );
 
   const handleNewProject = useCallback(() => {
-    // TODO: 弹出新建项目 Dialog（Sub-Doc 2 不涉及 Dialog 内部实现）
+    useAppStore.getState().setProjectWizardOpen(true);
   }, []);
 
-  const handleOpenFolder = useCallback(() => {
-    // TODO: 调用系统文件选择器打开已有项目目录
+  const handleOpenFolder = useCallback(async () => {
+    try {
+      const wsPath = await getAPI().workspace.openDialog();
+      if (!wsPath) return;
+      await getAPI().workspace.switch(wsPath);
+    } catch (err) {
+      toast.error(`打开项目失败：${err instanceof Error ? err.message : '未知错误'}`);
+    }
   }, []);
 
   return (
@@ -136,8 +136,8 @@ export function ProjectSelector() {
             <DropdownMenu.Item
               key={project.name}
               onSelect={() => {
-                // TODO: 项目需要 path 字段，当前 ProjectInfo 无此字段
-                handleSwitchProject(project.name);
+                const wsPath = (project as unknown as Record<string, unknown>)['workspacePath'] as string | undefined;
+                if (wsPath) handleSwitchProject(wsPath);
               }}
               style={{
                 padding: '6px 8px',

@@ -30,7 +30,6 @@ const ThumbnailItem = React.memo(function ThumbnailItem(props: ThumbnailItemProp
     if (!canvas) return;
     void renderThumbnail(canvas, pageNumber);
     // Only render once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleClick = () => {

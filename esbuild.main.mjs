@@ -29,6 +29,30 @@ function copyMigrations() {
   }
 }
 
+// ─── 编译 TypeScript 迁移文件 ───
+// TS 迁移在运行时通过 require() 动态加载，需单独编译为 CJS
+
+async function buildTsMigrations() {
+  const migrationsDir = path.join(__dirname, 'src/core/database/migrations');
+  const tsMigrations = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.ts'));
+  if (tsMigrations.length === 0) return;
+
+  await esbuild.build({
+    entryPoints: tsMigrations.map((f) => path.join(migrationsDir, f)),
+    bundle: true,
+    platform: 'node',
+    target: 'node20',
+    format: 'cjs',
+    outdir: path.join(__dirname, 'dist/core/database/migrations'),
+    external: externalModules,
+    sourcemap: true,
+    alias: {
+      '@core': path.join(__dirname, 'src/core'),
+      '@shared-types': path.join(__dirname, 'src/shared-types'),
+    },
+  });
+}
+
 copyMigrations();
 
 // ─── Native 模块和 Electron 标记为 external ───
@@ -68,6 +92,24 @@ const mainConfig = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const dbProcessConfig = {
+  entryPoints: ['src/db-process/main.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node20',
+  format: 'cjs',
+  outfile: 'dist/db-process/main.js',
+  external: externalModules,
+  sourcemap: true,
+  alias: {
+    '@core': path.join(__dirname, 'src/core'),
+    '@shared-types': path.join(__dirname, 'src/shared-types'),
+  },
+  conditions: ['node'],
+  logLevel: 'info',
+};
+
+/** @type {esbuild.BuildOptions} */
 const preloadConfig = {
   entryPoints: ['src/electron/preload.ts'],
   bundle: true,
@@ -87,11 +129,15 @@ const preloadConfig = {
 if (isWatch) {
   const mainCtx = await esbuild.context(mainConfig);
   const preloadCtx = await esbuild.context(preloadConfig);
-  await Promise.all([mainCtx.watch(), preloadCtx.watch()]);
+  const dbCtx = await esbuild.context(dbProcessConfig);
+  await Promise.all([mainCtx.watch(), preloadCtx.watch(), dbCtx.watch()]);
+  await buildTsMigrations();
   console.log('[esbuild] watching for changes...');
 } else {
   await Promise.all([
     esbuild.build(mainConfig),
     esbuild.build(preloadConfig),
+    esbuild.build(dbProcessConfig),
+    buildTsMigrations(),
   ]);
 }

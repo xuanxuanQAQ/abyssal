@@ -5,6 +5,8 @@
   },
   "include": [
     "src/core/**/*.ts",
+    "src/adapter/**/*.ts",
+    "src/db-process/**/*.ts",
     "src/electron/**/*.ts",
     "src/cli/**/*.ts",
     "src/mcp-adapter/**/*.ts",

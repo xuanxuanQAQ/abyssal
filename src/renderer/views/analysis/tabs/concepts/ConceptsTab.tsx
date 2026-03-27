@@ -19,7 +19,7 @@ export function ConceptsTab() {
     <PanelGroup direction="horizontal" style={{ height: '100%' }}>
       {/* Left: Tree + Suggestions */}
       <Panel id="concept-tree" defaultSize={35} minSize={20} order={1}>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', borderRight: '1px solid var(--border-subtle)' }}>
           <div style={{ flex: 1, overflow: 'auto' }}>
             <ConceptTree />
           </div>

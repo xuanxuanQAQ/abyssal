@@ -1,5 +1,6 @@
 // ═══ SQLite 连接管理 ═══
-// §1.1 初始化序列：打开连接 → PRAGMA → 加载 sqlite-vec → 返回 Database
+// §1.1-1.4: 打开连接 → PRAGMA 序列 → sqlite-vec 加载与验证
+// §2.3: WAL checkpoint 重试逻辑
 
 import Database from 'better-sqlite3';
 import * as path from 'node:path';
@@ -8,21 +9,36 @@ import type { AbyssalConfig } from '../types/config';
 import { DatabaseError, ExtensionLoadError } from '../types/errors';
 import type { Logger } from '../infra/logger';
 
-// ─── PRAGMA 配置序列 (§1.1 步骤 2) ───
+// ─── PRAGMA 配置序列 (§1.3 步骤 2，七条，严格顺序) ───
 
 const PRAGMA_SEQUENCE: [string, string | number][] = [
-  ['journal_mode', 'WAL'],
-  ['foreign_keys', 'ON'],
-  ['busy_timeout', 5000],
-  ['synchronous', 'NORMAL'],
-  ['cache_size', -64000],
-  ['temp_store', 'MEMORY'],
-  ['mmap_size', 268435456],
+  ['journal_mode', 'WAL'],       // 1. 必须第一个——需要 EXCLUSIVE lock
+  ['foreign_keys', 'ON'],        // 2. 非持久化，每次连接必须设置
+  ['busy_timeout', 5000],        // 3. 锁等待 5s
+  ['synchronous', 'NORMAL'],     // 4. WAL 模式最佳平衡
+  ['cache_size', -64000],        // 5. 64 MB 页面缓存
+  ['temp_store', 'MEMORY'],      // 6. 临时表/排序使用内存
+  ['mmap_size', 268435456],      // 7. 256 MB 内存映射
 ];
 
-// ─── sqlite-vec 扩展路径解析 (§1.1 步骤 3) ───
+// macOS 上 fsync 不保证物理写入磁盘硬件（仅清空内核缓冲区），
+// 只有 fcntl(F_FULLFSYNC) 才能保证。SQLite 通过此 PRAGMA 控制。
+const MACOS_EXTRA_PRAGMAS: [string, string | number][] = [
+  ['fullfsync', 'ON'],
+];
+
+// ─── §1.4 sqlite-vec 扩展路径解析 ───
 
 function resolveVecExtensionPath(): string {
+  // 优先级 2：环境变量覆盖
+  const envPath = process.env['ABYSSAL_SQLITE_VEC_PATH'];
+  if (envPath) {
+    if (fs.existsSync(envPath)) return path.resolve(envPath);
+    throw new Error(
+      `ABYSSAL_SQLITE_VEC_PATH set to "${envPath}" but file does not exist`,
+    );
+  }
+
   const platform = process.platform;
   const arch = process.arch;
 
@@ -33,7 +49,7 @@ function resolveVecExtensionPath(): string {
         ? 'vec0.dylib'
         : 'vec0.so';
 
-  // 尝试平台-架构子目录
+  // 优先级 1：npm 包内置路径
   const candidates = [
     path.join('node_modules', 'sqlite-vec', `${platform}-${arch}`, extName),
     path.join('node_modules', 'sqlite-vec', extName),
@@ -47,7 +63,7 @@ function resolveVecExtensionPath(): string {
     }
   }
 
-  // 尝试 require.resolve 定位 sqlite-vec 包
+  // 优先级 3：require.resolve 定位 sqlite-vec 包（pnpm / monorepo 兼容）
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const resolve = (require as NodeRequire).resolve;
@@ -65,42 +81,87 @@ function resolveVecExtensionPath(): string {
   );
 }
 
+// ─── §1.2 异常分类 ───
+
+function classifyOpenError(err: Error, dbPath: string): DatabaseError {
+  const msg = err.message.toLowerCase();
+  let reason = 'unknown';
+
+  if (msg.includes('no such file') || msg.includes('cannot open') || msg.includes('enoent')) {
+    reason = 'directory_not_found';
+  } else if (msg.includes('not a database') || msg.includes('file is not a database')) {
+    reason = 'not_a_database';
+  } else if (msg.includes('busy') || msg.includes('locked') || msg.includes('sqlite_busy')) {
+    reason = 'locked_by_other_process';
+  } else if (msg.includes('permission') || msg.includes('eacces') || msg.includes('eperm')) {
+    reason = 'permission_denied';
+  }
+
+  return new DatabaseError({
+    message: `Failed to open database: ${err.message}`,
+    context: { dbPath, reason },
+    cause: err,
+  });
+}
+
 // ─── 公开接口 ───
 
 export interface OpenDatabaseOptions {
   dbPath: string;
   config: AbyssalConfig;
   logger: Logger;
+  /** 只读模式，默认 false */
+  readOnly?: boolean | undefined;
   /** 跳过 sqlite-vec 加载（用于测试或无向量场景） */
   skipVecExtension?: boolean | undefined;
 }
 
 /**
- * 打开 SQLite 连接并执行完整初始化序列。
- * 返回初始化完成的 better-sqlite3 Database 实例。
+ * 打开 SQLite 连接并执行完整初始化序列 (§1.1)。
+ *
+ * 序列：打开连接 → PRAGMA × 7 → 加载 sqlite-vec → 验证扩展
  */
 export function openDatabase(options: OpenDatabaseOptions): Database.Database {
-  const { dbPath, config, logger, skipVecExtension } = options;
+  const { dbPath, logger, readOnly = false, skipVecExtension } = options;
 
-  // 步骤 1：打开连接
+  // ── 步骤 1：打开连接 ──
   let db: Database.Database;
   try {
-    db = new Database(dbPath);
-  } catch (err) {
-    throw new DatabaseError({
-      message: `Failed to open database: ${(err as Error).message}`,
-      context: { dbPath },
-      cause: err as Error,
+    db = new Database(dbPath, {
+      readonly: readOnly,
+      fileMustExist: false,
+      timeout: 5000,
     });
+  } catch (err) {
+    throw classifyOpenError(err as Error, dbPath);
   }
 
-  logger.info('Database connection opened', { dbPath });
+  logger.info('Database connection opened', { dbPath, readOnly });
 
-  // 步骤 2：PRAGMA 序列
-  for (const [pragma, value] of PRAGMA_SEQUENCE) {
+  // ── Fix #2b: 设置 SQLITE_TMPDIR 到 workspace 所在目录 ──
+  // Electron 沙箱或 macOS 严格权限环境下，默认系统临时目录可能不可写，
+  // 导致 VACUUM 等需要临时文件的操作抛出 SQLITE_CANTOPEN。
+  // PRAGMA temp_store_directory 已弃用，但环境变量 SQLITE_TMPDIR 仍然生效。
+  if (!process.env['SQLITE_TMPDIR']) {
+    const dbDir = path.dirname(dbPath);
+    process.env['SQLITE_TMPDIR'] = dbDir;
+  }
+
+  // ── 步骤 2：PRAGMA 序列（七条，严格顺序） ──
+  // 合并平台特定 PRAGMA（macOS fullfsync）
+  const pragmas: [string, string | number][] = [
+    ...PRAGMA_SEQUENCE,
+    ...(process.platform === 'darwin' ? MACOS_EXTRA_PRAGMAS : []),
+  ];
+
+  for (const [pragma, value] of pragmas) {
+    // 只读模式跳过 journal_mode——无法写入文件头
+    if (readOnly && pragma === 'journal_mode') continue;
+
     try {
       const result = db.pragma(`${pragma} = ${value}`) as unknown;
-      // journal_mode 需要校验返回值
+
+      // journal_mode 返回值验证
       if (pragma === 'journal_mode') {
         const mode =
           Array.isArray(result)
@@ -108,6 +169,14 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
             : result;
         if (typeof mode === 'string' && mode.toLowerCase() !== 'wal') {
           logger.warn('WAL mode not enabled, got: ' + String(mode));
+        }
+      }
+
+      // foreign_keys 返回值验证
+      if (pragma === 'foreign_keys') {
+        const fkResult = db.pragma('foreign_keys') as [{ foreign_keys: number }] | [];
+        if (fkResult.length === 0 || fkResult[0]!.foreign_keys !== 1) {
+          logger.warn('foreign_keys could not be enabled');
         }
       }
     } catch (err) {
@@ -121,7 +190,7 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
 
   logger.debug('PRAGMA sequence completed');
 
-  // 步骤 3：加载 sqlite-vec 扩展
+  // ── 步骤 3-4：sqlite-vec 扩展加载与验证 ──
   if (!skipVecExtension) {
     let vecPath: string;
     try {
@@ -153,7 +222,7 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
       });
     }
 
-    // 验证扩展加载成功
+    // 验证 vec_version()
     try {
       const versionRow = db.prepare('SELECT vec_version() AS v').get() as
         | { v: string }
@@ -168,6 +237,18 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
         cause: err as Error,
       });
     }
+
+    // §1.4 额外验证：临时 vec0 虚拟表创建+销毁
+    try {
+      db.exec('CREATE VIRTUAL TABLE _vec_test USING vec0(v float[4])');
+      db.exec('DROP TABLE _vec_test');
+    } catch (err) {
+      throw new ExtensionLoadError({
+        message: `sqlite-vec vec0 virtual table test failed: ${(err as Error).message}`,
+        context: { dbPath, extensionPath: vecPath },
+        cause: err as Error,
+      });
+    }
   } else {
     logger.info('sqlite-vec extension loading skipped');
   }
@@ -175,10 +256,96 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
   return db;
 }
 
+// ─── §2.3 WAL checkpoint（含重试逻辑 + Worker 协调） ───
+
+export interface CheckpointResult {
+  busy: number;
+  log: number;
+  checkpointed: number;
+}
+
+export interface WalCheckpointOptions {
+  logger?: Logger;
+  /**
+   * Fix #1: 在执行 TRUNCATE checkpoint 之前调用的回调。
+   *
+   * 主线程同步执行 wal_checkpoint(TRUNCATE) 需要 EXCLUSIVE lock。
+   * 如果 Worker Thread 正在执行长写事务，主线程会被 busy_timeout 阻塞，
+   * 导致 UI 冻结。
+   *
+   * 此回调应通知 Worker 暂停写入队列并等待当前事务提交。
+   * 返回一个 release 函数——checkpoint 完成后调用以恢复 Worker 写入。
+   *
+   * 如果未提供此回调，直接执行 checkpoint（兼容无 Worker 场景）。
+   */
+  pauseWorkerWrites?: (() => (() => void)) | undefined;
+}
+
 /**
- * 执行 WAL checkpoint (TRUNCATE 模式)。
- * §1.4: 批量工作流完成后、应用退出前、创建快照时调用。
+ * 执行 WAL checkpoint。
+ *
+ * 策略 (§2.3):
+ * 1. 调用 pauseWorkerWrites 暂停 Worker 写入（如果提供）
+ * 2. 尝试 TRUNCATE（合并全部 WAL + 截断文件）
+ * 3. busy > 0 时等待 1s 重试，最多 3 次
+ * 4. 仍然 busy 则回退 PASSIVE（不阻塞，不完全合并）
+ * 5. 调用 release 恢复 Worker 写入
  */
-export function walCheckpoint(db: Database.Database): void {
-  db.pragma('wal_checkpoint(TRUNCATE)');
+export function walCheckpoint(
+  db: Database.Database,
+  options?: WalCheckpointOptions | Logger,
+): CheckpointResult {
+  // 兼容旧签名 walCheckpoint(db, logger?)
+  const opts: WalCheckpointOptions =
+    options === undefined || options === null
+      ? {}
+      : typeof (options as Logger).info === 'function'
+        ? { logger: options as Logger }
+        : (options as WalCheckpointOptions);
+
+  const { logger, pauseWorkerWrites } = opts;
+  const maxRetries = 3;
+  const retryDelayMs = 1000;
+
+  // Fix #1: 暂停 Worker 写入，防止 TRUNCATE checkpoint 与长写事务死锁
+  let resumeWorker: (() => void) | undefined;
+  try {
+    resumeWorker = pauseWorkerWrites?.();
+  } catch (err) {
+    logger?.warn('Failed to pause worker writes before checkpoint', {
+      error: (err as Error).message,
+    });
+  }
+
+  try {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const rows = db.pragma('wal_checkpoint(TRUNCATE)') as
+        Array<{ busy: number; log: number; checkpointed: number }>;
+      const result = rows[0];
+      if (!result || result.busy === 0) {
+        return result ?? { busy: 0, log: 0, checkpointed: 0 };
+      }
+
+      logger?.warn('WAL TRUNCATE checkpoint blocked by active readers, retrying', {
+        attempt: attempt + 1,
+        busy: result.busy,
+      });
+
+      // 同步等待——better-sqlite3 是同步 API，此处阻塞事件循环
+      // 但 checkpoint 仅在关闭/快照等低频场景调用
+      const start = Date.now();
+      while (Date.now() - start < retryDelayMs) {
+        // busy-wait
+      }
+    }
+
+    // 回退到 PASSIVE——不阻塞，不完全合并
+    logger?.warn('WAL TRUNCATE failed after retries, falling back to PASSIVE');
+    const passiveRows = db.pragma('wal_checkpoint(PASSIVE)') as
+      Array<{ busy: number; log: number; checkpointed: number }>;
+    return passiveRows[0] ?? { busy: 0, log: 0, checkpointed: 0 };
+  } finally {
+    // checkpoint 完成（或失败），恢复 Worker 写入
+    resumeWorker?.();
+  }
 }

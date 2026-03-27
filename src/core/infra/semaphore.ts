@@ -2,6 +2,10 @@
 //
 // 信号量 — 控制并发数（如 acquire 模块 5 并发下载、analyze 3 并发 LLM 调用）。
 // 基于 Promise 和内部等待队列。
+//
+// 死锁防护：见 mutex.ts 中的获取顺序军规。
+// Semaphore 是外层并发控制，Mutex 是内层写锁。
+// 合法顺序：Semaphore.acquire → Mutex.acquire → Mutex.release → Semaphore.release
 
 export class Semaphore {
   private current = 0;

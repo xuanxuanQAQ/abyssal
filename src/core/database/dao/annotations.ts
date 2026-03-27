@@ -5,6 +5,7 @@ import type { AnnotationId, PaperId, ConceptId } from '../../types/common';
 import type { Annotation, AnnotationType } from '../../types/annotation';
 import { asAnnotationId } from '../../types/common';
 import { now } from '../row-mapper';
+import { validateAnnotationInvariant, validateAnnotationType } from '../validators';
 
 // ─── addAnnotation ───
 
@@ -12,14 +13,19 @@ export function addAnnotation(
   db: Database.Database,
   annotation: Omit<Annotation, 'id'>,
 ): AnnotationId {
+  // §5.5: type='concept_tag' 时 concept_id 必须非空
+  validateAnnotationType(annotation.type);
+  validateAnnotationInvariant(annotation.type, annotation.conceptId);
+
   const timestamp = annotation.createdAt || now();
 
-  const result = db.prepare(`
+  const row = db.prepare(`
     INSERT INTO annotations (
       paper_id, page, rect_x0, rect_y0, rect_x1, rect_y1,
       selected_text, type, color, comment, concept_id, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+    RETURNING id
+  `).get(
     annotation.paperId,
     annotation.page,
     annotation.rect.x0,
@@ -32,9 +38,9 @@ export function addAnnotation(
     annotation.comment,
     annotation.conceptId,
     timestamp,
-  );
+  ) as { id: number };
 
-  return asAnnotationId(Number(result.lastInsertRowid));
+  return asAnnotationId(row.id);
 }
 
 // ─── getAnnotations ───

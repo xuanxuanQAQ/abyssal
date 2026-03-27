@@ -102,7 +102,16 @@ export interface ConceptsConfig {
   autoSuggestThreshold: number; // 默认 3
 }
 
-// ═══ AbyssalConfig 顶层 ═══
+// ═══ 全局配置（存储在 AppData，跨工作区共享） ═══
+
+export interface GlobalConfig {
+  apiKeys: ApiKeysConfig;
+  llm: LlmConfig;
+  rag: RagConfig;
+  acquire: AcquireConfig;
+}
+
+// ═══ AbyssalConfig 顶层（合并后的运行时配置） ═══
 
 export interface AbyssalConfig {
   project: ProjectConfig;

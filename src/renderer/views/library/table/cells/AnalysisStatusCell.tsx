@@ -19,7 +19,7 @@ interface AnalysisStatusCellProps {
 }
 
 export function AnalysisStatusCell({ status }: AnalysisStatusCellProps) {
-  const config = STATUS_CONFIG[status];
+  const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.not_started;
 
   return (
     <Tooltip.Provider delayDuration={300}>

@@ -81,6 +81,8 @@ export interface TextChunk {
   chunkIndex: number | null;
   contextBefore: string | null;
   contextAfter: string | null;
+  /** §8.1: 创建时间 ISO 8601。迁移前的旧 chunk 可能缺失此字段。 */
+  createdAt?: string | null | undefined;
 }
 
 // ═══ RankedChunk ═══

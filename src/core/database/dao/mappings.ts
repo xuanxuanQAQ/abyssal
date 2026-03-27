@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { PaperId, ConceptId, AnnotationId } from '../../types/common';
 import type { ConceptMapping, RelationType, BilingualEvidence } from '../../types/mapping';
 import { fromRow, now } from '../row-mapper';
+import { writeTransaction } from '../transaction-utils';
 
 // ─── mapPaperConcept (UPSERT) ───
 
@@ -22,8 +23,18 @@ export function mapPaperConcept(
       confidence = excluded.confidence,
       evidence = excluded.evidence,
       annotation_id = COALESCE(excluded.annotation_id, paper_concept_map.annotation_id),
-      reviewed = excluded.reviewed,
-      reviewed_at = excluded.reviewed_at,
+      reviewed = CASE
+        WHEN excluded.relation != paper_concept_map.relation
+          OR ABS(excluded.confidence - paper_concept_map.confidence) > 0.05
+        THEN excluded.reviewed
+        ELSE paper_concept_map.reviewed
+      END,
+      reviewed_at = CASE
+        WHEN excluded.relation != paper_concept_map.relation
+          OR ABS(excluded.confidence - paper_concept_map.confidence) > 0.05
+        THEN excluded.reviewed_at
+        ELSE paper_concept_map.reviewed_at
+      END,
       updated_at = excluded.updated_at
   `).run(
     mapping.paperId,
@@ -37,6 +48,53 @@ export function mapPaperConcept(
     timestamp,
     timestamp,
   );
+}
+
+/**
+ * §5.3: 一篇论文的 N 条概念映射原子写入。
+ * 全部映射在单个 IMMEDIATE 事务中完成——避免"部分映射"的不一致状态。
+ */
+export function mapPaperConceptBatch(
+  db: Database.Database,
+  mappings: ConceptMapping[],
+): void {
+  if (mappings.length === 0) return;
+
+  writeTransaction(db, () => {
+    const timestamp = now();
+    const stmt = db.prepare(`
+      INSERT INTO paper_concept_map (
+        paper_id, concept_id, relation, confidence, evidence,
+        annotation_id, reviewed, reviewed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(paper_id, concept_id) DO UPDATE SET
+        relation = excluded.relation,
+        confidence = excluded.confidence,
+        evidence = excluded.evidence,
+        annotation_id = COALESCE(excluded.annotation_id, paper_concept_map.annotation_id),
+        reviewed = CASE
+          WHEN excluded.relation != paper_concept_map.relation
+            OR ABS(excluded.confidence - paper_concept_map.confidence) > 0.05
+          THEN excluded.reviewed
+          ELSE paper_concept_map.reviewed
+        END,
+        reviewed_at = CASE
+          WHEN excluded.relation != paper_concept_map.relation
+            OR ABS(excluded.confidence - paper_concept_map.confidence) > 0.05
+          THEN excluded.reviewed_at
+          ELSE paper_concept_map.reviewed_at
+        END,
+        updated_at = excluded.updated_at
+    `);
+
+    for (const m of mappings) {
+      stmt.run(
+        m.paperId, m.conceptId, m.relation, m.confidence,
+        JSON.stringify(m.evidence), m.annotationId,
+        m.reviewed ? 1 : 0, m.reviewedAt, timestamp, timestamp,
+      );
+    }
+  });
 }
 
 // ─── updateMapping (部分更新) ───

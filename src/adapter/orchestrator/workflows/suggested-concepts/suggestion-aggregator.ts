@@ -1,0 +1,131 @@
+/**
+ * Suggestion Aggregator — concept suggestion dedup + threshold notification.
+ *
+ * Wraps the DAO addSuggestedConcept with:
+ * - term_normalized dedup (same as DAO, but also tracks cross-paper counts)
+ * - Threshold-based push notification when source_paper_count reaches threshold
+ *
+ * See spec: §6.8 (Step 10c)
+ */
+
+import type { NormalizedSuggestion } from '../../../output-parser/suggestion-parser';
+
+// ─── DB interface ───
+
+export interface SuggestionDb {
+  getSuggestedConceptByTerm: (termNormalized: string) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+  insertSuggestedConcept: (data: Record<string, unknown>) => Promise<void> | void;
+  updateSuggestedConcept: (id: string, updates: Record<string, unknown>) => Promise<void> | void;
+  addSuggestedConcept: (input: Record<string, unknown>) => Promise<string> | string;
+}
+
+// ─── Push notification interface ───
+
+export interface PushNotifier {
+  pushNotification: (notification: {
+    type: string;
+    title: string;
+    description: string;
+    action?: { type: string; route: string };
+  }) => void;
+}
+
+// ─── Aggregation result ───
+
+export interface AggregationResult {
+  newSuggestions: number;
+  updatedSuggestions: number;
+  notificationsSent: number;
+}
+
+// ─── Main aggregator (§6.8) ───
+
+/**
+ * Aggregate suggested concepts from a single paper's analysis results.
+ *
+ * For each suggestion:
+ * - If term_normalized already exists: merge frequencies and source papers
+ * - If new: insert fresh record
+ * - If source_paper_count reaches threshold: push notification
+ *
+ * @param suggestions - Normalized suggestions from output parser
+ * @param paperId - Source paper that produced these suggestions
+ * @param db - Database operations
+ * @param notifier - Push notification system (null in CLI mode)
+ * @param threshold - Notification threshold (default 3)
+ */
+export async function aggregateSuggestions(
+  suggestions: NormalizedSuggestion[],
+  paperId: string,
+  db: SuggestionDb,
+  notifier: PushNotifier | null,
+  threshold: number = 3,
+): Promise<AggregationResult> {
+  let newSuggestions = 0;
+  let updatedSuggestions = 0;
+  let notificationsSent = 0;
+
+  for (const suggestion of suggestions) {
+    const existing = await db.getSuggestedConceptByTerm(suggestion.termNormalized);
+
+    if (existing) {
+      // ── Aggregate: update frequency and source papers ──
+      const existingPaperIds = parseJsonArray(existing['source_paper_ids'] as string);
+      if (existingPaperIds.includes(paperId)) continue;
+
+      existingPaperIds.push(paperId);
+      const newCount = existingPaperIds.length;
+
+      await db.updateSuggestedConcept(existing['id'] as string, {
+        source_paper_count: newCount,
+        source_paper_ids: JSON.stringify(existingPaperIds),
+        total_frequency: (existing['total_frequency'] as number ?? 0) + suggestion.frequencyInPaper,
+        updated_at: new Date().toISOString(),
+      });
+
+      updatedSuggestions++;
+
+      // ── Threshold notification (§6.8) ──
+      if (newCount === threshold && notifier) {
+        notifier.pushNotification({
+          type: 'concept_suggestion',
+          title: `AI suggests new concept: "${suggestion.term}"`,
+          description: `Mentioned in ${newCount} papers`,
+          action: {
+            type: 'navigate',
+            route: `/framework?tab=suggestions&focus=${suggestion.termNormalized}`,
+          },
+        });
+        notificationsSent++;
+      }
+    } else {
+      // ── New suggestion ──
+      await db.addSuggestedConcept({
+        term: suggestion.term,
+        termNormalized: suggestion.termNormalized,
+        frequencyInPaper: suggestion.frequencyInPaper,
+        sourcePaperId: paperId,
+        closestExistingConceptId: suggestion.closestExisting,
+        reason: suggestion.reason,
+        suggestedDefinition: suggestion.suggestedDefinition,
+        suggestedKeywords: suggestion.suggestedKeywords,
+      });
+
+      newSuggestions++;
+    }
+  }
+
+  return { newSuggestions, updatedSuggestions, notificationsSent };
+}
+
+// ─── Helper ───
+
+function parseJsonArray(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}

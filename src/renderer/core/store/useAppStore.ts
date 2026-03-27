@@ -122,6 +122,7 @@ export function resetAppStoreForProjectSwitch(): void {
     // NotesSlice
     memoQuickInputOpen: false,
     sectionQualityReports: {},
+    projectWizardOpen: false,
     // SelectionSlice v2.0
     selectedMemoId: null,
     selectedNoteId: null,

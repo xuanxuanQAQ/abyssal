@@ -11,6 +11,7 @@ import type { Logger } from '../infra/logger';
 import type { DatabaseService } from '../database';
 import { l2DistanceToScore } from '../infra/vector-math';
 import { countTokens } from '../infra/token-counter';
+import * as vectorDiagnostics from '../database/vector-diagnostics';
 
 import { Embedder } from './embedder';
 import { Reranker, type RerankFunction } from './reranker';
@@ -273,7 +274,64 @@ export class RagService {
     return filtered;
   }
 
-  /** §8.4 索引统计 */
+  /**
+   * §3.6 Template E: 纲要节引用论文直接查询。
+   *
+   * 按纲要的引用论文列表拉取 chunk——不经过向量或概念映射。
+   * score 固定 1.0——研究者在纲要中明确指定的论文具有最高优先级。
+   *
+   * TODO: 与 article 工作流的 Orchestrator 集成
+   */
+  searchByOutlinePapers(
+    paperIds: PaperId[],
+    sectionTypes?: SectionType[] | null,
+  ): RankedChunk[] {
+    if (paperIds.length === 0) return [];
+    const db = this.dbService.raw;
+
+    const paperPlaceholders = paperIds.map(() => '?').join(',');
+    const params: unknown[] = [...paperIds];
+
+    let sectionFilter = '';
+    if (sectionTypes && sectionTypes.length > 0) {
+      sectionFilter = `AND c.section_type IN (${sectionTypes.map(() => '?').join(',')})`;
+      params.push(...sectionTypes);
+    }
+
+    const rows = db.prepare(`
+      SELECT c.*, p.title AS paper_title, p.year AS paper_year
+      FROM chunks c
+      JOIN papers p ON p.id = c.paper_id
+      WHERE c.paper_id IN (${paperPlaceholders})
+        AND c.source = 'paper'
+        ${sectionFilter}
+      ORDER BY c.paper_id, c.position_ratio ASC
+    `).all(...params) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      chunkId: row['chunk_id'] as ChunkId,
+      paperId: (row['paper_id'] as string) as PaperId,
+      text: row['text'] as string,
+      tokenCount: row['token_count'] as number,
+      sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
+      sectionTitle: row['section_title'] as string | null,
+      sectionType: row['section_type'] as RankedChunk['sectionType'],
+      pageStart: row['page_start'] as number | null,
+      pageEnd: row['page_end'] as number | null,
+      source: row['source'] as ChunkSource,
+      positionRatio: row['position_ratio'] as number | null,
+      parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
+      chunkIndex: row['chunk_index'] as number | null,
+      contextBefore: row['context_before'] as string | null,
+      contextAfter: row['context_after'] as string | null,
+      score: 1.0,
+      rawL2Distance: null,
+      displayTitle: (row['paper_title'] as string) ?? '',
+      originPath: 'structured' as const,
+    }));
+  }
+
+  /** §8.4 索引统计（含 §10 诊断） */
   getIndexStats(): {
     totalChunks: number;
     totalTokens: number;
@@ -282,9 +340,12 @@ export class RagService {
     embeddingModel: string;
   } {
     const stats = this.dbService.getStats();
+    const indexStats = vectorDiagnostics.getChunkIndexStats(this.dbService.raw);
+    const totalTokens = indexStats.reduce((sum, s) => sum + s.totalTokens, 0);
+
     return {
       totalChunks: stats.chunks.total,
-      totalTokens: 0, // TODO: 需要 SUM(token_count) 查询
+      totalTokens,
       bySource: {
         paper: stats.chunks.paperChunks,
         annotation: stats.chunks.annotationChunks,
@@ -297,6 +358,31 @@ export class RagService {
       embeddingModel: this.config.rag.embeddingModel,
     };
   }
+
+  // ════════════════════════════════════════
+  // §10 向量引擎诊断
+  // ════════════════════════════════════════
+
+  /** §10.3 rowid 一致性检查 */
+  checkVectorConsistency(): vectorDiagnostics.RowidConsistencyResult {
+    return vectorDiagnostics.checkRowidConsistency(this.dbService.raw);
+  }
+
+  /** §10.1 向量字节长度抽样验证 */
+  sampleVectorLengths(count: number = 10): vectorDiagnostics.VectorLengthSample[] {
+    return vectorDiagnostics.sampleVectorLengths(
+      this.dbService.raw,
+      this.config.rag.embeddingDimension,
+      count,
+    );
+  }
+
+  /** §10.4 按 source 分组的 chunk 统计 */
+  getChunkIndexStats(): vectorDiagnostics.ChunkIndexStats[] {
+    return vectorDiagnostics.getChunkIndexStats(this.dbService.raw);
+  }
+
+  // TODO: UI 仪表板集成——通过 IPC 暴露诊断结果
 }
 
 // ═══ 工厂函数 ═══

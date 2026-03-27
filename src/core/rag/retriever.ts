@@ -8,7 +8,7 @@ import type { ConceptId, PaperId, MemoId, ChunkId } from '../types/common';
 import type { RagConfig } from '../types/config';
 import type { DatabaseService } from '../database';
 import type { Logger } from '../infra/logger';
-import { l2DistanceToScore } from '../infra/vector-math';
+import { l2DistanceToScore, l2Distance } from '../infra/vector-math';
 
 import type { Embedder } from './embedder';
 import type { Reranker } from './reranker';
@@ -118,7 +118,46 @@ function bm25Recall(
 
 // ─── §3.3 向量检索路径 ───
 
+/**
+ * Fix #1: 高选择性过滤的候选集大小阈值。
+ * 当 paperIds 过滤限定的候选 chunk 数 < 此值时，
+ * 切换到应用层内存 KNN（从 DB 读取候选 embedding 后在 V8 中计算距离）。
+ * 200 个向量的内存距离计算耗时 < 1ms，远比 KNN 后置过滤可靠。
+ */
+const IN_MEMORY_KNN_THRESHOLD = 1000;
+
 async function vectorRecall(
+  db: Database.Database,
+  embedder: Embedder,
+  queryVariants: string[],
+  expandedK: number,
+  filters: {
+    sources?: ChunkSource[] | null;
+    sectionTypes?: SectionType[] | null;
+    paperIds?: PaperId[] | null;
+  },
+): Promise<RankedChunk[]> {
+  // Fix #1: 策略分流——当 paperIds 过滤限定的候选集极小时，
+  // 切换到应用层内存 KNN，避免 sqlite-vec 后置过滤的召回坍塌。
+  if (filters.paperIds && filters.paperIds.length > 0) {
+    const candidateCount = (db.prepare(
+      `SELECT COUNT(*) AS cnt FROM chunks c
+       JOIN json_each(?) jp ON c.paper_id = jp.value`,
+    ).get(JSON.stringify(filters.paperIds)) as { cnt: number }).cnt;
+
+    if (candidateCount < IN_MEMORY_KNN_THRESHOLD) {
+      return inMemoryVectorRecall(db, embedder, queryVariants, expandedK, filters);
+    }
+  }
+
+  return sqliteVecRecall(db, embedder, queryVariants, expandedK, filters);
+}
+
+/**
+ * 标准路径：sqlite-vec KNN + 后置过滤。
+ * Fix #2: paperIds/sectionTypes 使用 json_each 替代 IN (?,?,...) 防止参数上限。
+ */
+async function sqliteVecRecall(
   db: Database.Database,
   embedder: Embedder,
   queryVariants: string[],
@@ -136,20 +175,24 @@ async function vectorRecall(
     const queryBuf = Buffer.from(queryVec.buffer, queryVec.byteOffset, queryVec.byteLength);
 
     // 构建动态 WHERE 子句
+    // Fix #2: 短数组用 IN (?,...) ，长数组用 json_each(?) 防止参数上限
     const conditions: string[] = [];
     const params: unknown[] = [queryBuf, expandedK];
 
     if (filters.sources && filters.sources.length > 0) {
+      // source 枚举最多 6 个值，安全使用 IN
       conditions.push(`c.source IN (${filters.sources.map(() => '?').join(',')})`);
       params.push(...filters.sources);
     }
     if (filters.sectionTypes && filters.sectionTypes.length > 0) {
+      // sectionType 枚举最多 7 个值，安全使用 IN
       conditions.push(`c.section_type IN (${filters.sectionTypes.map(() => '?').join(',')})`);
       params.push(...filters.sectionTypes);
     }
     if (filters.paperIds && filters.paperIds.length > 0) {
-      conditions.push(`c.paper_id IN (${filters.paperIds.map(() => '?').join(',')})`);
-      params.push(...filters.paperIds);
+      // paperIds 可能有数百个，使用 json_each 避免参数上限
+      conditions.push(`c.paper_id IN (SELECT value FROM json_each(?))`);
+      params.push(JSON.stringify(filters.paperIds));
     }
 
     const whereExtra = conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : '';
@@ -170,13 +213,84 @@ async function vectorRecall(
     `;
 
     const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    mergeVectorRows(rows, allResults);
+  }
 
-    for (const row of rows) {
+  return [...allResults.values()];
+}
+
+/**
+ * Fix #1: 应用层内存 KNN 回退路径。
+ *
+ * 当候选集极小（< 1000 chunk）时，从 DB 读取候选向量到内存，
+ * 在 V8 中计算 L2 距离并排序——100% 召回率，无后置过滤损耗。
+ * 200 个 1536 维向量的距离计算耗时 < 1ms。
+ */
+async function inMemoryVectorRecall(
+  db: Database.Database,
+  embedder: Embedder,
+  queryVariants: string[],
+  expandedK: number,
+  filters: {
+    sources?: ChunkSource[] | null;
+    sectionTypes?: SectionType[] | null;
+    paperIds?: PaperId[] | null;
+  },
+): Promise<RankedChunk[]> {
+  // 构建候选集 SQL（不走 chunks_vec 虚拟表，直接读 embedding blob）
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.paperIds && filters.paperIds.length > 0) {
+    conditions.push(`c.paper_id IN (SELECT value FROM json_each(?))`);
+    params.push(JSON.stringify(filters.paperIds));
+  }
+  if (filters.sources && filters.sources.length > 0) {
+    conditions.push(`c.source IN (${filters.sources.map(() => '?').join(',')})`);
+    params.push(...filters.sources);
+  }
+  if (filters.sectionTypes && filters.sectionTypes.length > 0) {
+    conditions.push(`c.section_type IN (${filters.sectionTypes.map(() => '?').join(',')})`);
+    params.push(...filters.sectionTypes);
+  }
+
+  const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+  // 读取候选 chunk 元数据 + embedding blob
+  const candidateRows = db.prepare(`
+    SELECT c.rowid, c.chunk_id, c.paper_id, c.text, c.token_count,
+           c.section_label, c.section_title, c.section_type,
+           c.page_start, c.page_end, c.source, c.position_ratio,
+           c.parent_chunk_id, c.chunk_index,
+           c.context_before, c.context_after,
+           v.embedding
+    FROM chunks c
+    JOIN chunks_vec v ON v.rowid = c.rowid
+    ${whereClause}
+  `).all(...params) as Array<Record<string, unknown>>;
+
+  const allResults = new Map<string, RankedChunk>();
+
+  for (const variant of queryVariants) {
+    const queryVec = await embedder.embedSingle(variant);
+
+    // 计算每个候选的 L2 距离并排序
+    const scored = candidateRows.map((row) => {
+      const embBuf = row['embedding'] as Buffer;
+      const embVec = new Float32Array(
+        embBuf.buffer, embBuf.byteOffset, embBuf.byteLength / 4,
+      );
+      const distance = l2Distance(queryVec, embVec);
+      return { row, distance };
+    });
+
+    scored.sort((a, b) => a.distance - b.distance);
+
+    // 取 top expandedK
+    for (const { row, distance } of scored.slice(0, expandedK)) {
       const chunkId = row['chunk_id'] as string;
-      const distance = row['distance'] as number;
       const score = l2DistanceToScore(distance);
 
-      // §3.5: 多 query 变体去重，保留最高 score
       const existing = allResults.get(chunkId);
       if (existing && existing.score >= score) continue;
 
@@ -207,6 +321,43 @@ async function vectorRecall(
   return [...allResults.values()];
 }
 
+/** 共享：将 KNN 结果行合并到去重 Map */
+function mergeVectorRows(
+  rows: Array<Record<string, unknown>>,
+  allResults: Map<string, RankedChunk>,
+): void {
+  for (const row of rows) {
+    const chunkId = row['chunk_id'] as string;
+    const distance = row['distance'] as number;
+    const score = l2DistanceToScore(distance);
+
+    const existing = allResults.get(chunkId);
+    if (existing && existing.score >= score) continue;
+
+    allResults.set(chunkId, {
+      chunkId: chunkId as ChunkId,
+      paperId: (row['paper_id'] as string | null) as PaperId | null,
+      text: row['text'] as string,
+      tokenCount: row['token_count'] as number,
+      sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
+      sectionTitle: row['section_title'] as string | null,
+      sectionType: row['section_type'] as RankedChunk['sectionType'],
+      pageStart: row['page_start'] as number | null,
+      pageEnd: row['page_end'] as number | null,
+      source: row['source'] as ChunkSource,
+      positionRatio: row['position_ratio'] as number | null,
+      parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
+      chunkIndex: row['chunk_index'] as number | null,
+      contextBefore: row['context_before'] as string | null,
+      contextAfter: row['context_after'] as string | null,
+      score,
+      rawL2Distance: distance,
+      displayTitle: '',
+      originPath: 'vector',
+    });
+  }
+}
+
 // ─── §3.4 结构化查询路径 ───
 
 function structuredRecall(
@@ -215,20 +366,20 @@ function structuredRecall(
 ): RankedChunk[] {
   const results: RankedChunk[] = [];
 
+  // Fix #2: 使用 json_each(?) 替代 IN (?,?,...) 防止 SQLite 参数上限
   if (request.taskType === 'synthesize' && request.conceptIds.length > 0) {
-    // 按概念查询
-    const placeholders = request.conceptIds.map(() => '?').join(',');
+    const conceptsJson = JSON.stringify(request.conceptIds);
     const rows = db.prepare(`
       SELECT c.*, p.title AS display_title, pcm.confidence
       FROM paper_concept_map pcm
+      JOIN json_each(?) jc ON pcm.concept_id = jc.value
       JOIN chunks c ON c.paper_id = pcm.paper_id
       JOIN papers p ON p.id = pcm.paper_id
-      WHERE pcm.concept_id IN (${placeholders})
-        AND pcm.reviewed = 1
+      WHERE pcm.reviewed = 1
         AND pcm.relation != 'irrelevant'
       ORDER BY pcm.confidence DESC
       LIMIT 100
-    `).all(...request.conceptIds) as Array<Record<string, unknown>>;
+    `).all(conceptsJson) as Array<Record<string, unknown>>;
 
     for (const row of rows) {
       results.push(rowToRankedChunk(row, row['confidence'] as number, 'structured'));
@@ -241,18 +392,19 @@ function structuredRecall(
                COUNT(DISTINCT pcm.concept_id) AS concept_overlap,
                MAX(pcm.confidence) AS max_confidence
         FROM paper_concept_map pcm
+        JOIN json_each(?) jc ON pcm.concept_id = jc.value
         JOIN chunks c ON c.paper_id = pcm.paper_id
         JOIN papers p ON p.id = pcm.paper_id
-        WHERE pcm.concept_id IN (${placeholders})
-          AND pcm.reviewed = 1
+        WHERE pcm.reviewed = 1
           AND pcm.relation != 'irrelevant'
         GROUP BY c.chunk_id
         HAVING concept_overlap >= 2
         ORDER BY concept_overlap DESC, max_confidence DESC
         LIMIT 50
-      `).all(...request.conceptIds) as Array<Record<string, unknown>>;
+      `).all(conceptsJson) as Array<Record<string, unknown>>;
 
       for (const row of crossRows) {
+        // TODO: boost_factor=1.5 的配置化，当前硬编码
         const boosted = Math.min(1.0, (row['max_confidence'] as number) * 1.5);
         results.push(rowToRankedChunk(row, boosted, 'structured'));
       }
@@ -260,16 +412,16 @@ function structuredRecall(
   }
 
   if (request.taskType === 'article' && request.paperIds.length > 0) {
-    const placeholders = request.paperIds.map(() => '?').join(',');
+    const papersJson = JSON.stringify(request.paperIds);
     const rows = db.prepare(`
       SELECT c.*, p.title AS display_title
       FROM chunks c
       JOIN papers p ON p.id = c.paper_id
-      WHERE c.paper_id IN (${placeholders})
-        AND c.source = 'paper'
+      JOIN json_each(?) jp ON c.paper_id = jp.value
+      WHERE c.source = 'paper'
       ORDER BY c.paper_id, c.position_ratio
       LIMIT 200
-    `).all(...request.paperIds) as Array<Record<string, unknown>>;
+    `).all(papersJson) as Array<Record<string, unknown>>;
 
     for (const row of rows) {
       results.push(rowToRankedChunk(row, 1.0, 'structured'));
@@ -418,6 +570,7 @@ function computeExpandedK(
   request: RetrievalRequest,
   config: RagConfig,
   expandParams: { expandFactorMultiplier: number; topKMultiplier: number },
+  db?: Database.Database,
 ): number {
   let baseTopK: number;
   switch (request.budgetMode) {
@@ -427,7 +580,25 @@ function computeExpandedK(
   }
 
   baseTopK = Math.ceil(baseTopK * expandParams.topKMultiplier);
-  const expandFactor = config.expandFactor * expandParams.expandFactorMultiplier;
+  let expandFactor = config.expandFactor * expandParams.expandFactorMultiplier;
+
+  // §5.3 动态 expandFactor：当 paperIds 过滤时基于 R 估算
+  // R = |filterPaperIds| / |totalPapers|, expandFactor = ceil(1/R), 上限 10
+  if (db && request.paperIds && request.paperIds.length > 0) {
+    const totalPapers = (
+      db.prepare('SELECT COUNT(*) AS cnt FROM papers').get() as { cnt: number }
+    ).cnt;
+    if (totalPapers > 0) {
+      const R = request.paperIds.length / totalPapers;
+      const dynamicFactor = Math.ceil(1 / R);
+      // 取 max(静态, 动态)——动态可能比静态更大，确保足够召回
+      expandFactor = Math.max(expandFactor, dynamicFactor);
+      // 上限 10——防止极端情况 K_e 过大
+      expandFactor = Math.min(expandFactor, 10);
+    }
+  }
+
+  // TODO: 多条件组合时 R 取乘积的精确建模
 
   return Math.ceil(baseTopK * expandFactor);
 }
@@ -477,7 +648,7 @@ export async function retrieve(
     expandParams = expanded.expandParams;
   }
 
-  const expandedK = computeExpandedK(request, config, expandParams);
+  const expandedK = computeExpandedK(request, config, expandParams, db);
 
   logger.debug('Retrieval started', {
     queryVariants: queryVariants.length,

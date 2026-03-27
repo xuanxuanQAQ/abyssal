@@ -1,47 +1,95 @@
 /**
- * NotesView — 双层笔记系统视图（v2.0）
+ * NotesView — dual-layer notes system (v2.0)
  *
- * 左 Tab: Memos（碎片笔记流）
- * 右 Tab: Research Notes（结构化笔记网格/编辑器）
+ * Left: NotesFilterSidebar (200px, multi-dimensional filter)
+ * Right: Tab switching between MemoStream and NoteCardGrid/Editor
+ *
+ * See spec: section 6.1
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { StickyNote, FileText } from 'lucide-react';
 import { MemoStream } from './memo/MemoStream';
 import { NoteCardGrid } from './note/NoteCardGrid';
 import { NoteEditor } from './note/NoteEditor';
+import { NotesFilterSidebar } from './NotesFilterSidebar';
+import type { MemoFilter } from '../../../shared-types/models';
+import { useConceptList } from '../../core/ipc/hooks/useConcepts';
+import { useMemoList } from '../../core/ipc/hooks/useMemos';
 
 export function NotesView() {
   const [activeTab, setActiveTab] = useState<'memos' | 'notes'>('memos');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<MemoFilter>({});
+
+  // Load concepts for filter sidebar
+  const { data: concepts } = useConceptList();
+  const conceptList = useMemo(
+    () => (concepts ?? []).map((c) => {
+      const cr = c as unknown as Record<string, unknown>;
+      return {
+        id: (cr['id'] as string) ?? '',
+        nameEn: (cr['nameEn'] ?? cr['name_en'] ?? cr['id']) as string,
+      };
+    }),
+    [concepts],
+  );
+
+  // Aggregate tags from memo data for tag cloud
+  const { data: memoData } = useMemoList({});
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const page of memoData?.pages ?? []) {
+      for (const memo of (page as unknown as Array<Record<string, unknown>>)) {
+        const tags = (memo['tags'] as string[]) ?? [];
+        tags.forEach((t) => tagSet.add(t));
+      }
+    }
+    return Array.from(tagSet).sort();
+  }, [memoData]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
-      <Tabs.Root value={activeTab} onValueChange={(v) => { setActiveTab(v as 'memos' | 'notes'); setEditingNoteId(null); }}>
-        <Tabs.List style={{
-          display: 'flex', alignItems: 'stretch', height: 36, borderBottom: '1px solid var(--border-color)', flexShrink: 0,
-        }}>
-          <Tabs.Trigger value="memos" style={tabTriggerStyle(activeTab === 'memos')}>
-            <StickyNote size={14} style={{ marginRight: 4 }} /> Memos
-          </Tabs.Trigger>
-          <Tabs.Trigger value="notes" style={tabTriggerStyle(activeTab === 'notes')}>
-            <FileText size={14} style={{ marginRight: 4 }} /> Research Notes
-          </Tabs.Trigger>
-        </Tabs.List>
+    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+      {/* Filter Sidebar */}
+      <NotesFilterSidebar
+        filter={filter}
+        onFilterChange={setFilter}
+        concepts={conceptList}
+        allTags={allTags}
+      />
 
-        <Tabs.Content value="memos" style={{ flex: 1, overflow: 'hidden' }}>
-          <MemoStream />
-        </Tabs.Content>
+      {/* Main content area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Tabs.Root
+          value={activeTab}
+          onValueChange={(v) => { setActiveTab(v as 'memos' | 'notes'); setEditingNoteId(null); }}
+        >
+          <Tabs.List style={{
+            display: 'flex', alignItems: 'stretch', height: 36,
+            borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
+          }}>
+            <Tabs.Trigger value="memos" style={tabTriggerStyle(activeTab === 'memos')}>
+              <StickyNote size={14} style={{ marginRight: 4 }} /> Memos
+            </Tabs.Trigger>
+            <Tabs.Trigger value="notes" style={tabTriggerStyle(activeTab === 'notes')}>
+              <FileText size={14} style={{ marginRight: 4 }} /> Research Notes
+            </Tabs.Trigger>
+          </Tabs.List>
 
-        <Tabs.Content value="notes" style={{ flex: 1, overflow: 'hidden' }}>
-          {editingNoteId ? (
-            <NoteEditor noteId={editingNoteId} onBack={() => setEditingNoteId(null)} />
-          ) : (
-            <NoteCardGrid onOpenNote={setEditingNoteId} />
-          )}
-        </Tabs.Content>
-      </Tabs.Root>
+          <Tabs.Content value="memos" style={{ flex: 1, overflow: 'hidden' }}>
+            <MemoStream filter={filter} />
+          </Tabs.Content>
+
+          <Tabs.Content value="notes" style={{ flex: 1, overflow: 'hidden' }}>
+            {editingNoteId ? (
+              <NoteEditor noteId={editingNoteId} onBack={() => setEditingNoteId(null)} />
+            ) : (
+              <NoteCardGrid onOpenNote={setEditingNoteId} filter={filter} />
+            )}
+          </Tabs.Content>
+        </Tabs.Root>
+      </div>
     </div>
   );
 }

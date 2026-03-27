@@ -245,7 +245,6 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
 
     // Initial paint
     repaint(scrollLeft, scrollTop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasWidth, canvasHeight, dpr]);
 
   // Compute CSS transform offset for smooth scrolling (Phase 1)

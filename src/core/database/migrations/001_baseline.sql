@@ -1,5 +1,6 @@
 -- ═══ Abyssal Baseline Schema v001 ═══
 -- 按依赖顺序排列（被引用的表在前）
+-- 规范：不使用 CHECK 约束，全部枚举校验在 DAO 层执行
 
 -- ─── 论文与书目 ───
 
@@ -12,10 +13,8 @@ CREATE TABLE papers (
   arxiv_id        TEXT,
   abstract        TEXT,
   citation_count  INTEGER,
-  paper_type      TEXT NOT NULL DEFAULT 'unknown'
-                  CHECK(paper_type IN ('journal','conference','book','chapter','preprint','review','unknown')),
-  source          TEXT NOT NULL DEFAULT 'manual'
-                  CHECK(source IN ('semantic_scholar','openalex','arxiv','crossref','bibtex','ris','manual')),
+  paper_type      TEXT NOT NULL DEFAULT 'unknown',
+  source          TEXT NOT NULL DEFAULT 'manual',
   venue           TEXT,
   journal         TEXT,
   volume          TEXT,
@@ -33,15 +32,12 @@ CREATE TABLE papers (
   url             TEXT,
   bibtex_key      TEXT,
   biblio_complete INTEGER NOT NULL DEFAULT 0,
-  fulltext_status TEXT NOT NULL DEFAULT 'pending'
-                  CHECK(fulltext_status IN ('pending','acquired','abstract_only','failed')),
+  fulltext_status TEXT NOT NULL DEFAULT 'pending',
   fulltext_path   TEXT,
   text_path       TEXT,
-  analysis_status TEXT NOT NULL DEFAULT 'pending'
-                  CHECK(analysis_status IN ('pending','analyzed','reviewed','integrated','parse_failed')),
+  analysis_status TEXT NOT NULL DEFAULT 'pending',
   analysis_path   TEXT,
-  relevance       TEXT NOT NULL DEFAULT 'medium'
-                  CHECK(relevance IN ('high','medium','low','excluded')),
+  relevance       TEXT NOT NULL DEFAULT 'medium',
   decision_note   TEXT,
   failure_reason  TEXT,
   discovered_at   TEXT NOT NULL,
@@ -49,7 +45,7 @@ CREATE TABLE papers (
 );
 
 CREATE UNIQUE INDEX idx_papers_doi ON papers(doi) WHERE doi IS NOT NULL;
-CREATE UNIQUE INDEX idx_papers_arxiv ON papers(arxiv_id) WHERE arxiv_id IS NOT NULL;
+CREATE INDEX idx_papers_arxiv ON papers(arxiv_id) WHERE arxiv_id IS NOT NULL;
 CREATE INDEX idx_papers_year ON papers(year);
 CREATE INDEX idx_papers_fulltext_status ON papers(fulltext_status);
 CREATE INDEX idx_papers_analysis_status ON papers(analysis_status);
@@ -75,8 +71,7 @@ CREATE TABLE concepts (
   layer             TEXT NOT NULL,
   definition        TEXT NOT NULL,
   search_keywords   TEXT NOT NULL DEFAULT '[]',
-  maturity          TEXT NOT NULL DEFAULT 'tentative'
-                    CHECK(maturity IN ('tentative','working','established')),
+  maturity          TEXT NOT NULL DEFAULT 'tentative',
   parent_id         TEXT REFERENCES concepts(id) ON DELETE SET NULL,
   history           TEXT NOT NULL DEFAULT '[]',
   deprecated        INTEGER NOT NULL DEFAULT 0,
@@ -101,8 +96,7 @@ CREATE TABLE annotations (
   rect_x1       REAL NOT NULL,
   rect_y1       REAL NOT NULL,
   selected_text TEXT NOT NULL,
-  type          TEXT NOT NULL
-                CHECK(type IN ('highlight','note','concept_tag')),
+  type          TEXT NOT NULL,
   color         TEXT NOT NULL DEFAULT '#FFEB3B',
   comment       TEXT,
   concept_id    TEXT REFERENCES concepts(id) ON DELETE SET NULL,
@@ -118,9 +112,8 @@ CREATE INDEX idx_annotations_type ON annotations(type);
 CREATE TABLE paper_concept_map (
   paper_id      TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
   concept_id    TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-  relation      TEXT NOT NULL
-                CHECK(relation IN ('supports','challenges','extends','operationalizes','irrelevant')),
-  confidence    REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+  relation      TEXT NOT NULL,
+  confidence    REAL NOT NULL,
   evidence      TEXT NOT NULL DEFAULT '{}',
   annotation_id INTEGER REFERENCES annotations(id) ON DELETE SET NULL,
   reviewed      INTEGER NOT NULL DEFAULT 0,
@@ -130,7 +123,6 @@ CREATE TABLE paper_concept_map (
   PRIMARY KEY (paper_id, concept_id)
 );
 
-CREATE INDEX idx_pcm_paper ON paper_concept_map(paper_id);
 CREATE INDEX idx_pcm_concept ON paper_concept_map(concept_id);
 CREATE INDEX idx_pcm_reviewed ON paper_concept_map(reviewed);
 CREATE INDEX idx_pcm_relation ON paper_concept_map(relation);
@@ -140,8 +132,8 @@ CREATE INDEX idx_pcm_created ON paper_concept_map(created_at);
 
 CREATE TABLE seeds (
   paper_id  TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE,
-  seed_type TEXT NOT NULL
-            CHECK(seed_type IN ('axiom','milestone','exploratory')),
+  seed_type TEXT NOT NULL,
+  note      TEXT,
   added_at  TEXT NOT NULL
 );
 
@@ -151,7 +143,9 @@ CREATE TABLE search_log (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   query        TEXT NOT NULL,
   api_source   TEXT NOT NULL,
+  params       TEXT,
   result_count INTEGER NOT NULL,
+  duration_ms  INTEGER,
   executed_at  TEXT NOT NULL
 );
 
@@ -170,19 +164,19 @@ CREATE TABLE chunks (
   page_end        INTEGER,
   text            TEXT NOT NULL,
   token_count     INTEGER NOT NULL,
-  source          TEXT NOT NULL
-                  CHECK(source IN ('paper','annotation','private','memo','note','figure')),
+  source          TEXT NOT NULL DEFAULT 'paper',
   position_ratio  REAL,
   parent_chunk_id TEXT,
   chunk_index     INTEGER,
   context_before  TEXT,
-  context_after   TEXT
+  context_after   TEXT,
+  created_at      TEXT
 );
 
 CREATE INDEX idx_chunks_paper ON chunks(paper_id) WHERE paper_id IS NOT NULL;
 CREATE INDEX idx_chunks_source ON chunks(source);
 CREATE INDEX idx_chunks_section_type ON chunks(section_type) WHERE section_type IS NOT NULL;
-CREATE INDEX idx_chunks_chunk_id ON chunks(chunk_id);
+CREATE UNIQUE INDEX idx_chunks_chunk_id ON chunks(chunk_id);
 
 -- ─── 向量虚拟表（维度在运行时替换 {EMBEDDING_DIMENSION} 占位符） ───
 
@@ -195,12 +189,10 @@ CREATE VIRTUAL TABLE chunks_vec USING vec0(
 CREATE TABLE articles (
   id              TEXT PRIMARY KEY,
   title           TEXT NOT NULL,
-  style           TEXT NOT NULL
-                  CHECK(style IN ('academic_blog','formal_paper','technical_doc')),
+  style           TEXT NOT NULL DEFAULT 'academic_blog',
   csl_style_id    TEXT NOT NULL,
   output_language TEXT NOT NULL DEFAULT 'zh-CN',
-  status          TEXT NOT NULL DEFAULT 'drafting'
-                  CHECK(status IN ('drafting','reviewing','published')),
+  status          TEXT NOT NULL DEFAULT 'drafting',
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -216,8 +208,7 @@ CREATE TABLE outlines (
   writing_instruction TEXT,
   concept_ids         TEXT NOT NULL DEFAULT '[]',
   paper_ids           TEXT NOT NULL DEFAULT '[]',
-  status              TEXT NOT NULL DEFAULT 'pending'
-                      CHECK(status IN ('pending','drafted','revised','finalized')),
+  status              TEXT NOT NULL DEFAULT 'pending',
   created_at          TEXT NOT NULL,
   updated_at          TEXT NOT NULL
 );
@@ -242,10 +233,8 @@ CREATE TABLE section_drafts (
 CREATE TABLE paper_relations (
   source_paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
   target_paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-  edge_type       TEXT NOT NULL
-                  CHECK(edge_type IN ('semantic_neighbor','concept_agree','concept_conflict',
-                                      'concept_extend','article_cites')),
-  weight          REAL NOT NULL CHECK(weight >= 0.0 AND weight <= 1.0),
+  edge_type       TEXT NOT NULL,
+  weight          REAL NOT NULL,
   metadata        TEXT,
   computed_at     TEXT NOT NULL,
   PRIMARY KEY (source_paper_id, target_paper_id, edge_type)
@@ -266,8 +255,7 @@ CREATE TABLE suggested_concepts (
   closest_existing_concept_id     TEXT REFERENCES concepts(id) ON DELETE SET NULL,
   closest_existing_concept_similarity TEXT,
   reason                          TEXT,
-  status                          TEXT NOT NULL DEFAULT 'pending'
-                                  CHECK(status IN ('pending','adopted','dismissed')),
+  status                          TEXT NOT NULL DEFAULT 'pending',
   adopted_concept_id              TEXT REFERENCES concepts(id) ON DELETE SET NULL,
   created_at                      TEXT NOT NULL,
   updated_at                      TEXT NOT NULL
@@ -296,6 +284,29 @@ CREATE TABLE research_memos (
 CREATE INDEX idx_memos_created ON research_memos(created_at DESC);
 CREATE INDEX idx_memos_indexed ON research_memos(indexed) WHERE indexed = 0;
 
+-- ─── Memo 多对多映射表（规范化 JSON 数组，支持索引驱动查询） ───
+
+CREATE TABLE memo_paper_map (
+  memo_id   INTEGER NOT NULL REFERENCES research_memos(id) ON DELETE CASCADE,
+  paper_id  TEXT    NOT NULL,
+  PRIMARY KEY (memo_id, paper_id)
+);
+CREATE INDEX idx_memo_paper_map_paper ON memo_paper_map(paper_id);
+
+CREATE TABLE memo_concept_map (
+  memo_id    INTEGER NOT NULL REFERENCES research_memos(id) ON DELETE CASCADE,
+  concept_id TEXT    NOT NULL,
+  PRIMARY KEY (memo_id, concept_id)
+);
+CREATE INDEX idx_memo_concept_map_concept ON memo_concept_map(concept_id);
+
+CREATE TABLE memo_note_map (
+  memo_id INTEGER NOT NULL REFERENCES research_memos(id) ON DELETE CASCADE,
+  note_id TEXT    NOT NULL,
+  PRIMARY KEY (memo_id, note_id)
+);
+CREATE INDEX idx_memo_note_map_note ON memo_note_map(note_id);
+
 -- ─── 结构化笔记 ───
 
 CREATE TABLE research_notes (
@@ -312,8 +323,6 @@ CREATE TABLE research_notes (
 CREATE INDEX idx_notes_updated ON research_notes(updated_at DESC);
 
 -- ═══ updated_at 自动维护触发器 ═══
--- 将时间戳更新下沉到数据库层，防止 DAO 级联更新遗漏 updated_at。
--- DAO 层仍可显式设置 updated_at，触发器仅在 DAO 未设置时兜底。
 
 CREATE TRIGGER trg_papers_updated_at AFTER UPDATE ON papers
 FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
@@ -372,9 +381,6 @@ BEGIN
 END;
 
 -- ═══ chunks_vec 级联删除触发器 ═══
--- chunks_vec 是虚拟表，不支持 ON DELETE CASCADE。
--- 此触发器确保直接 DELETE FROM chunks / DELETE FROM papers 时
--- 不会留下僵尸向量数据。
 
 CREATE TRIGGER trg_chunks_before_delete BEFORE DELETE ON chunks
 FOR EACH ROW

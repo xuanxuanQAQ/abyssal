@@ -28,6 +28,7 @@ interface PaperRowProps {
   isFocused: boolean;
   onClick: (e: React.MouseEvent) => void;
   onToggleExpansion: () => void;
+  onToggleSelect: () => void;
 }
 
 export const PaperRow = memo(
@@ -38,6 +39,7 @@ export const PaperRow = memo(
     isFocused,
     onClick,
     onToggleExpansion,
+    onToggleSelect,
   }: PaperRowProps) {
     const paper = row.original;
     const { dragRef, dragAttributes, dragListeners } = usePaperDrag(paper);
@@ -88,7 +90,7 @@ export const PaperRow = memo(
               return (
                 <div key={cell.id} role="gridcell" style={style}>
                   {columnId === 'select' && (
-                    <SelectCell isSelected={isSelected} />
+                    <SelectCell isSelected={isSelected} onToggle={onToggleSelect} />
                   )}
                   {columnId === 'relevance' && (
                     <RelevanceCell paper={paper} />

@@ -96,7 +96,6 @@ export function useIncrementalGraph(
   const graphData = useMemo<GraphData>(() => ({
     nodes: Array.from(nodesRef.current.values()),
     edges: Array.from(edgesRef.current.values()),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [version, initialData]);
 
   return {

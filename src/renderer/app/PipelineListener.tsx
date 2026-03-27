@@ -99,6 +99,8 @@ const WORKFLOW_LABELS: Record<WorkflowType, string> = {
   acquire: '全文获取',
   analyze: 'AI 分析',
   synthesize: '综合生成',
+  article: '文章生成',
+  bibliography: '参考文献',
   generate: '内容生成',
 };
 

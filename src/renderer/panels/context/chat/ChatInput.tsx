@@ -149,15 +149,15 @@ export function ChatInput({ source, onSend, disabled }: ChatInputProps) {
           title="发送 (Ctrl+Enter)"
           style={{
             position: 'absolute',
-            right: 6,
-            bottom: 6,
-            width: 30,
-            height: 30,
+            right: 5,
+            top: 5,
+            width: 34,
+            height: 34,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             border: 'none',
-            borderRadius: 8,
+            borderRadius: 10,
             backgroundColor: hasDraft ? 'var(--accent-color)' : 'transparent',
             color: hasDraft ? 'white' : 'var(--text-muted)',
             cursor: hasDraft ? 'pointer' : 'default',
@@ -169,16 +169,6 @@ export function ChatInput({ source, onSend, disabled }: ChatInputProps) {
         </button>
       </div>
 
-      {/* Ctrl+Enter 提示 */}
-      <div style={{
-        fontSize: 10,
-        color: 'var(--text-muted)',
-        textAlign: 'right',
-        marginTop: 4,
-        opacity: 0.6,
-      }}>
-        Ctrl+Enter 发送
-      </div>
     </div>
   );
 }

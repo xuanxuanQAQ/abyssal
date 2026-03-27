@@ -1,9 +1,12 @@
 // ═══ 统计与完整性检查 ═══
-// §10: getStats / checkIntegrity
+// §8.1: 运行时指标（含 WAL 文件大小、空闲页面、页面大小）
+// §8.2: 完整性检查（含 PRAGMA integrity_check、foreign_key_check、维度抽样）
 
 import type Database from 'better-sqlite3';
+import * as fs from 'node:fs';
+import { hasVecTable } from './chunks';
 
-// ─── §10.1 getStats ───
+// ─── §8.1 getStats ───
 
 export interface DatabaseStats {
   papers: {
@@ -48,6 +51,12 @@ export interface DatabaseStats {
   notes: number;
   pendingSuggestions: number;
   dbSizeBytes: number;
+  /** WAL 文件大小（字节），-1 表示 WAL 文件不存在 */
+  walSizeBytes: number;
+  /** 空闲页面数（PRAGMA freelist_count） */
+  freePageCount: number;
+  /** 页面大小（PRAGMA page_size），固定 4096 B */
+  pageSize: number;
 }
 
 export function getStats(db: Database.Database): DatabaseStats {
@@ -125,6 +134,21 @@ export function getStats(db: Database.Database): DatabaseStats {
     )[0]!.page_size;
     const dbSizeBytes = pageCount * pageSize;
 
+    // §8.1: 空闲页面数
+    const freePageCount = (
+      db.pragma('freelist_count') as [{ freelist_count: number }]
+    )[0]!.freelist_count;
+
+    // §8.1: WAL 文件大小
+    let walSizeBytes = -1;
+    try {
+      const walPath = db.name + '-wal';
+      const stat = fs.statSync(walPath);
+      walSizeBytes = stat.size;
+    } catch {
+      // WAL 文件不存在（非 WAL 模式或已 checkpoint）
+    }
+
     return {
       papers: {
         total: paperRow['total'] ?? 0,
@@ -168,13 +192,16 @@ export function getStats(db: Database.Database): DatabaseStats {
       notes,
       pendingSuggestions,
       dbSizeBytes,
+      walSizeBytes,
+      freePageCount,
+      pageSize,
     };
   });
 
   return statsFn();
 }
 
-// ─── §10.2 checkIntegrity ───
+// ─── §8.2 checkIntegrity ───
 
 export type IntegritySeverity = 'error' | 'warn' | 'info';
 
@@ -192,6 +219,47 @@ export interface IntegrityReport {
 
 export function checkIntegrity(db: Database.Database): IntegrityReport {
   const checks: IntegrityCheckResult[] = [];
+
+  // §8.2: PRAGMA integrity_check — B-tree 结构、页面空闲列表、索引一致性
+  try {
+    const integrityRows = db.pragma('integrity_check') as Array<{ integrity_check: string }>;
+    const isOk = integrityRows.length === 1 && integrityRows[0]!.integrity_check === 'ok';
+    checks.push({
+      name: 'sqlite_integrity',
+      severity: isOk ? 'info' : 'error',
+      count: isOk ? 0 : integrityRows.length,
+      sampleIds: isOk ? [] : integrityRows.slice(0, 5).map((r) => r.integrity_check),
+    });
+  } catch (err) {
+    checks.push({
+      name: 'sqlite_integrity',
+      severity: 'error',
+      count: 1,
+      sampleIds: [(err as Error).message.slice(0, 200)],
+    });
+  }
+
+  // §8.2: PRAGMA foreign_key_check — 外键引用完整性
+  try {
+    const fkRows = db.pragma('foreign_key_check') as Array<{
+      table: string; rowid: number; parent: string; fkid: number;
+    }>;
+    checks.push({
+      name: 'foreign_key_integrity',
+      severity: fkRows.length > 0 ? 'error' : 'info',
+      count: fkRows.length,
+      sampleIds: fkRows.slice(0, 10).map(
+        (r) => `${r.table}:${r.rowid}→${r.parent}`,
+      ),
+    });
+  } catch (err) {
+    checks.push({
+      name: 'foreign_key_integrity',
+      severity: 'error',
+      count: 1,
+      sampleIds: [(err as Error).message.slice(0, 200)],
+    });
+  }
 
   // 1. 孤立 chunk（paper_id 不存在）
   const orphanChunks = db.prepare(`
@@ -246,11 +314,7 @@ export function checkIntegrity(db: Database.Database): IntegrityReport {
     sampleIds: unindexedMemos.map((r) => String(r.id)),
   });
 
-  // 5. note 文件缺失 — 返回 file_path 列表，由调用方检查文件系统
-  // 此处仅统计 note 数量
-  const noteCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM research_notes').get() as { cnt: number }
-  ).cnt;
+  // 5. note 文件缺失（返回 file_path 列表，由调用方检查文件系统）
   checks.push({
     name: 'note_file_existence',
     severity: 'warn',
@@ -271,32 +335,34 @@ export function checkIntegrity(db: Database.Database): IntegrityReport {
     sampleIds: staleRelations.map((r) => r.source_paper_id),
   });
 
-  // 7. chunks_vec 孤立行
-  const orphanVec = db.prepare(`
-    SELECT rowid FROM chunks_vec
-    WHERE rowid NOT IN (SELECT rowid FROM chunks)
-    LIMIT 10
-  `).all() as { rowid: number }[];
-  checks.push({
-    name: 'orphan_chunks_vec',
-    severity: 'error',
-    count: orphanVec.length,
-    sampleIds: orphanVec.map((r) => String(r.rowid)),
-  });
+  // 7. chunks_vec 孤立行（仅在 vec 表存在时检查）
+  if (hasVecTable(db)) {
+    const orphanVec = db.prepare(`
+      SELECT rowid FROM chunks_vec
+      WHERE rowid NOT IN (SELECT rowid FROM chunks)
+      LIMIT 10
+    `).all() as { rowid: number }[];
+    checks.push({
+      name: 'orphan_chunks_vec',
+      severity: 'error',
+      count: orphanVec.length,
+      sampleIds: orphanVec.map((r) => String(r.rowid)),
+    });
 
-  // 8. chunks 缺向量
-  const missingVec = db.prepare(`
-    SELECT rowid FROM chunks
-    WHERE rowid NOT IN (SELECT rowid FROM chunks_vec)
-      AND source != 'annotation'
-    LIMIT 10
-  `).all() as { rowid: number }[];
-  checks.push({
-    name: 'missing_chunk_vectors',
-    severity: 'warn',
-    count: missingVec.length,
-    sampleIds: missingVec.map((r) => String(r.rowid)),
-  });
+    // 8. chunks 缺向量
+    const missingVec = db.prepare(`
+      SELECT rowid FROM chunks
+      WHERE rowid NOT IN (SELECT rowid FROM chunks_vec)
+        AND source != 'annotation'
+      LIMIT 10
+    `).all() as { rowid: number }[];
+    checks.push({
+      name: 'missing_chunk_vectors',
+      severity: 'warn',
+      count: missingVec.length,
+      sampleIds: missingVec.map((r) => String(r.rowid)),
+    });
+  } // end hasVecTable
 
   // 9. memo 引用不存在的论文
   const memoOrphanPapers = db.prepare(`
@@ -323,6 +389,38 @@ export function checkIntegrity(db: Database.Database): IntegrityReport {
     count: memoOrphanConcepts.length,
     sampleIds: memoOrphanConcepts.map((r) => String(r.id)),
   });
+
+  // §8.2: 嵌入维度抽样验证（随机 10 条 chunks_vec，验证向量字节长度）
+  if (hasVecTable(db)) try {
+    const metaDimRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_dimension'",
+    ).get() as { value: string } | undefined;
+
+    if (metaDimRow) {
+      const expectedDim = parseInt(metaDimRow.value, 10);
+      const expectedBytes = expectedDim * 4; // float32
+
+      // sqlite-vec 的 embedding 列返回 blob，用 length() 检查字节长度
+      const sampleRows = db.prepare(`
+        SELECT rowid, length(embedding) AS embed_len
+        FROM chunks_vec
+        ORDER BY RANDOM()
+        LIMIT 10
+      `).all() as Array<{ rowid: number; embed_len: number }>;
+
+      const badRows = sampleRows.filter((r) => r.embed_len !== expectedBytes);
+      checks.push({
+        name: 'embedding_dimension_consistency',
+        severity: badRows.length > 0 ? 'error' : 'info',
+        count: badRows.length,
+        sampleIds: badRows.map(
+          (r) => `rowid=${r.rowid}(len=${r.embed_len},expected=${expectedBytes})`,
+        ),
+      });
+    }
+  } catch {
+    // _meta 或 chunks_vec 不可用——跳过
+  }
 
   const hasErrors = checks.some((c) => c.severity === 'error' && c.count > 0);
   return { ok: !hasErrors, checks };

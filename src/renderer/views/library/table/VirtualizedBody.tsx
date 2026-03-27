@@ -20,6 +20,7 @@ interface VirtualizedBodyProps {
   isExpanded: (rowId: string) => boolean;
   onRowClick: (rowId: string, e: React.MouseEvent) => void;
   onToggleExpansion: (rowId: string) => void;
+  onToggleSelect: (rowId: string) => void;
   expandedRowIds: Record<string, true>;
   selectedPaperId: string | null;
 }
@@ -30,6 +31,7 @@ export function VirtualizedBody({
   isExpanded,
   onRowClick,
   onToggleExpansion,
+  onToggleSelect,
   expandedRowIds,
   selectedPaperId,
 }: VirtualizedBodyProps) {
@@ -160,6 +162,7 @@ export function VirtualizedBody({
                 isFocused={selectedPaperId === paperId}
                 onClick={(e) => onRowClick(paperId, e)}
                 onToggleExpansion={() => onToggleExpansion(paperId)}
+                onToggleSelect={() => onToggleSelect(paperId)}
               />
             </div>
           );

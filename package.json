@@ -4,7 +4,7 @@
   "description": "AI-powered academic literature research pipeline",
   "main": "dist/electron/main.js",
   "scripts": {
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "npm rebuild better-sqlite3",
     "dev": "npm run build:main && concurrently -n vite,tsc,esbuild,electron \"npm run dev:renderer\" \"npm run dev:tsc\" \"npm run dev:esbuild\" \"npm run dev:electron\"",
     "dev:renderer": "vite -c vite.renderer.config.ts",
     "dev:tsc": "tsc -p tsconfig.main.json --noEmit --watch --preserveWatchOutput",
@@ -17,13 +17,19 @@
     "batch": "node dist/cli/batch.js",
     "package": "npm run build && electron-builder",
     "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",
+    "test:prepare": "npm rebuild better-sqlite3",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:renderer": "vitest run --project renderer",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:all": "npm run test:prepare && vitest run",
+    "electron:prepare": "npm rebuild better-sqlite3",
+    "ci": "npm run typecheck && npm run lint && npm run test:prepare && vitest run",
+    "test:mutate": "npx stryker run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40",
@@ -66,6 +72,7 @@
     "immer": "^10.0",
     "js-tiktoken": "^1.0.21",
     "js-yaml": "^4.1",
+    "jsonrepair": "^3.13.3",
     "katex": "^0.16.0",
     "lucide-react": "^0.460.0",
     "mupdf": "^1.27.0",
@@ -84,10 +91,14 @@
     "sigma": "^3.0.2",
     "smol-toml": "^1.0",
     "tesseract.js": "^5.0",
+    "zod": "^4.3.6",
     "zustand": "^5.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/sdk": "^1.0",
+    "@stryker-mutator/core": "^9.6.0",
+    "@stryker-mutator/vitest-runner": "^9.6.0",
     "@types/better-sqlite3": "^7.0",
     "@types/d3": "^7.0",
     "@types/diff-match-patch": "^1.0.0",
@@ -103,9 +114,11 @@
     "electron-builder": "^25.0",
     "electronmon": "^2.0.4",
     "esbuild": "^0.27.4",
+    "eslint": "^10.1.0",
     "jsdom": "^29.0.1",
     "tsx": "^4.21.0",
     "typescript": "^5.7",
+    "typescript-eslint": "^8.57.2",
     "vite": "^8.0.2",
     "vitest": "^4.1.1"
   }

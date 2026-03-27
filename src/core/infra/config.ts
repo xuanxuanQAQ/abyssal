@@ -1,5 +1,6 @@
 import type {
   AbyssalConfig,
+  GlobalConfig,
   ProjectConfig,
   AcquireConfig,
   DiscoveryConfig,
@@ -383,5 +384,120 @@ export class ConfigLoader {
         context: { fieldPath: 'project.mode', actual: config.project.mode },
       });
     }
+  }
+
+  // ═══ 工作区模式：从 .abyssal/config.toml 加载并与全局配置合并 ═══
+
+  /**
+   * 从工作区目录加载配置，与全局配置合并生成运行时 AbyssalConfig。
+   *
+   * 合并策略：
+   * - 全局配置提供：apiKeys, llm, rag, acquire
+   * - 工作区配置提供：project, analysis, discovery, language, concepts
+   * - workspace 段根据工作区根目录自动生成（不再需要手动配置 baseDir）
+   * - 工作区配置中如果也指定了 llm/rag/acquire，会覆盖全局值（per-project override）
+   */
+  static loadFromWorkspace(
+    workspaceRootDir: string,
+    globalConfig: GlobalConfig,
+  ): Readonly<AbyssalConfig> {
+    const fs = require('node:fs');
+    const path = require('node:path');
+
+    const configPath = path.join(workspaceRootDir, '.abyssal', 'config.toml');
+
+    // 解析工作区 TOML（如果存在）
+    let raw: Record<string, unknown> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        const content = fs.readFileSync(configPath, 'utf-8') as string;
+        const toml = require('smol-toml');
+        raw = toml.parse(content) as Record<string, unknown>;
+      } catch (cause) {
+        // 工作区 TOML 解析失败，使用默认值
+        raw = {};
+      }
+    }
+
+    // 从工作区 TOML 提取各段
+    const rawProject = (raw['project'] ?? {}) as Record<string, unknown>;
+    const rawAnalysis = (raw['analysis'] ?? {}) as Record<string, unknown>;
+    const rawDiscovery = (raw['discovery'] ?? {}) as Record<string, unknown>;
+    const rawLanguage = (raw['language'] ?? {}) as Record<string, unknown>;
+    const rawConcepts = (raw['concepts'] ?? {}) as Record<string, unknown>;
+
+    // 工作区可选覆盖全局的段
+    const rawLlm = (raw['llm'] ?? {}) as Record<string, unknown>;
+    const rawRag = (raw['rag'] ?? {}) as Record<string, unknown>;
+    const rawAcquire = (raw['acquire'] ?? {}) as Record<string, unknown>;
+
+    // 项目名：优先工作区 TOML，否则取目录名
+    const projectName = (rawProject['name'] as string) ?? path.basename(workspaceRootDir);
+
+    // 工作区路径段：基于新的 .abyssal/ 结构自动生成
+    const workspace: WorkspaceConfig = {
+      baseDir: workspaceRootDir,
+      dbFileName: 'abyssal.db',
+      pdfDir: 'pdfs',
+      textDir: 'texts',
+      reportsDir: 'reports',
+      notesDir: 'notes',
+      logsDir: path.join('.abyssal', 'logs'),
+      snapshotsDir: path.join('.abyssal', 'snapshots'),
+      privateDocsDir: 'private_docs',
+    };
+
+    const config: AbyssalConfig = {
+      project: {
+        ...DEFAULT_PROJECT,
+        ...rawProject,
+        name: projectName,
+      } as ProjectConfig,
+      // 全局 → 工作区覆盖
+      acquire: {
+        ...DEFAULT_ACQUIRE,
+        ...globalConfig.acquire,
+        ...rawAcquire,
+      } as AcquireConfig,
+      discovery: {
+        ...DEFAULT_DISCOVERY,
+        ...rawDiscovery,
+      } as DiscoveryConfig,
+      analysis: {
+        ...DEFAULT_ANALYSIS,
+        ...rawAnalysis,
+      } as AnalysisConfig,
+      // 全局 → 工作区覆盖
+      rag: {
+        ...DEFAULT_RAG,
+        ...globalConfig.rag,
+        ...rawRag,
+      } as RagConfig,
+      language: {
+        ...DEFAULT_LANGUAGE,
+        ...rawLanguage,
+      } as LanguageConfig,
+      // 全局 → 工作区覆盖
+      llm: {
+        ...DEFAULT_LLM,
+        ...globalConfig.llm,
+        ...rawLlm,
+        workflowOverrides: {
+          ...DEFAULT_LLM.workflowOverrides,
+          ...globalConfig.llm.workflowOverrides,
+          ...((rawLlm['workflowOverrides'] ?? {}) as Record<string, unknown>),
+        },
+      } as LlmConfig,
+      // API 密钥仅来自全局
+      apiKeys: { ...DEFAULT_API_KEYS, ...globalConfig.apiKeys },
+      workspace,
+      concepts: {
+        ...DEFAULT_CONCEPTS,
+        ...rawConcepts,
+      } as ConceptsConfig,
+    };
+
+    ConfigLoader.validate(config);
+    return deepFreeze(config);
   }
 }

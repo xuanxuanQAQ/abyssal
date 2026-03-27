@@ -44,7 +44,9 @@ export type WorkflowType =
   | 'acquire'
   | 'analyze'
   | 'synthesize'
-  | 'generate';
+  | 'article'
+  | 'bibliography'
+  | 'generate'; // deprecated alias for 'article'
 
 /** 映射关系类型（与后端 core/types/mapping.ts 统一） */
 export type RelationType =

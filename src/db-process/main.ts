@@ -1,0 +1,247 @@
+/**
+ * DB 子进程入口
+ *
+ * 由 Electron 主进程通过 child_process.fork() 启动。
+ * 使用系统 Node.js 运行——ABI 与 better-sqlite3 编译目标一致，永不冲突。
+ *
+ * 职责：
+ * 1. 接收主进程的 RPC 消息，dispatch 到 DatabaseService 方法
+ * 2. 管理 DatabaseService 生命周期（init / switch workspace / close）
+ * 3. 序列化返回值发回主进程
+ */
+
+import * as path from 'node:path';
+import { ConfigLoader } from '../core/infra/config';
+import { FileLogger, type Logger } from '../core/infra/logger';
+import { loadGlobalConfig } from '../core/infra/global-config';
+import { createDatabaseService, type DatabaseService } from '../core/database';
+import { getWorkspacePaths, isWorkspace, scaffoldWorkspace } from '../core/workspace';
+import type {
+  DbProcessMessage, DbResponse, DbLifecycleResponse, DbInitPayload,
+} from './protocol';
+import { isLifecycleMessage, isDbRequest } from './protocol';
+
+let dbService: DatabaseService | null = null;
+let logger: Logger | null = null;
+
+// ─── 初始化 ───
+
+function initDatabase(payload: DbInitPayload): void {
+  // 关闭旧连接（workspace 切换时）
+  if (dbService) {
+    try { dbService.close(); } catch { /* ignore */ }
+    dbService = null;
+  }
+
+  const { workspaceRoot, userDataPath, skipVecExtension } = payload;
+
+  // 确保工作区已初始化
+  if (!isWorkspace(workspaceRoot)) {
+    scaffoldWorkspace({ rootDir: workspaceRoot });
+  }
+
+  const wsPaths = getWorkspacePaths(workspaceRoot);
+
+  // Logger
+  logger = new FileLogger(wsPaths.logs, 'info');
+
+  // 加载配置
+  const globalConfig = loadGlobalConfig(userDataPath);
+  const config = ConfigLoader.loadFromWorkspace(workspaceRoot, globalConfig);
+
+  // 数据库初始化
+  const dbPath = wsPaths.db;
+  const migrationsDir = path.resolve(__dirname, '..', 'core', 'database', 'migrations');
+
+  try {
+    dbService = createDatabaseService({
+      dbPath, config, logger,
+      skipVecExtension: skipVecExtension ?? true,
+      migrationsDir,
+    });
+    logger.info('DB subprocess: database initialized', { dbPath });
+  } catch (err) {
+    logger.error('DB subprocess: init failed, retrying with fresh DB', err as Error);
+    // 删除损坏的数据库文件后重试
+    const fs = require('node:fs');
+    for (const suffix of ['', '-wal', '-shm']) {
+      const f = dbPath + suffix;
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+    }
+    dbService = createDatabaseService({
+      dbPath, config, logger,
+      skipVecExtension: skipVecExtension ?? true,
+      migrationsDir,
+    });
+    logger.info('DB subprocess: database initialized (fresh)', { dbPath });
+  }
+}
+
+// ─── RPC Dispatch ───
+
+/**
+ * 将 RPC 方法名映射到 DatabaseService 方法调用。
+ *
+ * 所有 DatabaseService 的公共方法都通过反射调用：
+ *   method = 'addPaper' → dbService.addPaper(...args)
+ *
+ * Float32Array 参数在传输中被 JSON 转为普通数组，
+ * 需要在此处还原为 Float32Array。
+ */
+function dispatch(method: string, args: unknown[]): unknown {
+  if (!dbService) {
+    throw Object.assign(new Error('Database not initialized'), { code: 'DB_NOT_READY' });
+  }
+
+  // 安全检查：只允许调用 DatabaseService 的公共方法
+  // 排除内部方法和属性访问
+  const BLOCKED = new Set([
+    'constructor', 'raw', 'statements', 'close',
+    'setPauseWorkerWrites', 'dbWriteMutex',
+  ]);
+
+  if (BLOCKED.has(method)) {
+    throw Object.assign(
+      new Error(`Method "${method}" is not allowed via RPC`),
+      { code: 'METHOD_NOT_ALLOWED' },
+    );
+  }
+
+  const fn = (dbService as unknown as Record<string, unknown>)[method];
+  if (typeof fn !== 'function') {
+    throw Object.assign(
+      new Error(`Unknown method: ${method}`),
+      { code: 'METHOD_NOT_FOUND' },
+    );
+  }
+
+  // Float32Array 还原：IPC 传输中 Float32Array 变为普通对象
+  // 检查参数中是否有需要还原的 embedding 数据
+  const restoredArgs = args.map(restoreTypedArrays);
+
+  return fn.call(dbService, ...restoredArgs);
+}
+
+/**
+ * 递归还原 JSON 序列化中丢失的 Float32Array。
+ *
+ * 约定：发送方将 Float32Array 编码为 { __type: 'Float32Array', data: number[] }
+ */
+function restoreTypedArrays(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+
+    // 编码标记
+    if (obj['__type'] === 'Float32Array' && Array.isArray(obj['data'])) {
+      return new Float32Array(obj['data'] as number[]);
+    }
+
+    // 递归处理数组
+    if (Array.isArray(value)) {
+      return value.map(restoreTypedArrays);
+    }
+
+    // 递归处理对象（浅层即可，不需要深度递归普通对象）
+    // 只处理包含 __type 标记的情况
+  }
+
+  return value;
+}
+
+/**
+ * 序列化返回值，将 Float32Array 编码为可 JSON 传输的格式。
+ */
+function serializeResult(value: unknown): unknown {
+  if (value instanceof Float32Array) {
+    return { __type: 'Float32Array', data: Array.from(value) };
+  }
+  // Promise: 等待解析
+  if (value instanceof Promise) {
+    return value.then(serializeResult);
+  }
+  return value;
+}
+
+// ─── 消息处理 ───
+
+process.on('message', async (msg: DbProcessMessage) => {
+  if (isLifecycleMessage(msg)) {
+    const response: DbLifecycleResponse = {
+      type: 'lifecycle',
+      action: msg.action,
+      success: true,
+    };
+
+    try {
+      switch (msg.action) {
+        case 'init':
+        case 'switch':
+          if (!msg.payload) throw new Error('Missing payload for init/switch');
+          initDatabase(msg.payload);
+          break;
+        case 'close':
+          if (dbService) {
+            dbService.close();
+            dbService = null;
+          }
+          break;
+      }
+    } catch (err) {
+      response.success = false;
+      response.error = (err as Error).message;
+    }
+
+    process.send!(response);
+
+    // close 后退出进程
+    if (msg.action === 'close') {
+      process.exit(0);
+    }
+    return;
+  }
+
+  if (isDbRequest(msg)) {
+    const response: DbResponse = { id: msg.id };
+
+    try {
+      let result = dispatch(msg.method, msg.args);
+      // 处理 async 方法（如 createSnapshot）
+      if (result instanceof Promise) {
+        result = await result;
+      }
+      response.result = serializeResult(result);
+    } catch (err) {
+      const error = err as Error & { code?: string; context?: Record<string, unknown> };
+      response.error = {
+        message: error.message,
+        code: error.code ?? 'UNKNOWN',
+        name: error.name ?? 'Error',
+        ...(error.context ? { context: error.context } : {}),
+      };
+    }
+
+    process.send!(response);
+  }
+});
+
+// ─── 优雅退出 ───
+
+process.on('SIGTERM', () => {
+  if (dbService) {
+    try { dbService.close(); } catch { /* ignore */ }
+  }
+  process.exit(0);
+});
+
+process.on('uncaughtException', (err) => {
+  logger?.error('DB subprocess uncaught exception', err);
+  if (dbService) {
+    try { dbService.close(); } catch { /* ignore */ }
+  }
+  process.exit(1);
+});
+
+// 通知父进程子进程已准备就绪
+process.send!({ type: 'lifecycle', action: 'ready', success: true });

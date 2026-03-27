@@ -20,10 +20,13 @@ export interface NotesSlice {
   memoQuickInputOpen: boolean;
   /** Section → QualityReport 映射（由 pipeline 事件推送） */
   sectionQualityReports: Record<string, SectionQualityReport>;
+  /** 项目创建向导是否打开 */
+  projectWizardOpen: boolean;
 
   setMemoQuickInputOpen(open: boolean): void;
   setSectionQualityReport(sectionId: string, report: SectionQualityReport): void;
   clearSectionQualityReports(): void;
+  setProjectWizardOpen(open: boolean): void;
 }
 
 type FullStore =
@@ -44,6 +47,7 @@ export const createNotesSlice: StateCreator<
 > = (set) => ({
   memoQuickInputOpen: false,
   sectionQualityReports: {},
+  projectWizardOpen: false,
 
   setMemoQuickInputOpen(open: boolean) {
     set((state) => {
@@ -60,6 +64,12 @@ export const createNotesSlice: StateCreator<
   clearSectionQualityReports() {
     set((state) => {
       state.sectionQualityReports = {};
+    });
+  },
+
+  setProjectWizardOpen(open: boolean) {
+    set((state) => {
+      state.projectWizardOpen = open;
     });
   },
 });

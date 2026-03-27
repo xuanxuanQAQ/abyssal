@@ -36,10 +36,9 @@ export type FulltextStatus = (typeof FULLTEXT_STATUSES)[number];
 
 export const ANALYSIS_STATUSES = [
   'pending',
-  'analyzed',
-  'reviewed',
-  'integrated',
-  'parse_failed',
+  'in_progress',
+  'completed',
+  'failed',
 ] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 

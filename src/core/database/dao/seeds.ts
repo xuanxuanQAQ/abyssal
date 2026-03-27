@@ -1,4 +1,5 @@
 // ═══ 种子论文 CRUD ═══
+// §6: addSeed / getSeeds / removeSeed
 
 import type Database from 'better-sqlite3';
 import type { PaperId } from '../../types/common';
@@ -8,6 +9,7 @@ import { now } from '../row-mapper';
 export interface Seed {
   paperId: PaperId;
   seedType: SeedType;
+  note: string | null;
   addedAt: string;
 }
 
@@ -15,10 +17,11 @@ export function addSeed(
   db: Database.Database,
   paperId: PaperId,
   seedType: SeedType,
+  note?: string | null,
 ): void {
   db.prepare(
-    'INSERT OR REPLACE INTO seeds (paper_id, seed_type, added_at) VALUES (?, ?, ?)',
-  ).run(paperId, seedType, now());
+    'INSERT OR REPLACE INTO seeds (paper_id, seed_type, note, added_at) VALUES (?, ?, ?, ?)',
+  ).run(paperId, seedType, note ?? null, now());
 }
 
 export function getSeeds(db: Database.Database): Seed[] {
@@ -28,6 +31,7 @@ export function getSeeds(db: Database.Database): Seed[] {
   return rows.map((r) => ({
     paperId: r['paper_id'] as PaperId,
     seedType: r['seed_type'] as SeedType,
+    note: (r['note'] as string) ?? null,
     addedAt: r['added_at'] as string,
   }));
 }

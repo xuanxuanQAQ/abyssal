@@ -1,17 +1,24 @@
 /**
- * MemoStream — 碎片笔记虚拟滚动列表（§3.2）
+ * MemoStream — virtual-scrolled memo timeline with entity tags.
+ *
+ * Uses @tanstack/react-virtual for 60fps scroll with dynamic item heights.
+ * Accepts filter from NotesFilterSidebar.
+ *
+ * See spec: section 6.3
  */
 
-import React, { useRef, useCallback, useState } from 'react';
+import React, { useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { MemoCard } from './MemoCard';
-import { MemoFilterBar } from './MemoFilterBar';
 import { MemoQuickCreate } from './MemoQuickCreate';
 import type { MemoFilter } from '../../../../shared-types/models';
 import { useMemoList } from '../../../core/ipc/hooks/useMemos';
 
-export function MemoStream() {
-  const [filter, setFilter] = useState<MemoFilter>({});
+interface MemoStreamProps {
+  filter?: MemoFilter;
+}
+
+export function MemoStream({ filter = {} }: MemoStreamProps) {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useMemoList(filter);
   const allMemos = data?.pages.flat() ?? [];
 
@@ -34,7 +41,6 @@ export function MemoStream() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <MemoFilterBar filter={filter} onFilterChange={setFilter} />
       <div
         ref={parentRef}
         onScroll={handleScroll}
@@ -61,7 +67,7 @@ export function MemoStream() {
         </div>
         {allMemos.length === 0 && (
           <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-            暂无碎片笔记
+            No memos yet — use Ctrl+Shift+N to create one
           </div>
         )}
       </div>

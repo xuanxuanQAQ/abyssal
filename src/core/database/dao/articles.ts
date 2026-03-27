@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import type { ArticleId, OutlineEntryId } from '../../types/common';
 import type { Article, OutlineEntry, SectionDraft, ArticleStyle, ArticleStatus, OutlineEntryStatus } from '../../types/article';
 import { fromRow, now } from '../row-mapper';
+import { writeTransaction } from '../transaction-utils';
 
 // ─── createArticle ───
 
@@ -76,7 +77,7 @@ export function setOutline(
   articleId: ArticleId,
   entries: OutlineEntry[],
 ): void {
-  const setFn = db.transaction(() => {
+  writeTransaction(db, () => {
     const timestamp = now();
 
     // 获取现有纲要节 ID
@@ -143,8 +144,6 @@ export function setOutline(
       }
     }
   });
-
-  setFn();
 }
 
 // ─── getOutline ───
@@ -172,7 +171,7 @@ export function addSectionDraft(
 ): number {
   const timestamp = now();
 
-  const addFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     // 计算新版本号
     const versionRow = db
       .prepare(
@@ -197,8 +196,6 @@ export function addSectionDraft(
 
     return version;
   });
-
-  return addFn();
 }
 
 // ─── getSectionDrafts ───

@@ -1,136 +1,336 @@
 // ═══ 快照与备份 ═══
-// §12: createSnapshot / restoreSnapshot / cleanupSnapshots
+// §6.1: 创建快照（TRUNCATE checkpoint → backup → zstd/brotli 压缩 → manifest）
+// §6.2: 恢复快照（安全备份 → 解压 → 清理 WAL/SHM → 重新初始化 → 维度检查）
+// §6.3: 空间管理（命名快照保护 + 自动清理）
 
 import type Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
 import { walCheckpoint } from './connection';
+import { DimensionMismatchError } from '../types/errors';
 import type { Logger } from '../infra/logger';
+import type { AbyssalConfig } from '../types/config';
 
-// ─── 快照元信息 ───
+// ─── 压缩算法选择 ───
+
+type CompressionAlgo = 'zstd' | 'brotli';
+
+/**
+ * 检测当前 Node.js 是否支持 zstd（22+ 原生支持），
+ * 不支持则回退 Brotli。
+ */
+function detectCompression(): CompressionAlgo {
+  try {
+    // Node.js 22+ 暴露 zstd 压缩常量
+    if (
+      typeof (zlib as Record<string, unknown>)['createZstdCompress'] === 'function'
+    ) {
+      return 'zstd';
+    }
+  } catch {
+    // ignore
+  }
+  return 'brotli';
+}
+
+/**
+ * Fix #3: 流式压缩——使用 stream.pipeline 正确处理背压，
+ * 避免 800MB 数据库全量读入内存导致 OOM。
+ */
+async function compressFile(
+  srcPath: string,
+  destPath: string,
+  algo: CompressionAlgo,
+): Promise<void> {
+  const readStream = fs.createReadStream(srcPath);
+  const writeStream = fs.createWriteStream(destPath);
+  const compressor =
+    algo === 'zstd'
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? (zlib as any).createZstdCompress({ level: 6 })
+      : zlib.createBrotliCompress({
+          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 6 },
+        });
+  // pipeline 正确处理背压和错误销毁，防止内存泄漏和文件句柄悬挂
+  await pipeline(readStream, compressor, writeStream);
+}
+
+/**
+ * Fix #3: 流式解压——同理避免 OOM。
+ */
+async function decompressFile(
+  srcPath: string,
+  destPath: string,
+  algo: CompressionAlgo,
+): Promise<void> {
+  const readStream = fs.createReadStream(srcPath);
+  const writeStream = fs.createWriteStream(destPath);
+  const decompressor =
+    algo === 'zstd'
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? (zlib as any).createZstdDecompress()
+      : zlib.createBrotliDecompress();
+  await pipeline(readStream, decompressor, writeStream);
+}
+
+function compressionExt(algo: CompressionAlgo): string {
+  return algo === 'zstd' ? '.db.zst' : '.db.br';
+}
+
+// ─── §6.1 快照元信息 ───
 
 export interface SnapshotMeta {
   name: string;
-  createdAt: string;
-  reason: string;
-  sizeBeforeCompression: number;
-  sizeAfterCompression: number;
-  userVersion: number;
+  timestamp: string;
+  fileName: string;
+  compression: CompressionAlgo;
+  sizeCompressed: number;
+  sizeOriginal: number;
+  compressionRatio: number;
+  stats: {
+    paperCount: number;
+    analyzedCount: number;
+    conceptCount: number;
+    mappingCount: number;
+    chunkCount: number;
+    memoCount: number;
+    noteCount: number;
+    schemaVersion: number;
+    embeddingDimension: number;
+    embeddingModel: string;
+  };
+  userNote: string;
 }
 
-// ─── §12.1 创建快照 ───
+// ─── §6.1 创建快照 ───
 
-export function createSnapshot(
+export async function createSnapshot(
   db: Database.Database,
   snapshotsDir: string,
   logger: Logger,
-  options: { name?: string; reason?: string } = {},
-): { snapshotPath: string; meta: SnapshotMeta } {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  options: { name?: string; reason?: string; pauseWorkerWrites?: (() => (() => void)) | undefined } = {},
+): Promise<{ snapshotPath: string; meta: SnapshotMeta }> {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, '-');
   const name = options.name ?? timestamp;
-  const reason = options.reason ?? 'manual';
+  const userNote = options.reason ?? '';
 
-  // 步骤 1：WAL checkpoint
-  walCheckpoint(db);
+  // 步骤 1：WAL TRUNCATE checkpoint（含 Worker 协调）
+  walCheckpoint(db, { logger, pauseWorkerWrites: options.pauseWorkerWrites });
   logger.info('WAL checkpoint completed for snapshot');
 
   // 步骤 2：在线热备份
   fs.mkdirSync(snapshotsDir, { recursive: true });
   const tempBackupPath = path.join(snapshotsDir, `_tmp_${timestamp}.db`);
 
-  // Fix: 移除未 await 的 db.backup() 调用（会与 VACUUM INTO 竞争）。
-  // 使用 VACUUM INTO 作为同步备份方案；失败时回退到文件拷贝。
   try {
     db.exec(`VACUUM INTO '${tempBackupPath.replace(/'/g, "''")}'`);
   } catch {
-    // 如果 VACUUM INTO 失败（旧版 SQLite），尝试文件拷贝
+    // VACUUM INTO 失败（旧版 SQLite）→ 文件拷贝
     const dbPath = db.name;
     fs.copyFileSync(dbPath, tempBackupPath);
   }
 
-  const sizeBeforeCompression = fs.statSync(tempBackupPath).size;
+  const sizeOriginal = fs.statSync(tempBackupPath).size;
 
-  // 步骤 3：Brotli 压缩
-  const compressedPath = path.join(
-    snapshotsDir,
-    `${timestamp}_${name}.db.br`,
-  );
-  const raw = fs.readFileSync(tempBackupPath);
-  const compressed = zlib.brotliCompressSync(raw, {
-    params: {
-      [zlib.constants.BROTLI_PARAM_QUALITY]: 6, // 平衡速度和压缩比
-    },
-  });
-  fs.writeFileSync(compressedPath, compressed);
+  // 步骤 3：流式压缩（zstd 优先，回退 brotli）
+  // Fix #3: 使用 stream.pipeline 替代全量读入内存，
+  // 正确处理背压，避免大数据库 OOM。
+  const algo = detectCompression();
+  const ext = compressionExt(algo);
+  const compressedFileName = `${timestamp}_${name}${ext}`;
+  const compressedPath = path.join(snapshotsDir, compressedFileName);
+
+  await compressFile(tempBackupPath, compressedPath, algo);
 
   // 清理临时文件
   fs.unlinkSync(tempBackupPath);
 
-  const sizeAfterCompression = compressed.byteLength;
+  const sizeCompressed = fs.statSync(compressedPath).size;
 
-  // 步骤 4：元信息
+  // 步骤 4：收集统计信息生成 manifest
+  const paperCount = (
+    db.prepare('SELECT COUNT(*) AS cnt FROM papers').get() as { cnt: number }
+  ).cnt;
+  const analyzedCount = (
+    db.prepare(
+      "SELECT COUNT(*) AS cnt FROM papers WHERE analysis_status IN ('analyzed','reviewed','integrated')",
+    ).get() as { cnt: number }
+  ).cnt;
+  const conceptCount = (
+    db.prepare('SELECT COUNT(*) AS cnt FROM concepts').get() as { cnt: number }
+  ).cnt;
+  const mappingCount = (
+    db.prepare('SELECT COUNT(*) AS cnt FROM paper_concept_map').get() as { cnt: number }
+  ).cnt;
+  const chunkCount = (
+    db.prepare('SELECT COUNT(*) AS cnt FROM chunks').get() as { cnt: number }
+  ).cnt;
+  const memoCount = (
+    db.prepare('SELECT COUNT(*) AS cnt FROM research_memos').get() as { cnt: number }
+  ).cnt;
+  const noteCount = (
+    db.prepare('SELECT COUNT(*) AS cnt FROM research_notes').get() as { cnt: number }
+  ).cnt;
+
   const userVersionRow = db.pragma('user_version') as [{ user_version: number }];
-  const userVersion = userVersionRow[0]?.user_version ?? 0;
+  const schemaVersion = userVersionRow[0]?.user_version ?? 0;
+
+  // 读取嵌入信息
+  let embeddingDimension = 0;
+  let embeddingModel = 'unknown';
+  try {
+    const dimRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_dimension'",
+    ).get() as { value: string } | undefined;
+    if (dimRow) embeddingDimension = parseInt(dimRow.value, 10);
+    const modelRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_model'",
+    ).get() as { value: string } | undefined;
+    if (modelRow) embeddingModel = modelRow.value;
+  } catch {
+    // _meta 不存在
+  }
 
   const meta: SnapshotMeta = {
     name,
-    createdAt: new Date().toISOString(),
-    reason,
-    sizeBeforeCompression,
-    sizeAfterCompression,
-    userVersion,
+    timestamp: now.toISOString(),
+    fileName: compressedFileName,
+    compression: algo,
+    sizeCompressed,
+    sizeOriginal,
+    compressionRatio: sizeOriginal > 0 ? sizeCompressed / sizeOriginal : 0,
+    stats: {
+      paperCount,
+      analyzedCount,
+      conceptCount,
+      mappingCount,
+      chunkCount,
+      memoCount,
+      noteCount,
+      schemaVersion,
+      embeddingDimension,
+      embeddingModel,
+    },
+    userNote,
   };
 
-  const metaPath = compressedPath.replace(/\.db\.br$/, '.meta.json');
+  const metaPath = compressedPath.replace(/\.db\.(zst|br)$/, '.meta.json');
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
   logger.info('Snapshot created', {
     path: compressedPath,
-    sizeBeforeCompression,
-    sizeAfterCompression,
+    compression: algo,
+    sizeOriginal,
+    sizeCompressed,
+    compressionRatio: meta.compressionRatio.toFixed(2),
   });
 
   return { snapshotPath: compressedPath, meta };
 }
 
-// ─── §12.2 恢复快照 ───
-// 注意：调用方必须先关闭当前 DatabaseService，恢复后重新初始化
+// ─── §6.2 恢复快照 ───
 
-export function restoreSnapshot(
-  snapshotPath: string,
-  targetDbPath: string,
-  logger: Logger,
-): void {
+export interface RestoreSnapshotOptions {
+  snapshotPath: string;
+  targetDbPath: string;
+  logger: Logger;
+  config?: AbyssalConfig | undefined;
+}
+
+/**
+ * 恢复快照。
+ *
+ * 调用方必须先关闭当前 DatabaseService，恢复后重新初始化。
+ *
+ * §6.2 步骤：
+ * 1. （调用方已关闭连接）
+ * 2. 安全备份当前数据库 → _rollback_safety_net.db
+ * 3. 解压快照
+ * 4. 清理 WAL/SHM 文件
+ * 5. （调用方重新初始化连接——迁移引擎检查版本兼容性）
+ * 6. 嵌入维度一致性检查
+ */
+export async function restoreSnapshot(options: RestoreSnapshotOptions): Promise<void> {
+  const { snapshotPath, targetDbPath, logger, config } = options;
+
   if (!fs.existsSync(snapshotPath)) {
     throw new Error(`Snapshot file not found: ${snapshotPath}`);
   }
 
-  // 读取并解压
-  const compressed = fs.readFileSync(snapshotPath);
-  const raw = zlib.brotliDecompressSync(compressed);
-
-  // 备份当前数据库
-  if (fs.existsSync(targetDbPath)) {
-    const bakPath = targetDbPath + '.bak';
-    fs.renameSync(targetDbPath, bakPath);
-    logger.info('Current database backed up', { bakPath });
+  // 读取 manifest 判断压缩算法
+  const metaPath = snapshotPath.replace(/\.db\.(zst|br)$/, '.meta.json');
+  let algo: CompressionAlgo = 'brotli';
+  let snapshotMeta: SnapshotMeta | null = null;
+  if (fs.existsSync(metaPath)) {
+    try {
+      snapshotMeta = JSON.parse(
+        fs.readFileSync(metaPath, 'utf-8'),
+      ) as SnapshotMeta;
+      algo = snapshotMeta.compression;
+    } catch {
+      // 无法解析 manifest，根据扩展名推断
+    }
+  }
+  // 根据文件扩展名回退推断
+  if (!snapshotMeta) {
+    algo = snapshotPath.endsWith('.zst') ? 'zstd' : 'brotli';
   }
 
-  // 清理 WAL 和 SHM 文件
+  // §6.2 步骤 2：安全备份当前数据库
+  if (fs.existsSync(targetDbPath)) {
+    const safetyDir = path.dirname(targetDbPath);
+    const safetyPath = path.join(safetyDir, '_rollback_safety_net.db');
+    fs.copyFileSync(targetDbPath, safetyPath);
+    logger.info('Current database backed up for safety', { safetyPath });
+  }
+
+  // §6.2 步骤 3：流式解压快照
+  // Fix #3: 使用 stream.pipeline 替代全量读入内存
+  await decompressFile(snapshotPath, targetDbPath, algo);
+
+  // §6.2 步骤 4：清理 WAL 和 SHM 文件
   for (const suffix of ['-wal', '-shm']) {
-    const walPath = targetDbPath + suffix;
-    if (fs.existsSync(walPath)) {
-      fs.unlinkSync(walPath);
+    const filePath = targetDbPath + suffix;
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
     }
   }
 
-  // 写入恢复的数据库
-  fs.writeFileSync(targetDbPath, raw);
-  logger.info('Snapshot restored', { snapshotPath, targetDbPath });
+  logger.info('Snapshot restored', { snapshotPath, targetDbPath, compression: algo });
+
+  // §6.2 步骤 6：嵌入维度一致性检查（如果有 config 和 manifest）
+  if (config && snapshotMeta) {
+    const snapshotDim = snapshotMeta.stats.embeddingDimension;
+    const configDim = config.rag.embeddingDimension;
+    const snapshotModel = snapshotMeta.stats.embeddingModel;
+    const configModel = config.rag.embeddingModel;
+
+    if (snapshotDim > 0 && snapshotDim !== configDim) {
+      throw new DimensionMismatchError({
+        message: `Snapshot embedding dimension (${snapshotDim}) does not match config (${configDim}). ` +
+          'Must run embedding migration after restore.',
+        context: {
+          snapshotDimension: snapshotDim,
+          configDimension: configDim,
+        },
+      });
+    }
+
+    if (snapshotModel !== 'unknown' && snapshotModel !== configModel) {
+      logger.warn('Snapshot embedding model differs from config', {
+        snapshot: snapshotModel,
+        config: configModel,
+      });
+    }
+  }
+
+  // TODO: 通过 Electron IPC 发送 'database-restored' 事件通知前端刷新
 }
 
-// ─── §12.3 空间管理 ───
+// ─── §6.3 空间管理 ───
 
 export function listSnapshots(
   snapshotsDir: string,
@@ -148,7 +348,8 @@ export function listSnapshots(
         'utf-8',
       );
       const meta = JSON.parse(content) as SnapshotMeta;
-      const dbFile = f.replace('.meta.json', '.db.br');
+      // 数据库文件路径从 manifest 中的 fileName 获取
+      const dbFile = meta.fileName ?? f.replace('.meta.json', '.db.br');
       results.push({
         ...meta,
         filePath: path.join(snapshotsDir, dbFile),
@@ -160,10 +361,23 @@ export function listSnapshots(
 
   return results.sort(
     (a, b) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
   );
 }
 
+/** 判断快照名称是否为自动生成的时间戳格式 */
+function isAutoName(name: string): boolean {
+  // 时间戳格式：2026-03-25T14-30-00-000Z
+  return /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}/.test(name);
+}
+
+/**
+ * 清理旧快照。
+ *
+ * 保留规则 (§6.1 步骤 5)：
+ * - 用户命名的快照（name 非时间戳格式）永不自动清理
+ * - 自动命名的快照保留最近 N 个，删除更旧的
+ */
 export function cleanupSnapshots(
   snapshotsDir: string,
   maxAutoSnapshots: number = 5,
@@ -171,10 +385,8 @@ export function cleanupSnapshots(
 ): number {
   const snapshots = listSnapshots(snapshotsDir);
 
-  // 手动命名的快照不清理
-  const autoSnapshots = snapshots.filter(
-    (s) => s.reason === 'auto' || s.reason === 'manual',
-  );
+  // 仅清理自动命名的快照
+  const autoSnapshots = snapshots.filter((s) => isAutoName(s.name));
 
   if (autoSnapshots.length <= maxAutoSnapshots) return 0;
 
@@ -183,16 +395,22 @@ export function cleanupSnapshots(
 
   for (const snap of toDelete) {
     try {
-      if (fs.existsSync(snap.filePath)) {
-        fs.unlinkSync(snap.filePath);
-      }
-      const metaPath = snap.filePath.replace(/\.db\.br$/, '.meta.json');
+      // 先删 meta（小文件），再删 db（大文件）
+      // 如果 db 删除失败，孤儿 db 文件无害（下次 listSnapshots 仍能发现）
+      // 如果 meta 删除失败但 db 成功，listSnapshots 不会列出它（找不到 db 文件）
+      const metaPath = snap.filePath.replace(/\.db\.(zst|br)$/, '.meta.json');
       if (fs.existsSync(metaPath)) {
         fs.unlinkSync(metaPath);
       }
+      if (fs.existsSync(snap.filePath)) {
+        fs.unlinkSync(snap.filePath);
+      }
       deleted++;
-    } catch {
-      logger.warn('Failed to delete snapshot', { path: snap.filePath });
+    } catch (err) {
+      logger.warn('Failed to delete snapshot', {
+        path: snap.filePath,
+        error: (err as Error).message,
+      });
     }
   }
 

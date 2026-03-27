@@ -168,11 +168,16 @@ export async function searchOpenAlex(
   // filter 构建
   const filters: string[] = [];
 
+  // 文本关键词收集（用 default.search 参数传递）
+  const textQueries: string[] = [];
+
   for (const concept of concepts) {
     if (/^C\d+$/.test(concept)) {
+      // OpenAlex concept ID → 精确过滤
       filters.push(`concepts.id:${concept}`);
     } else {
-      filters.push(`concepts.display_name.search:${concept}`);
+      // 自由文本 → 收集到 search 参数
+      textQueries.push(concept);
     }
   }
 
@@ -190,17 +195,19 @@ export async function searchOpenAlex(
     filters.push(`cited_by_count:>${options.minCitations}`);
   }
 
-  const filterParam = filters.join(',');
+  const filterParam = filters.length > 0 ? filters.join(',') : null;
+  const searchParam = textQueries.length > 0 ? textQueries.join(' ') : null;
 
   // cursor-based 分页
   let cursor: string | null = '*';
 
   while (cursor !== null && results.length < limit) {
     const params = new URLSearchParams({
-      filter: filterParam,
       per_page: String(Math.min(200, limit - results.length)),
       cursor,
     });
+    if (filterParam) params.set('filter', filterParam);
+    if (searchParam) params.set('search', searchParam);
     if (email) params.set('mailto', email);
 
     const url = `${BASE_URL}?${params}`;

@@ -15,6 +15,7 @@ import type { ResearchNote } from '../../types/note';
 import type { TextChunk } from '../../types/chunk';
 import type { ConceptDefinition } from '../../types/concept';
 import { fromRow, now } from '../row-mapper';
+import { writeTransaction } from '../transaction-utils';
 import { insertChunksBatch, deleteChunksByPrefix } from './chunks';
 import { addConcept } from './concepts';
 
@@ -36,7 +37,7 @@ export function createNote(
 ): void {
   const timestamp = now();
 
-  const createFn = db.transaction(() => {
+  writeTransaction(db, () => {
     db.prepare(`
       INSERT INTO research_notes (
         id, file_path, title, linked_paper_ids, linked_concept_ids,
@@ -57,8 +58,6 @@ export function createNote(
       insertChunksBatch(db, chunks, embeddings);
     }
   });
-
-  createFn();
 }
 
 // ─── §6.2 onNoteFileChanged ───
@@ -77,7 +76,7 @@ export function onNoteFileChanged(
 ): void {
   const timestamp = now();
 
-  const updateFn = db.transaction(() => {
+  writeTransaction(db, () => {
     // 更新 research_notes 元数据
     db.prepare(`
       UPDATE research_notes
@@ -101,8 +100,6 @@ export function onNoteFileChanged(
       insertChunksBatch(db, newChunks, newEmbeddings);
     }
   });
-
-  updateFn();
 }
 
 // ─── §6.3 upgradeFromMemo ───
@@ -184,10 +181,8 @@ export function deleteNote(
   db: Database.Database,
   id: NoteId,
 ): number {
-  const deleteFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     deleteChunksByPrefix(db, `note__${id}__`);
     return db.prepare('DELETE FROM research_notes WHERE id = ?').run(id).changes;
   });
-
-  return deleteFn();
 }

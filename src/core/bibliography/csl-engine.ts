@@ -7,6 +7,7 @@ import type { PaperId } from '../types/common';
 import type { PaperMetadata, PaperType } from '../types/paper';
 import type { FormattedCitation } from '../types/bibliography';
 import { CslFormatError } from '../types/errors';
+import { resolveLocale } from './csl-manager';
 
 // ─── §4.3.2 姓氏介词（non-dropping-particle） ───
 
@@ -161,13 +162,9 @@ export class CslEngine {
     // citeproc-js 的 sys 对象
     const self = this;
     const sys = {
+      // §2.3: 四步回退链（精确→去区域→同语言扫描→en-US）
       retrieveLocale(lang: string): string | null {
-        const filePath = path.join(self.localePath, `locales-${lang}.xml`);
-        try {
-          return fs.readFileSync(filePath, 'utf-8');
-        } catch {
-          return null;
-        }
+        return resolveLocale(lang, self.localePath);
       },
       retrieveItem(id: string): CslJsonItem | undefined {
         return self.itemMap.get(id);

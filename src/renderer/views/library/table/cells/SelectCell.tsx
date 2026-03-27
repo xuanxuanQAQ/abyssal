@@ -8,9 +8,10 @@ import { Check } from 'lucide-react';
 
 interface SelectCellProps {
   isSelected: boolean;
+  onToggle?: () => void;
 }
 
-export function SelectCell({ isSelected }: SelectCellProps) {
+export function SelectCell({ isSelected, onToggle }: SelectCellProps) {
   return (
     <div
       style={{
@@ -23,6 +24,7 @@ export function SelectCell({ isSelected }: SelectCellProps) {
     >
       <Checkbox.Root
         checked={isSelected}
+        onCheckedChange={() => onToggle?.()}
         style={{
           width: 16,
           height: 16,

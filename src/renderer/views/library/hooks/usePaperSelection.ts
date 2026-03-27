@@ -56,11 +56,15 @@ export function usePaperSelection(sortedRows: Paper[]) {
         // Ctrl+Click: toggle
         togglePaperSelection(rowId);
       } else {
-        // 普通单击
-        selectPaper(rowId);
+        // 普通单击：再次点击已选中的行则取消选中
+        if (selectedPaperId === rowId && selectionMode === 'explicit' && Object.keys(explicitIds).length === 1) {
+          deselectAllPapers();
+        } else {
+          selectPaper(rowId);
+        }
       }
     },
-    [selectionAnchorId, sortedRows, selectPaper, togglePaperSelection, selectPaperRange]
+    [selectionAnchorId, sortedRows, selectPaper, togglePaperSelection, selectPaperRange, selectedPaperId, selectionMode, explicitIds, deselectAllPapers]
   );
 
   /** 全选 Checkbox 三态 */
@@ -93,6 +97,7 @@ export function usePaperSelection(sortedRows: Paper[]) {
     isSelected,
     selectedCount,
     handleRowClick,
+    togglePaperSelection,
     allSelectedState,
     toggleSelectAll,
     selectAllPapers,

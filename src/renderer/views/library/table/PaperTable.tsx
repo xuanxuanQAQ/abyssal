@@ -150,6 +150,7 @@ export function PaperTable({ papers, isLoading, filter }: PaperTableProps) {
             isExpanded={isExpanded}
             onRowClick={selection.handleRowClick}
             onToggleExpansion={toggleRowExpansion}
+            onToggleSelect={selection.togglePaperSelection}
             expandedRowIds={expandedRowIds}
             selectedPaperId={selection.selectedPaperId}
           />

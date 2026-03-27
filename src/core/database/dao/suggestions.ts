@@ -8,6 +8,7 @@ import type { ConceptDefinition } from '../../types/concept';
 import { asSuggestionId, asConceptId } from '../../types/common';
 import { IntegrityError } from '../../types/errors';
 import { fromRow, now } from '../row-mapper';
+import { writeTransaction } from '../transaction-utils';
 import { addConcept } from './concepts';
 
 // ─── §7.1 addSuggestedConcept ───
@@ -87,13 +88,14 @@ export function addSuggestedConcept(
   }
 
   // 新建记录
-  const result = db.prepare(`
+  const row = db.prepare(`
     INSERT INTO suggested_concepts (
       term, term_normalized, frequency, source_paper_ids, source_paper_count,
       closest_existing_concept_id, closest_existing_concept_similarity,
       reason, status, adopted_concept_id, created_at, updated_at
     ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'pending', NULL, ?, ?)
-  `).run(
+    RETURNING id
+  `).get(
     input.term,
     termNormalized,
     input.frequencyInPaper,
@@ -103,9 +105,9 @@ export function addSuggestedConcept(
     input.reason,
     timestamp,
     timestamp,
-  );
+  ) as { id: number };
 
-  return asSuggestionId(Number(result.lastInsertRowid));
+  return asSuggestionId(row.id);
 }
 
 // ─── §7.2 adoptSuggestedConcept ───
@@ -115,7 +117,7 @@ export function adoptSuggestedConcept(
   suggestionId: SuggestionId,
   conceptOverrides?: Partial<ConceptDefinition>,
 ): ConceptId {
-  const adoptFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     const row = db
       .prepare(
         "SELECT * FROM suggested_concepts WHERE id = ? AND status = 'pending'",
@@ -168,8 +170,6 @@ export function adoptSuggestedConcept(
 
     return concept.id;
   });
-
-  return adoptFn();
 }
 
 // ─── dismissSuggestedConcept ───

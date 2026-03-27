@@ -44,7 +44,7 @@ import type {
   PaperCounts,
   DiscoverRun,
   ConflictingMappings,
-  MergeDecision,
+
   NewConceptDef,
   MappingsToReassign,
   MappingAssignment,
@@ -71,180 +71,6 @@ import type {
   AdvisoryNotification,
   GlobalSearchResult,
 } from '../models';
-
-// ═══ IPC 通道名常量 ═══
-
-export const IPC_CHANNELS = {
-  // db 域
-  DB_PAPERS_LIST: 'db:papers:list',
-  DB_PAPERS_GET: 'db:papers:get',
-  DB_PAPERS_UPDATE: 'db:papers:update',
-  DB_PAPERS_BATCH_UPDATE_RELEVANCE: 'db:papers:batchUpdateRelevance',
-  DB_PAPERS_IMPORT_BIBTEX: 'db:papers:importBibtex',
-  DB_PAPERS_COUNTS: 'db:papers:counts',
-  DB_PAPERS_DELETE: 'db:papers:delete',
-  DB_PAPERS_BATCH_DELETE: 'db:papers:batchDelete',
-
-  // db:tags 域
-  DB_TAGS_LIST: 'db:tags:list',
-  DB_TAGS_CREATE: 'db:tags:create',
-  DB_TAGS_UPDATE: 'db:tags:update',
-  DB_TAGS_DELETE: 'db:tags:delete',
-
-  // db:discoverRuns 域
-  DB_DISCOVER_RUNS_LIST: 'db:discoverRuns:list',
-
-  DB_CONCEPTS_LIST: 'db:concepts:list',
-  DB_CONCEPTS_GET_FRAMEWORK: 'db:concepts:getFramework',
-  DB_CONCEPTS_UPDATE_FRAMEWORK: 'db:concepts:updateFramework',
-
-  DB_MAPPINGS_GET_FOR_PAPER: 'db:mappings:getForPaper',
-  DB_MAPPINGS_GET_FOR_CONCEPT: 'db:mappings:getForConcept',
-  DB_MAPPINGS_ADJUDICATE: 'db:mappings:adjudicate',
-  DB_MAPPINGS_GET_HEATMAP_DATA: 'db:mappings:getHeatmapData',
-
-  DB_ANNOTATIONS_LIST_FOR_PAPER: 'db:annotations:listForPaper',
-  DB_ANNOTATIONS_CREATE: 'db:annotations:create',
-  DB_ANNOTATIONS_UPDATE: 'db:annotations:update',
-  DB_ANNOTATIONS_DELETE: 'db:annotations:delete',
-
-  DB_ARTICLES_LIST_OUTLINES: 'db:articles:listOutlines',
-  DB_ARTICLES_CREATE: 'db:articles:create',
-  DB_ARTICLES_UPDATE: 'db:articles:update',
-  DB_ARTICLES_GET_OUTLINE: 'db:articles:getOutline',
-  DB_ARTICLES_UPDATE_OUTLINE_ORDER: 'db:articles:updateOutlineOrder',
-  DB_ARTICLES_GET_SECTION: 'db:articles:getSection',
-  DB_ARTICLES_UPDATE_SECTION: 'db:articles:updateSection',
-  DB_ARTICLES_GET_SECTION_VERSIONS: 'db:articles:getSectionVersions',
-  DB_SECTIONS_CREATE: 'db:sections:create',
-  DB_SECTIONS_DELETE: 'db:sections:delete',
-
-  DB_RELATIONS_GET_GRAPH: 'db:relations:getGraph',
-
-  // rag 域
-  RAG_SEARCH: 'rag:search',
-  RAG_GET_WRITING_CONTEXT: 'rag:getWritingContext',
-
-  // pipeline 域
-  PIPELINE_START: 'pipeline:start',
-  PIPELINE_CANCEL: 'pipeline:cancel',
-  PIPELINE_PROGRESS_EVENT: 'pipeline:progress$event',
-  PIPELINE_STREAM_CHUNK_EVENT: 'pipeline:streamChunk$event',
-
-  // chat 域
-  CHAT_SEND: 'chat:send',
-  CHAT_RESPONSE_EVENT: 'chat:response$event',
-
-  // db:chat 域（§5.1.1 聊天持久化）
-  DB_CHAT_SAVE_MESSAGE: 'db:chat:saveMessage',
-  DB_CHAT_GET_HISTORY: 'db:chat:getHistory',
-  DB_CHAT_DELETE_SESSION: 'db:chat:deleteSession',
-  DB_CHAT_LIST_SESSIONS: 'db:chat:listSessions',
-
-  // fs 域
-  // reader 域（§13.1 翻页事件，renderer→main 单向 push）
-  READER_PAGE_CHANGED: 'reader:pageChanged',
-
-  FS_OPEN_PDF: 'fs:openPDF',
-  FS_SAVE_PDF_ANNOTATIONS: 'fs:savePDFAnnotations',
-  FS_EXPORT_ARTICLE: 'fs:exportArticle',
-  FS_IMPORT_FILES: 'fs:importFiles',
-  FS_CREATE_SNAPSHOT: 'fs:createSnapshot',
-  FS_RESTORE_SNAPSHOT: 'fs:restoreSnapshot',
-
-  // db:articles 搜索（GlobalSearch 使用）
-  DB_ARTICLES_SEARCH: 'db:articles:search',
-
-  // app 域
-  APP_GET_CONFIG: 'app:getConfig',
-  APP_UPDATE_CONFIG: 'app:updateConfig',
-  APP_GET_PROJECT_INFO: 'app:getProjectInfo',
-  APP_SWITCH_PROJECT: 'app:switchProject',
-  APP_LIST_PROJECTS: 'app:listProjects',
-
-  // app:window 域
-  APP_WINDOW_MINIMIZE: 'app:window:minimize',
-  APP_WINDOW_TOGGLE_MAXIMIZE: 'app:window:toggleMaximize',
-  APP_WINDOW_CLOSE: 'app:window:close',
-  APP_WINDOW_POP_OUT: 'app:window:popOut',
-  APP_WINDOW_LIST: 'app:window:list',
-
-  // app:window 事件
-  APP_WINDOW_MAXIMIZED_EVENT: 'app:window:maximized$event',
-  APP_WINDOW_SYNC_STATE_EVENT: 'app:window:syncState$event',
-
-  // 数据库变更通知
-  DB_CHANGE_EVENT: 'db:change$event',
-
-  // ═══ v1.2 新增 ═══
-
-  // 概念合并/拆分
-  DB_CONCEPTS_MERGE: 'db:concepts:merge',
-  DB_CONCEPTS_RESOLVE_MERGE: 'db:concepts:resolveMerge',
-  DB_CONCEPTS_SPLIT: 'db:concepts:split',
-  DB_CONCEPTS_REASSIGN: 'db:concepts:reassign',
-
-  // Advisory Agent
-  ADVISORY_GET_RECOMMENDATIONS: 'advisory:getRecommendations',
-  ADVISORY_EXECUTE: 'advisory:execute',
-
-  // Graph 分页
-  DB_RELATIONS_GET_NEIGHBORHOOD: 'db:relations:getNeighborhood',
-
-  // 快照管理
-  FS_LIST_SNAPSHOTS: 'fs:listSnapshots',
-  FS_CLEANUP_SNAPSHOTS: 'fs:cleanupSnapshots',
-
-  // 项目初始化
-  APP_CREATE_PROJECT: 'app:createProject',
-
-  // ═══ v2.0 新增 ═══
-
-  // db:memos 域
-  DB_MEMOS_LIST: 'db:memos:list',
-  DB_MEMOS_GET: 'db:memos:get',
-  DB_MEMOS_CREATE: 'db:memos:create',
-  DB_MEMOS_UPDATE: 'db:memos:update',
-  DB_MEMOS_DELETE: 'db:memos:delete',
-  DB_MEMOS_UPGRADE_TO_NOTE: 'db:memos:upgradeToNote',
-  DB_MEMOS_UPGRADE_TO_CONCEPT: 'db:memos:upgradeToConcept',
-
-  // db:notes 域
-  DB_NOTES_LIST: 'db:notes:list',
-  DB_NOTES_GET: 'db:notes:get',
-  DB_NOTES_CREATE: 'db:notes:create',
-  DB_NOTES_UPDATE_META: 'db:notes:updateMeta',
-  DB_NOTES_DELETE: 'db:notes:delete',
-  DB_NOTES_UPGRADE_TO_CONCEPT: 'db:notes:upgradeToConcept',
-
-  // fs:notes 域
-  FS_READ_NOTE_FILE: 'fs:readNoteFile',
-  FS_SAVE_NOTE_FILE: 'fs:saveNoteFile',
-
-  // db:suggestedConcepts 域
-  DB_SUGGESTED_CONCEPTS_LIST: 'db:suggestedConcepts:list',
-  DB_SUGGESTED_CONCEPTS_ACCEPT: 'db:suggestedConcepts:accept',
-  DB_SUGGESTED_CONCEPTS_DISMISS: 'db:suggestedConcepts:dismiss',
-  DB_SUGGESTED_CONCEPTS_RESTORE: 'db:suggestedConcepts:restore',
-
-  // db:concepts v2.0 扩展
-  DB_CONCEPTS_CREATE: 'db:concepts:create',
-  DB_CONCEPTS_UPDATE_MATURITY: 'db:concepts:updateMaturity',
-  DB_CONCEPTS_UPDATE_DEFINITION: 'db:concepts:updateDefinition',
-  DB_CONCEPTS_UPDATE_PARENT: 'db:concepts:updateParent',
-  DB_CONCEPTS_GET_HISTORY: 'db:concepts:getHistory',
-
-  // Advisory v2.0 事件
-  ADVISORY_GET_NOTIFICATIONS: 'advisory:getNotifications',
-  ADVISORY_NOTIFICATIONS_UPDATED_EVENT: 'advisory:notifications-updated$event',
-
-  // Pipeline v2.0 事件
-  PIPELINE_WORKFLOW_COMPLETE_EVENT: 'pipeline:workflow-complete$event',
-  PIPELINE_SECTION_QUALITY_EVENT: 'pipeline:section-quality$event',
-
-  // 全局搜索（FTS5）
-  APP_GLOBAL_SEARCH: 'app:globalSearch',
-} as const;
 
 // ═══ Filter / Query 参数 ═══
 
@@ -360,6 +186,8 @@ export interface AbyssalIPCError {
 export type UnsubscribeFn = () => void;
 
 // ═══ AbyssalAPI 接口定义 ═══
+// TODO: Derive this interface from IpcContract automatically.
+// For now it's kept hand-written for backward compatibility with renderer code.
 
 export interface AbyssalAPI {
   db: {
@@ -401,9 +229,6 @@ export interface AbyssalAPI {
       merge(retainId: string, mergeId: string, conflictResolutions: MergeConflictResolution[]): Promise<MergeResult>;
       /** v2.0 拆分（新 3 步） */
       split(originalId: string, concept1: ConceptDraft, concept2: ConceptDraft, mappingAssignments: MappingAssignment[]): Promise<SplitResult>;
-      /** @deprecated v1.2 — 保留向后兼容 */
-      resolveMergeConflicts(decisions: MergeDecision[]): Promise<void>;
-      reassignMappings(assignments: MappingAssignment[]): Promise<void>;
     };
     /** v2.0 碎片笔记 */
     memos: {
@@ -555,5 +380,53 @@ export interface AbyssalAPI {
       popOut(viewType: ViewType, entityId?: string): Promise<void>;
       onMaximizedChange(cb: (event: WindowMaximizedEvent) => void): UnsubscribeFn;
     };
+  };
+
+  /** v3.0 工作区管理 */
+  workspace: {
+    create(opts: { rootDir: string; name?: string; description?: string }): Promise<WorkspaceInfo>;
+    openDialog(): Promise<string | null>;
+    listRecent(): Promise<RecentWorkspaceEntry[]>;
+    getCurrent(): Promise<CurrentWorkspaceInfo | null>;
+    switch(workspacePath: string): Promise<void>;
+    removeRecent(workspacePath: string): Promise<void>;
+    togglePin(workspacePath: string): Promise<boolean>;
+    onSwitched(cb: (event: { rootDir: string; name: string }) => void): UnsubscribeFn;
+  };
+}
+
+// ═══ 工作区类型 ═══
+
+export interface WorkspaceInfo {
+  rootDir: string;
+  meta: {
+    name: string;
+    createdAt: string;
+    version: string;
+    description: string;
+  };
+}
+
+export interface RecentWorkspaceEntry {
+  path: string;
+  name: string;
+  lastOpenedAt: string;
+  pinned: boolean;
+}
+
+export interface CurrentWorkspaceInfo {
+  rootDir: string;
+  name: string;
+  paths: {
+    root: string;
+    internal: string;
+    db: string;
+    config: string;
+    pdfs: string;
+    texts: string;
+    notes: string;
+    reports: string;
+    exports: string;
+    privateDocs: string;
   };
 }

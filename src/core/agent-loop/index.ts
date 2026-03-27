@@ -1,16 +1,22 @@
 /**
- * Lightweight tool-use loop for ad-hoc researcher requests
- * in the AI chat panel.
+ * Agent Loop — re-exports from adapter layer.
+ *
+ * Core modules should import from here to maintain stable import paths.
+ * Actual implementation lives in src/adapter/agent-loop/.
  */
 
-export interface AgentMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+export {
+  AgentLoop,
+  type AgentLoopOptions,
+  type ConversationState,
+} from '../../adapter/agent-loop/agent-loop';
 
-export async function runAgentLoop(
-  userMessage: string,
-  conversationHistory?: AgentMessage[],
-): Promise<string> {
-  throw new Error('Not implemented');
-}
+export {
+  ToolRegistry,
+  type ToolServices,
+} from '../../adapter/agent-loop/tool-registry';
+
+export {
+  buildSystemPrompt,
+  type SystemPromptContext,
+} from '../../adapter/agent-loop/system-prompt-builder';

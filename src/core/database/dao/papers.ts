@@ -6,6 +6,13 @@ import type { PaperId } from '../../types/common';
 import type { PaperMetadata, PaperStatus, PaperSource, FulltextStatus, AnalysisStatus, Relevance, PaperType } from '../../types/paper';
 import type { PaginatedResult, SortSpec } from '../../types/common';
 import { fromRow, toRow, now, camelToSnake } from '../row-mapper';
+import { safeFromRow, PaperRowSchema } from '../schemas';
+import { writeTransaction } from '../transaction-utils';
+import { hasVecTable } from './chunks';
+import {
+  validatePaperType, validatePaperSource, validateFulltextStatus,
+  validateAnalysisStatus, validateRelevance,
+} from '../validators';
 
 // ─── 列名映射（paper 表的全部列与 TypeScript 字段的对应关系）───
 
@@ -26,9 +33,16 @@ export function addPaper(
   paper: PaperMetadata,
   status?: Partial<PaperStatus>,
 ): PaperId {
+  // §1.2: 应用层枚举校验
+  validatePaperType(paper.paperType);
+  validatePaperSource(paper.source);
+  if (status?.fulltextStatus) validateFulltextStatus(status.fulltextStatus);
+  if (status?.analysisStatus) validateAnalysisStatus(status.analysisStatus);
+  if (status?.relevance) validateRelevance(status.relevance);
+
   const timestamp = now();
 
-  // DOI/arXiv ID 冲突检测：同一篇论文可能被不同 ID 生成材料发现
+  // §1.4: DOI/arXiv ID 交叉去重预检——同一篇论文可能以不同 canonical 被发现
   let effectiveId = paper.id;
   if (paper.doi || paper.arxivId) {
     const existing = db
@@ -81,22 +95,40 @@ export function addPaper(
     updatedAt: timestamp,
   } as Record<string, unknown>);
 
+  // §1.4 UPSERT 合并策略：
+  //  title        → 更长覆盖
+  //  authors      → 更完整覆盖（json_array_length 比较）
+  //  editors      → 同 authors
+  //  source       → 保留旧值（不可变）
+  //  paper_type   → 仅从 'unknown' 覆盖
+  //  biblio_complete → 单调递增
+  //  citation_count → 取较大值
+  //  discovered_at → 不更新
+  //  其余可空字段 → 非空覆盖（COALESCE）
   db.prepare(`
     INSERT INTO papers (${PAPER_COLUMNS.join(', ')})
     VALUES (${PAPER_COLUMNS.map(() => '?').join(', ')})
     ON CONFLICT(id) DO UPDATE SET
-      title           = COALESCE(excluded.title, papers.title),
+      title           = CASE
+                          WHEN length(excluded.title) > length(papers.title)
+                          THEN excluded.title ELSE papers.title
+                        END,
       authors         = CASE
                           WHEN json_array_length(excluded.authors) > json_array_length(papers.authors)
-                          THEN excluded.authors
-                          ELSE papers.authors
+                          THEN excluded.authors ELSE papers.authors
                         END,
       year            = COALESCE(excluded.year, papers.year),
       doi             = COALESCE(excluded.doi, papers.doi),
       arxiv_id        = COALESCE(excluded.arxiv_id, papers.arxiv_id),
       abstract        = COALESCE(excluded.abstract, papers.abstract),
-      citation_count  = COALESCE(excluded.citation_count, papers.citation_count),
-      paper_type      = COALESCE(excluded.paper_type, papers.paper_type),
+      citation_count  = COALESCE(
+                          MAX(excluded.citation_count, papers.citation_count),
+                          excluded.citation_count, papers.citation_count
+                        ),
+      paper_type      = CASE
+                          WHEN papers.paper_type = 'unknown'
+                          THEN excluded.paper_type ELSE papers.paper_type
+                        END,
       venue           = COALESCE(excluded.venue, papers.venue),
       journal         = COALESCE(excluded.journal, papers.journal),
       volume          = COALESCE(excluded.volume, papers.volume),
@@ -105,7 +137,12 @@ export function addPaper(
       publisher       = COALESCE(excluded.publisher, papers.publisher),
       isbn            = COALESCE(excluded.isbn, papers.isbn),
       edition         = COALESCE(excluded.edition, papers.edition),
-      editors         = COALESCE(excluded.editors, papers.editors),
+      editors         = CASE
+                          WHEN excluded.editors IS NOT NULL
+                            AND (papers.editors IS NULL
+                              OR json_array_length(excluded.editors) > json_array_length(papers.editors))
+                          THEN excluded.editors ELSE papers.editors
+                        END,
       book_title      = COALESCE(excluded.book_title, papers.book_title),
       series          = COALESCE(excluded.series, papers.series),
       issn            = COALESCE(excluded.issn, papers.issn),
@@ -171,7 +208,7 @@ export function getPaper(
     | Record<string, unknown>
     | undefined;
   if (!row) return null;
-  return fromRow<PaperMetadata & PaperStatus>(row);
+  return safeFromRow<PaperMetadata & PaperStatus>(row, PaperRowSchema);
 }
 
 // ─── §3.4 queryPapers ───
@@ -303,7 +340,7 @@ export function deletePaper(
     return db.prepare('DELETE FROM papers WHERE id = ?').run(id).changes;
   }
 
-  const deleteFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     const timestamp = now();
 
     // 1. 删除 paper_relations
@@ -319,7 +356,7 @@ export function deletePaper(
       'DELETE FROM citations WHERE citing_id = ? OR cited_id = ?',
     ).run(id, id);
 
-    // 4. 删除 chunks + chunks_vec
+    // 4. 删除 chunks + chunks_vec（先 vec 再 chunks——防御性编程）
     const chunkRows = db
       .prepare('SELECT rowid FROM chunks WHERE paper_id = ?')
       .all(id) as { rowid: number }[];
@@ -327,32 +364,57 @@ export function deletePaper(
     if (chunkRows.length > 0) {
       const rowids = chunkRows.map((r) => r.rowid);
       const placeholders = rowids.map(() => '?').join(', ');
-      db.prepare(
-        `DELETE FROM chunks_vec WHERE rowid IN (${placeholders})`,
-      ).run(...rowids);
+      // chunks_vec 可能不存在（skipVecExtension / sqlite-vec 未加载）
+      if (hasVecTable(db)) {
+        db.prepare(
+          `DELETE FROM chunks_vec WHERE rowid IN (${placeholders})`,
+        ).run(...rowids);
+      }
       db.prepare('DELETE FROM chunks WHERE paper_id = ?').run(id);
     }
 
     // 5. 删除 annotations
     db.prepare('DELETE FROM annotations WHERE paper_id = ?').run(id);
 
-    // 6. 更新碎片笔记中的论文引用
+    // 6. 更新碎片笔记中的论文引用（via 映射表 + JSON 列双写）
+    const affectedMemos = db.prepare(
+      'SELECT memo_id FROM memo_paper_map WHERE paper_id = ?',
+    ).all(id) as { memo_id: number }[];
+
+    db.prepare('DELETE FROM memo_paper_map WHERE paper_id = ?').run(id);
+
+    if (affectedMemos.length > 0) {
+      const updateMemoJson = db.prepare(`
+        UPDATE research_memos
+        SET paper_ids = (
+          SELECT COALESCE(json_group_array(mp.paper_id), '[]')
+          FROM memo_paper_map mp WHERE mp.memo_id = research_memos.id
+        ),
+        updated_at = ?
+        WHERE id = ?
+      `);
+      for (const { memo_id } of affectedMemos) {
+        updateMemoJson.run(timestamp, memo_id);
+      }
+    }
+
+    // 7. §5.10 步骤 5: 清理结构化笔记中的论文引用
     db.prepare(`
-      UPDATE research_memos
-      SET paper_ids = (
-        SELECT json_group_array(je.value)
-        FROM json_each(paper_ids) je WHERE je.value != ?
+      UPDATE research_notes
+      SET linked_paper_ids = (
+        SELECT COALESCE(json_group_array(je.value), '[]')
+        FROM json_each(linked_paper_ids) je
+        WHERE je.value != ?
       ),
       updated_at = ?
       WHERE id IN (
-        SELECT m.id FROM research_memos m, json_each(m.paper_ids) je WHERE je.value = ?
+        SELECT n.id FROM research_notes n, json_each(n.linked_paper_ids) je
+        WHERE je.value = ?
       )
     `).run(id, timestamp, id);
 
-    // 7. 删除论文
+    // 8. 删除论文（CASCADE 自动清理 citations/seeds 等）
     const result = db.prepare('DELETE FROM papers WHERE id = ?').run(id);
     return result.changes;
   });
-
-  return deleteFn();
 }

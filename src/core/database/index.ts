@@ -2,19 +2,24 @@
 //
 // database 模块是 Abyssal 系统的最底层状态持有者。
 // 对外暴露 DatabaseService 类和 createDatabaseService 工厂函数。
+//
+// §1.1: 初始化序列（打开→PRAGMA→扩展→迁移→预编译→文件锁→返回）
+// §5.1: 优雅关闭序列（停止接受→等待操作→Worker→checkpoint→close→释放锁）
 
 import type Database from 'better-sqlite3';
 import * as path from 'node:path';
 
 import type { AbyssalConfig } from '../types/config';
+import type { IDbService } from '../types/db-service';
+import { DatabaseError } from '../types/errors';
 import type { Logger } from '../infra/logger';
 import type {
   PaperId, ConceptId, ChunkId, ArticleId, OutlineEntryId,
   MemoId, NoteId, AnnotationId, SuggestionId,
-  PaginatedResult, SortSpec,
+  PaginatedResult,
 } from '../types/common';
-import type { PaperMetadata, PaperStatus, FulltextStatus, AnalysisStatus, Relevance, PaperType, PaperSource } from '../types/paper';
-import type { ConceptDefinition, ConceptMaturity } from '../types/concept';
+import type { PaperMetadata, PaperStatus } from '../types/paper';
+import type { ConceptDefinition } from '../types/concept';
 import type { ConceptMapping, RelationType, BilingualEvidence } from '../types/mapping';
 import type { Annotation } from '../types/annotation';
 import type { Article, OutlineEntry, SectionDraft } from '../types/article';
@@ -22,12 +27,17 @@ import type { TextChunk } from '../types/chunk';
 import type { ResearchMemo } from '../types/memo';
 import type { ResearchNote } from '../types/note';
 import type { SuggestedConcept, SuggestionStatus } from '../types/suggestion';
-import type { PaperRelation, RelationEdgeType } from '../types/relation';
+import type { PaperRelation } from '../types/relation';
 import type { SeedType } from '../types/config';
 
 // ─── 连接 & 迁移 ───
 import { openDatabase, walCheckpoint } from './connection';
 import { runMigrations } from './migration';
+
+// ─── 文件锁 & 预编译语句 & 互斥 ───
+import { FileLock } from './file-lock';
+import { createStatements, releaseStatements, type StatementCache } from './prepared-statements';
+import { Mutex } from '../infra/mutex';
 
 // ─── DAO 模块 ───
 import * as papersDao from './dao/papers';
@@ -75,15 +85,58 @@ export type { SnapshotMeta } from './snapshot';
 
 // ═══ DatabaseService ═══
 
-export class DatabaseService {
+export class DatabaseService implements IDbService {
   private readonly db: Database.Database;
   private readonly config: AbyssalConfig;
   private readonly logger: Logger;
+  private readonly dbPath: string;
+  private readonly fileLock: FileLock;
+  private stmts: StatementCache | null;
 
-  constructor(db: Database.Database, config: AbyssalConfig, logger: Logger) {
+  // §5.1: 关闭状态管理
+  private isClosing = false;
+  private activeOps = 0;
+
+  /**
+   * Fix #1: Worker 写入暂停回调。
+   * 由 Orchestrator 层通过 setPauseWorkerWrites() 注入。
+   * checkpoint / close 时调用以防止 TRUNCATE 与长写事务死锁导致 UI 冻结。
+   */
+  private pauseWorkerWrites?: () => (() => void);
+
+  /**
+   * §3.3: CLI 批量模式的写操作互斥锁。
+   * 防御性措施——在选项 A 策略（异步操作在事务外完成）下理论不需要，
+   * 但防止未来代码修改无意中在事务内引入 async 操作。
+   * TODO: CLI Orchestrator 启动时通过 dbWriteMutex.runExclusive 包装写操作
+   */
+  readonly dbWriteMutex = new Mutex();
+
+  constructor(
+    db: Database.Database,
+    config: AbyssalConfig,
+    logger: Logger,
+    dbPath: string,
+    fileLock: FileLock,
+    stmts: StatementCache,
+  ) {
     this.db = db;
     this.config = config;
     this.logger = logger;
+    this.dbPath = dbPath;
+    this.fileLock = fileLock;
+    this.stmts = stmts;
+  }
+
+  /**
+   * 注册 Worker 写入暂停回调。
+   *
+   * Orchestrator 初始化 Worker Thread 后调用此方法注入回调。
+   * 回调被 walCheckpoint / close 在执行 TRUNCATE 前调用，
+   * 确保 Worker 当前事务提交后暂停写入队列，防止 UI 冻结。
+   */
+  setPauseWorkerWrites(fn: () => (() => void)): void {
+    this.pauseWorkerWrites = fn;
   }
 
   /** 获取底层 better-sqlite3 实例（仅供高级用途） */
@@ -91,28 +144,57 @@ export class DatabaseService {
     return this.db;
   }
 
+  /** 获取预编译语句缓存 */
+  get statements(): StatementCache | null {
+    return this.stmts;
+  }
+
+  // ─── §5.1 操作守卫 ───
+
+  /**
+   * 包装数据库操作：检查 isClosing → activeOps++ → 执行 → activeOps--
+   */
+  private withOp<T>(fn: () => T): T {
+    if (this.isClosing) {
+      throw new DatabaseError({
+        message: 'Database is closing, cannot accept new operations',
+        context: { dbPath: this.dbPath, reason: 'closing' },
+      });
+    }
+    this.activeOps++;
+    try {
+      return fn();
+    } finally {
+      this.activeOps--;
+    }
+  }
+
+  // withAsyncOp 已移除——DatabaseService 的 activeOps 仅跟踪纯同步的数据库操作。
+  // 异步编排（如 createSnapshot 的流式压缩）属于 Orchestrator 层的职责。
+  // 在 Node.js 单线程中，只要能执行到 close()，就说明当前没有同步 DB 操作在跑。
+
   // ════════════════════════════════════════
   // §3 论文 CRUD
   // ════════════════════════════════════════
 
   addPaper(paper: PaperMetadata, status?: Partial<PaperStatus>): PaperId {
-    return papersDao.addPaper(this.db, paper, status);
+    return this.withOp(() => papersDao.addPaper(this.db, paper, status));
   }
 
   updatePaper(id: PaperId, updates: Partial<PaperMetadata & PaperStatus>): number {
-    return papersDao.updatePaper(this.db, id, updates);
+    return this.withOp(() => papersDao.updatePaper(this.db, id, updates));
   }
 
   getPaper(id: PaperId): (PaperMetadata & PaperStatus) | null {
-    return papersDao.getPaper(this.db, id);
+    return this.withOp(() => papersDao.getPaper(this.db, id));
   }
 
   queryPapers(filter: papersDao.QueryPapersFilter): PaginatedResult<PaperMetadata & PaperStatus> {
-    return papersDao.queryPapers(this.db, filter);
+    return this.withOp(() => papersDao.queryPapers(this.db, filter));
   }
 
   deletePaper(id: PaperId, cascade: boolean = true): number {
-    return papersDao.deletePaper(this.db, id, cascade);
+    return this.withOp(() => papersDao.deletePaper(this.db, id, cascade));
   }
 
   // ════════════════════════════════════════
@@ -120,23 +202,23 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   addCitation(citingId: PaperId, citedId: PaperId): void {
-    citationsDao.addCitation(this.db, citingId, citedId);
+    this.withOp(() => citationsDao.addCitation(this.db, citingId, citedId));
   }
 
   addCitations(pairs: Array<{ citingId: PaperId; citedId: PaperId }>): void {
-    citationsDao.addCitations(this.db, pairs);
+    this.withOp(() => citationsDao.addCitations(this.db, pairs));
   }
 
   getCitationsFrom(citingId: PaperId): PaperId[] {
-    return citationsDao.getCitationsFrom(this.db, citingId);
+    return this.withOp(() => citationsDao.getCitationsFrom(this.db, citingId));
   }
 
   getCitationsTo(citedId: PaperId): PaperId[] {
-    return citationsDao.getCitationsTo(this.db, citedId);
+    return this.withOp(() => citationsDao.getCitationsTo(this.db, citedId));
   }
 
   deleteCitation(citingId: PaperId, citedId: PaperId): number {
-    return citationsDao.deleteCitation(this.db, citingId, citedId);
+    return this.withOp(() => citationsDao.deleteCitation(this.db, citingId, citedId));
   }
 
   // ════════════════════════════════════════
@@ -144,7 +226,7 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   addConcept(concept: ConceptDefinition): void {
-    conceptsDao.addConcept(this.db, concept);
+    this.withOp(() => conceptsDao.addConcept(this.db, concept));
   }
 
   updateConcept(
@@ -152,14 +234,16 @@ export class DatabaseService {
     fields: conceptsDao.UpdateConceptFields,
     isBreaking: boolean = false,
   ): conceptsDao.GcConceptChangeResult {
-    return conceptsDao.updateConcept(
-      this.db, id, fields, isBreaking,
-      this.config.concepts.additiveChangeLookbackDays,
+    return this.withOp(() =>
+      conceptsDao.updateConcept(
+        this.db, id, fields, isBreaking,
+        this.config.concepts.additiveChangeLookbackDays,
+      ),
     );
   }
 
   deprecateConcept(id: ConceptId, reason: string): conceptsDao.GcConceptChangeResult {
-    return conceptsDao.deprecateConcept(this.db, id, reason);
+    return this.withOp(() => conceptsDao.deprecateConcept(this.db, id, reason));
   }
 
   syncConcepts(
@@ -167,9 +251,11 @@ export class DatabaseService {
     strategy: 'merge' | 'replace',
     isBreakingMap?: Record<string, boolean>,
   ): conceptsDao.SyncConceptsResult {
-    return conceptsDao.syncConcepts(
-      this.db, concepts, strategy, isBreakingMap,
-      this.config.concepts.additiveChangeLookbackDays,
+    return this.withOp(() =>
+      conceptsDao.syncConcepts(
+        this.db, concepts, strategy, isBreakingMap,
+        this.config.concepts.additiveChangeLookbackDays,
+      ),
     );
   }
 
@@ -178,7 +264,9 @@ export class DatabaseService {
     mergeConceptId: ConceptId,
     conflictResolution?: conceptsDao.ConflictResolution,
   ): conceptsDao.MergeConceptsResult {
-    return conceptsDao.mergeConcepts(this.db, keepConceptId, mergeConceptId, conflictResolution);
+    return this.withOp(() =>
+      conceptsDao.mergeConcepts(this.db, keepConceptId, mergeConceptId, conflictResolution),
+    );
   }
 
   splitConcept(
@@ -186,7 +274,9 @@ export class DatabaseService {
     newConceptA: ConceptDefinition,
     newConceptB: ConceptDefinition,
   ): conceptsDao.SplitConceptResult {
-    return conceptsDao.splitConcept(this.db, originalConceptId, newConceptA, newConceptB);
+    return this.withOp(() =>
+      conceptsDao.splitConcept(this.db, originalConceptId, newConceptA, newConceptB),
+    );
   }
 
   gcConceptChange(
@@ -194,18 +284,20 @@ export class DatabaseService {
     changeType: 'definition_refined' | 'deprecated' | 'deleted',
     isBreaking?: boolean,
   ): conceptsDao.GcConceptChangeResult {
-    return conceptsDao.gcConceptChange(
-      this.db, conceptId, changeType, isBreaking,
-      this.config.concepts.additiveChangeLookbackDays,
+    return this.withOp(() =>
+      conceptsDao.gcConceptChange(
+        this.db, conceptId, changeType, isBreaking,
+        this.config.concepts.additiveChangeLookbackDays,
+      ),
     );
   }
 
   getConcept(id: ConceptId): ConceptDefinition | null {
-    return conceptsDao.getConcept(this.db, id);
+    return this.withOp(() => conceptsDao.getConcept(this.db, id));
   }
 
   getAllConcepts(includeDeprecated?: boolean): ConceptDefinition[] {
-    return conceptsDao.getAllConcepts(this.db, includeDeprecated);
+    return this.withOp(() => conceptsDao.getAllConcepts(this.db, includeDeprecated));
   }
 
   // ════════════════════════════════════════
@@ -213,7 +305,7 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   mapPaperConcept(mapping: ConceptMapping): void {
-    mappingsDao.mapPaperConcept(this.db, mapping);
+    this.withOp(() => mappingsDao.mapPaperConcept(this.db, mapping));
   }
 
   updateMapping(
@@ -227,27 +319,27 @@ export class DatabaseService {
       reviewedAt?: string | null;
     },
   ): number {
-    return mappingsDao.updateMapping(this.db, paperId, conceptId, updates);
+    return this.withOp(() => mappingsDao.updateMapping(this.db, paperId, conceptId, updates));
   }
 
   getMappingsByPaper(paperId: PaperId): ConceptMapping[] {
-    return mappingsDao.getMappingsByPaper(this.db, paperId);
+    return this.withOp(() => mappingsDao.getMappingsByPaper(this.db, paperId));
   }
 
   getMappingsByConcept(conceptId: ConceptId): ConceptMapping[] {
-    return mappingsDao.getMappingsByConcept(this.db, conceptId);
+    return this.withOp(() => mappingsDao.getMappingsByConcept(this.db, conceptId));
   }
 
   getMapping(paperId: PaperId, conceptId: ConceptId): ConceptMapping | null {
-    return mappingsDao.getMapping(this.db, paperId, conceptId);
+    return this.withOp(() => mappingsDao.getMapping(this.db, paperId, conceptId));
   }
 
   deleteMapping(paperId: PaperId, conceptId: ConceptId): number {
-    return mappingsDao.deleteMapping(this.db, paperId, conceptId);
+    return this.withOp(() => mappingsDao.deleteMapping(this.db, paperId, conceptId));
   }
 
   getConceptMatrix(): mappingsDao.ConceptMatrixEntry[] {
-    return mappingsDao.getConceptMatrix(this.db);
+    return this.withOp(() => mappingsDao.getConceptMatrix(this.db));
   }
 
   // ════════════════════════════════════════
@@ -255,23 +347,23 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   addAnnotation(annotation: Omit<Annotation, 'id'>): AnnotationId {
-    return annotationsDao.addAnnotation(this.db, annotation);
+    return this.withOp(() => annotationsDao.addAnnotation(this.db, annotation));
   }
 
   getAnnotations(paperId: PaperId): Annotation[] {
-    return annotationsDao.getAnnotations(this.db, paperId);
+    return this.withOp(() => annotationsDao.getAnnotations(this.db, paperId));
   }
 
   getAnnotation(id: AnnotationId): Annotation | null {
-    return annotationsDao.getAnnotation(this.db, id);
+    return this.withOp(() => annotationsDao.getAnnotation(this.db, id));
   }
 
   deleteAnnotation(id: AnnotationId): number {
-    return annotationsDao.deleteAnnotation(this.db, id);
+    return this.withOp(() => annotationsDao.deleteAnnotation(this.db, id));
   }
 
   getAnnotationsByConcept(conceptId: ConceptId): Annotation[] {
-    return annotationsDao.getAnnotationsByConcept(this.db, conceptId);
+    return this.withOp(() => annotationsDao.getAnnotationsByConcept(this.db, conceptId));
   }
 
   // ════════════════════════════════════════
@@ -279,15 +371,15 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   addSeed(paperId: PaperId, seedType: SeedType): void {
-    seedsDao.addSeed(this.db, paperId, seedType);
+    this.withOp(() => seedsDao.addSeed(this.db, paperId, seedType));
   }
 
   getSeeds(): seedsDao.Seed[] {
-    return seedsDao.getSeeds(this.db);
+    return this.withOp(() => seedsDao.getSeeds(this.db));
   }
 
   removeSeed(paperId: PaperId): number {
-    return seedsDao.removeSeed(this.db, paperId);
+    return this.withOp(() => seedsDao.removeSeed(this.db, paperId));
   }
 
   // ════════════════════════════════════════
@@ -295,11 +387,11 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   addSearchLog(query: string, apiSource: string, resultCount: number): number {
-    return searchLogDao.addSearchLog(this.db, query, apiSource, resultCount);
+    return this.withOp(() => searchLogDao.addSearchLog(this.db, query, apiSource, resultCount));
   }
 
   getSearchLog(limit?: number): searchLogDao.SearchLogEntry[] {
-    return searchLogDao.getSearchLog(this.db, limit);
+    return this.withOp(() => searchLogDao.getSearchLog(this.db, limit));
   }
 
   // ════════════════════════════════════════
@@ -308,41 +400,41 @@ export class DatabaseService {
 
   // Phase 1：仅写入文本（主线程安全，不阻塞 UI）
   insertChunkTextOnly(chunk: TextChunk): number {
-    return chunksDao.insertChunkTextOnly(this.db, chunk);
+    return this.withOp(() => chunksDao.insertChunkTextOnly(this.db, chunk));
   }
 
   insertChunksTextOnlyBatch(chunks: TextChunk[]): number[] {
-    return chunksDao.insertChunksTextOnlyBatch(this.db, chunks);
+    return this.withOp(() => chunksDao.insertChunksTextOnlyBatch(this.db, chunks));
   }
 
   // Phase 2：仅写入向量（设计用于 Worker Thread 独立连接）
   insertChunkVectors(rowids: number[], embeddings: Float32Array[]): void {
-    chunksDao.insertChunkVectors(this.db, rowids, embeddings);
+    this.withOp(() => chunksDao.insertChunkVectors(this.db, rowids, embeddings));
   }
 
   // 便捷：chunk + 向量一次写入（小数据量场景）
   insertChunk(chunk: TextChunk, embedding: Float32Array | null): number {
-    return chunksDao.insertChunk(this.db, chunk, embedding);
+    return this.withOp(() => chunksDao.insertChunk(this.db, chunk, embedding));
   }
 
   insertChunksBatch(chunks: TextChunk[], embeddings: (Float32Array | null)[]): number[] {
-    return chunksDao.insertChunksBatch(this.db, chunks, embeddings);
+    return this.withOp(() => chunksDao.insertChunksBatch(this.db, chunks, embeddings));
   }
 
   deleteChunksByPaper(paperId: PaperId): number {
-    return chunksDao.deleteChunksByPaper(this.db, paperId);
+    return this.withOp(() => chunksDao.deleteChunksByPaper(this.db, paperId));
   }
 
   deleteChunksByPrefix(prefix: string): number {
-    return chunksDao.deleteChunksByPrefix(this.db, prefix);
+    return this.withOp(() => chunksDao.deleteChunksByPrefix(this.db, prefix));
   }
 
   getChunksByPaper(paperId: PaperId): TextChunk[] {
-    return chunksDao.getChunksByPaper(this.db, paperId);
+    return this.withOp(() => chunksDao.getChunksByPaper(this.db, paperId));
   }
 
   getChunkByChunkId(chunkId: ChunkId): TextChunk | null {
-    return chunksDao.getChunkByChunkId(this.db, chunkId);
+    return this.withOp(() => chunksDao.getChunkByChunkId(this.db, chunkId));
   }
 
   // ════════════════════════════════════════
@@ -353,11 +445,11 @@ export class DatabaseService {
     memo: Omit<ResearchMemo, 'id' | 'createdAt' | 'updatedAt'>,
     embedding: Float32Array | null,
   ): memosDao.AddMemoResult {
-    return memosDao.addMemo(this.db, memo, embedding);
+    return this.withOp(() => memosDao.addMemo(this.db, memo, embedding));
   }
 
   markMemoIndexed(id: MemoId): void {
-    memosDao.markMemoIndexed(this.db, id);
+    this.withOp(() => memosDao.markMemoIndexed(this.db, id));
   }
 
   updateMemo(
@@ -365,19 +457,19 @@ export class DatabaseService {
     updates: Partial<Pick<ResearchMemo, 'text' | 'paperIds' | 'conceptIds' | 'annotationId' | 'outlineId' | 'linkedNoteIds' | 'tags'>>,
     newEmbedding?: Float32Array | null,
   ): number {
-    return memosDao.updateMemo(this.db, id, updates, newEmbedding);
+    return this.withOp(() => memosDao.updateMemo(this.db, id, updates, newEmbedding));
   }
 
   getMemosByEntity(entityType: memosDao.MemoEntityType, entityId: string | number): ResearchMemo[] {
-    return memosDao.getMemosByEntity(this.db, entityType, entityId);
+    return this.withOp(() => memosDao.getMemosByEntity(this.db, entityType, entityId));
   }
 
   getMemo(id: MemoId): ResearchMemo | null {
-    return memosDao.getMemo(this.db, id);
+    return this.withOp(() => memosDao.getMemo(this.db, id));
   }
 
   deleteMemo(id: MemoId): number {
-    return memosDao.deleteMemo(this.db, id);
+    return this.withOp(() => memosDao.deleteMemo(this.db, id));
   }
 
   // ════════════════════════════════════════
@@ -389,7 +481,7 @@ export class DatabaseService {
     chunks: TextChunk[],
     embeddings: (Float32Array | null)[],
   ): void {
-    notesDao.createNote(this.db, note, chunks, embeddings);
+    this.withOp(() => notesDao.createNote(this.db, note, chunks, embeddings));
   }
 
   onNoteFileChanged(
@@ -403,31 +495,31 @@ export class DatabaseService {
     newChunks: TextChunk[],
     newEmbeddings: (Float32Array | null)[],
   ): void {
-    notesDao.onNoteFileChanged(this.db, noteId, frontmatter, newChunks, newEmbeddings);
+    this.withOp(() => notesDao.onNoteFileChanged(this.db, noteId, frontmatter, newChunks, newEmbeddings));
   }
 
   linkMemoToNote(memoId: MemoId, noteId: NoteId): void {
-    notesDao.linkMemoToNote(this.db, memoId, noteId);
+    this.withOp(() => notesDao.linkMemoToNote(this.db, memoId, noteId));
   }
 
   linkNoteToConcept(noteId: NoteId, conceptId: ConceptId): void {
-    notesDao.linkNoteToConcept(this.db, noteId, conceptId);
+    this.withOp(() => notesDao.linkNoteToConcept(this.db, noteId, conceptId));
   }
 
   getNote(id: NoteId): ResearchNote | null {
-    return notesDao.getNote(this.db, id);
+    return this.withOp(() => notesDao.getNote(this.db, id));
   }
 
   getNoteByFilePath(filePath: string): ResearchNote | null {
-    return notesDao.getNoteByFilePath(this.db, filePath);
+    return this.withOp(() => notesDao.getNoteByFilePath(this.db, filePath));
   }
 
   getAllNotes(): ResearchNote[] {
-    return notesDao.getAllNotes(this.db);
+    return this.withOp(() => notesDao.getAllNotes(this.db));
   }
 
   deleteNote(id: NoteId): number {
-    return notesDao.deleteNote(this.db, id);
+    return this.withOp(() => notesDao.deleteNote(this.db, id));
   }
 
   // ════════════════════════════════════════
@@ -442,26 +534,26 @@ export class DatabaseService {
     closestExistingConceptSimilarity?: string | null;
     reason: string;
   }): SuggestionId {
-    return suggestionsDao.addSuggestedConcept(this.db, input);
+    return this.withOp(() => suggestionsDao.addSuggestedConcept(this.db, input));
   }
 
   adoptSuggestedConcept(
     suggestionId: SuggestionId,
     conceptOverrides?: Partial<ConceptDefinition>,
   ): ConceptId {
-    return suggestionsDao.adoptSuggestedConcept(this.db, suggestionId, conceptOverrides);
+    return this.withOp(() => suggestionsDao.adoptSuggestedConcept(this.db, suggestionId, conceptOverrides));
   }
 
   dismissSuggestedConcept(suggestionId: SuggestionId): number {
-    return suggestionsDao.dismissSuggestedConcept(this.db, suggestionId);
+    return this.withOp(() => suggestionsDao.dismissSuggestedConcept(this.db, suggestionId));
   }
 
   getSuggestedConcepts(status?: SuggestionStatus, limit?: number): SuggestedConcept[] {
-    return suggestionsDao.getSuggestedConcepts(this.db, status, limit);
+    return this.withOp(() => suggestionsDao.getSuggestedConcepts(this.db, status, limit));
   }
 
   getSuggestedConcept(id: SuggestionId): SuggestedConcept | null {
-    return suggestionsDao.getSuggestedConcept(this.db, id);
+    return this.withOp(() => suggestionsDao.getSuggestedConcept(this.db, id));
   }
 
   // ════════════════════════════════════════
@@ -469,46 +561,46 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   createArticle(article: Omit<Article, 'createdAt' | 'updatedAt'>): ArticleId {
-    return articlesDao.createArticle(this.db, article);
+    return this.withOp(() => articlesDao.createArticle(this.db, article));
   }
 
   getArticle(id: ArticleId): Article | null {
-    return articlesDao.getArticle(this.db, id);
+    return this.withOp(() => articlesDao.getArticle(this.db, id));
   }
 
   updateArticle(
     id: ArticleId,
     updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status'>>,
   ): number {
-    return articlesDao.updateArticle(this.db, id, updates);
+    return this.withOp(() => articlesDao.updateArticle(this.db, id, updates));
   }
 
   getAllArticles(): Article[] {
-    return articlesDao.getAllArticles(this.db);
+    return this.withOp(() => articlesDao.getAllArticles(this.db));
   }
 
   deleteArticle(id: ArticleId): number {
-    return articlesDao.deleteArticle(this.db, id);
+    return this.withOp(() => articlesDao.deleteArticle(this.db, id));
   }
 
   setOutline(articleId: ArticleId, entries: OutlineEntry[]): void {
-    articlesDao.setOutline(this.db, articleId, entries);
+    this.withOp(() => articlesDao.setOutline(this.db, articleId, entries));
   }
 
   getOutline(articleId: ArticleId): OutlineEntry[] {
-    return articlesDao.getOutline(this.db, articleId);
+    return this.withOp(() => articlesDao.getOutline(this.db, articleId));
   }
 
   addSectionDraft(outlineEntryId: OutlineEntryId, content: string, llmBackend: string): number {
-    return articlesDao.addSectionDraft(this.db, outlineEntryId, content, llmBackend);
+    return this.withOp(() => articlesDao.addSectionDraft(this.db, outlineEntryId, content, llmBackend));
   }
 
   getSectionDrafts(outlineEntryId: OutlineEntryId): SectionDraft[] {
-    return articlesDao.getSectionDrafts(this.db, outlineEntryId);
+    return this.withOp(() => articlesDao.getSectionDrafts(this.db, outlineEntryId));
   }
 
   markEditedParagraphs(outlineEntryId: OutlineEntryId, version: number, paragraphIndices: number[]): number {
-    return articlesDao.markEditedParagraphs(this.db, outlineEntryId, version, paragraphIndices);
+    return this.withOp(() => articlesDao.markEditedParagraphs(this.db, outlineEntryId, version, paragraphIndices));
   }
 
   // ════════════════════════════════════════
@@ -519,19 +611,19 @@ export class DatabaseService {
     paperId: PaperId,
     semanticSearchFn: relationsDao.SemanticSearchFn | null,
   ): void {
-    relationsDao.computeRelationsForPaper(this.db, paperId, semanticSearchFn);
+    this.withOp(() => relationsDao.computeRelationsForPaper(this.db, paperId, semanticSearchFn));
   }
 
   recomputeAllRelations(semanticSearchFn: relationsDao.SemanticSearchFn | null): number {
-    return relationsDao.recomputeAllRelations(this.db, semanticSearchFn);
+    return this.withOp(() => relationsDao.recomputeAllRelations(this.db, semanticSearchFn));
   }
 
   getRelationGraph(filter: relationsDao.RelationGraphFilter): { nodes: relationsDao.GraphNode[]; edges: relationsDao.GraphEdge[] } {
-    return relationsDao.getRelationGraph(this.db, filter);
+    return this.withOp(() => relationsDao.getRelationGraph(this.db, filter));
   }
 
   getRelationsForPaper(paperId: PaperId): PaperRelation[] {
-    return relationsDao.getRelationsForPaper(this.db, paperId);
+    return this.withOp(() => relationsDao.getRelationsForPaper(this.db, paperId));
   }
 
   // ════════════════════════════════════════
@@ -539,26 +631,78 @@ export class DatabaseService {
   // ════════════════════════════════════════
 
   getStats(): statsDao.DatabaseStats {
-    return statsDao.getStats(this.db);
+    return this.withOp(() => statsDao.getStats(this.db));
   }
 
   checkIntegrity(): statsDao.IntegrityReport {
-    return statsDao.checkIntegrity(this.db);
+    return this.withOp(() => statsDao.checkIntegrity(this.db));
+  }
+
+  /**
+   * 获取论文关联的全部文件相对路径列表。
+   *
+   * 用于 deletePaper 事务成功后的文件清理（C2：文件操作在事务外）。
+   * 返回的路径是相对于 workspace/ 的相对路径——由 PathResolver 在 I/O 前拼接绝对路径。
+   *
+   * TODO: deletePaper 后的文件清理调用链——由 Orchestrator 在事务成功后执行
+   */
+  getPaperFilePaths(paperId: PaperId): string[] {
+    const paths: string[] = [];
+
+    // 从数据库获取已记录的路径
+    const paper = this.withOp(() =>
+      this.db.prepare('SELECT fulltext_path, text_path, analysis_path FROM papers WHERE id = ?')
+        .get(paperId) as { fulltext_path: string | null; text_path: string | null; analysis_path: string | null } | undefined,
+    );
+
+    if (paper?.fulltext_path) paths.push(paper.fulltext_path);
+    if (paper?.text_path) paths.push(paper.text_path);
+    if (paper?.analysis_path) paths.push(paper.analysis_path);
+
+    // 按约定可能存在的文件（不在数据库列中跟踪）
+    paths.push(`analyses/${paperId}.raw.txt`);  // 解析失败的原始输出
+    paths.push(`decisions/${paperId}.md`);       // 裁决记录
+
+    return paths;
+  }
+
+  /**
+   * 获取论文图表子目录的相对路径。
+   * 返回 'figures/{paperId}'——整个子目录需要删除。
+   */
+  getPaperFigureDir(paperId: PaperId): string {
+    return `figures/${paperId}`;
   }
 
   // ════════════════════════════════════════
   // §12 快照
   // ════════════════════════════════════════
 
-  createSnapshot(options?: { name?: string; reason?: string }): {
+  /**
+   * 创建快照。
+   *
+   * 注意：此方法包含异步 I/O（流式压缩），但不使用 withAsyncOp 跟踪 activeOps。
+   * 调用方（Orchestrator）负责确保在 close() 前等待快照完成。
+   * 同步的 DB 操作（checkpoint、统计收集）通过 withOp 隐式保护。
+   */
+  async createSnapshot(options?: { name?: string; reason?: string }): Promise<{
     snapshotPath: string;
     meta: snapshotMod.SnapshotMeta;
-  } {
+  }> {
+    if (this.isClosing) {
+      throw new DatabaseError({
+        message: 'Database is closing, cannot accept new operations',
+        context: { dbPath: this.dbPath, reason: 'closing' },
+      });
+    }
     const snapshotsDir = path.resolve(
       this.config.workspace.baseDir,
       this.config.workspace.snapshotsDir,
     );
-    return snapshotMod.createSnapshot(this.db, snapshotsDir, this.logger, options);
+    return snapshotMod.createSnapshot(this.db, snapshotsDir, this.logger, {
+      ...options,
+      pauseWorkerWrites: this.pauseWorkerWrites,
+    });
   }
 
   listSnapshots(): Array<snapshotMod.SnapshotMeta & { filePath: string }> {
@@ -578,18 +722,96 @@ export class DatabaseService {
   }
 
   // ════════════════════════════════════════
+  // 热迁移（运行时执行 Schema 变更）
+  // ════════════════════════════════════════
+
+  /**
+   * Fix #5: 运行时执行 Schema 迁移。
+   *
+   * 与初始化时迁移不同，运行中迁移必须先释放全部 PreparedStatement 缓存，
+   * 否则 DDL 语句（DROP TABLE / ALTER TABLE）会因 "database table is locked" 失败。
+   * 迁移完成后重新 prepare。
+   */
+  runHotMigration(migrationsDir: string): void {
+    // 步骤 1：释放全部预编译语句——防止 DDL 锁死
+    this.stmts = releaseStatements(this.stmts);
+
+    // 步骤 2：执行迁移
+    try {
+      runMigrations(this.db, migrationsDir, this.config, this.logger);
+    } finally {
+      // 步骤 3：重新预编译（无论迁移成功或失败都要恢复语句缓存）
+      this.stmts = createStatements(this.db, true);
+    }
+  }
+
+  // ════════════════════════════════════════
   // WAL & 生命周期
   // ════════════════════════════════════════
 
-  /** 执行 WAL checkpoint (TRUNCATE) */
+  /** 执行 WAL checkpoint (TRUNCATE)，含重试逻辑 + Worker 协调 */
   walCheckpoint(): void {
-    walCheckpoint(this.db);
+    walCheckpoint(this.db, {
+      logger: this.logger,
+      pauseWorkerWrites: this.pauseWorkerWrites,
+    });
   }
 
-  /** 关闭数据库连接 */
+  /**
+   * §5.1 优雅关闭序列。
+   *
+   * 1. 设置 isClosing=true，后续操作立即抛出 DatabaseError
+   * 2. 等待 activeOps==0（最多 10 秒）
+   * 3. （调用方负责 Worker Thread 终止——见 TODO）
+   * 4. WAL TRUNCATE checkpoint
+   * 5. 释放预编译语句引用
+   * 6. 关闭数据库连接
+   * 7. 删除文件锁
+   */
   close(): void {
-    this.db.close();
-    this.logger.info('Database connection closed');
+    if (this.isClosing) return; // 防重入
+    this.isClosing = true;
+
+    // 步骤 2：检查活跃操作。
+    // better-sqlite3 是同步 API——所有 DB 操作在同一事件循环 tick 中完成。
+    // 如果能执行到 close()，说明当前没有同步 DB 操作在跑（V8 单线程保证）。
+    // activeOps > 0 理论上不可能，此处仅作防御性断言。
+    if (this.activeOps > 0) {
+      this.logger.warn('Unexpected: closing with active operations', {
+        activeOps: this.activeOps,
+      });
+    }
+
+    // TODO: Worker Thread terminate 逻辑——依赖 Worker 管理器提供 worker 引用
+
+    // 步骤 4：WAL TRUNCATE checkpoint（含 Worker 协调）
+    try {
+      walCheckpoint(this.db, {
+        logger: this.logger,
+        pauseWorkerWrites: this.pauseWorkerWrites,
+      });
+    } catch (err) {
+      this.logger.warn('WAL checkpoint failed during close', {
+        error: (err as Error).message,
+      });
+    }
+
+    // 步骤 5：释放预编译语句引用
+    this.stmts = releaseStatements(this.stmts);
+
+    // 步骤 6：关闭数据库连接
+    try {
+      this.db.close();
+    } catch (err) {
+      this.logger.warn('Database close error', {
+        error: (err as Error).message,
+      });
+    }
+
+    // 步骤 7：删除文件锁
+    this.fileLock.release();
+
+    this.logger.info('Database closed successfully');
   }
 }
 
@@ -599,6 +821,8 @@ export interface CreateDatabaseServiceOptions {
   dbPath: string;
   config: AbyssalConfig;
   logger: Logger;
+  /** 只读模式，默认 false */
+  readOnly?: boolean | undefined;
   /** 跳过 sqlite-vec 加载（测试用） */
   skipVecExtension?: boolean | undefined;
   /** 迁移 SQL 目录。默认为 __dirname/migrations（tsc 模式）。esbuild bundle 需要显式指定 */
@@ -610,28 +834,42 @@ export interface CreateDatabaseServiceOptions {
  *
  * 完整初始化序列 (§1.1):
  * 1. 打开连接 + PRAGMA
- * 2. 加载 sqlite-vec 扩展
+ * 2. 加载 sqlite-vec 扩展 + 验证
  * 3. Schema 迁移
- * 4. 返回 DatabaseService 实例
+ * 4. 预编译高频 SQL 语句
+ * 5. 创建文件锁
+ * 6. 返回 DatabaseService 实例
  */
 export function createDatabaseService(
   options: CreateDatabaseServiceOptions,
 ): DatabaseService {
-  const { dbPath, config, logger, skipVecExtension } = options;
+  const { dbPath, config, logger, readOnly = false, skipVecExtension } = options;
 
-  // 步骤 1-3：打开连接 + PRAGMA + 扩展加载
+  // 步骤 1-2：打开连接 + PRAGMA + 扩展加载
   const db = openDatabase({
     dbPath,
     config,
     logger,
+    readOnly,
     skipVecExtension,
   });
 
-  // 步骤 4：Schema 迁移
-  const migrationsDir = options.migrationsDir ?? path.resolve(__dirname, 'migrations');
-  runMigrations(db, migrationsDir, config, logger, skipVecExtension);
+  // 步骤 3：Schema 迁移（只读模式跳过）
+  if (!readOnly) {
+    const migrationsDir = options.migrationsDir ?? path.resolve(__dirname, 'migrations');
+    runMigrations(db, migrationsDir, config, logger, skipVecExtension);
+  }
 
-  logger.info('DatabaseService initialized', { dbPath });
+  // 步骤 4：预编译高频 SQL 语句
+  const stmts = createStatements(db, !skipVecExtension);
 
-  return new DatabaseService(db, config, logger);
+  // 步骤 5：创建文件锁（只读模式跳过）
+  const fileLock = new FileLock(dbPath);
+  if (!readOnly) {
+    fileLock.acquire();
+  }
+
+  logger.info('DatabaseService initialized', { dbPath, readOnly });
+
+  return new DatabaseService(db, config, logger, dbPath, fileLock, stmts);
 }

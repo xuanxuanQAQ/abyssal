@@ -19,7 +19,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'unit',
-          include: ['src/core/**/*.test.ts', 'src/shared-types/**/*.test.ts'],
+          include: ['src/core/**/*.test.ts', 'src/shared-types/**/*.test.ts', 'src/adapter/**/*.test.ts', 'src/electron/**/*.test.ts', 'src/cli/**/*.test.ts'],
           environment: 'node',
           setupFiles: ['src/__test-utils__/setup-unit.ts'],
         },

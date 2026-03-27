@@ -7,7 +7,42 @@ import type { ResearchMemo } from '../../types/memo';
 import type { TextChunk } from '../../types/chunk';
 import { asMemoId, asChunkId } from '../../types/common';
 import { fromRow, now } from '../row-mapper';
+import { safeFromRow, MemoRowSchema } from '../schemas';
+import { writeTransaction } from '../transaction-utils';
 import { insertChunk, insertChunkTextOnly, deleteChunksByPrefix } from './chunks';
+
+/** 安全解析 JSON 数组——DB 数据损坏时返回空数组而非 crash */
+function safeParseArray(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// ─── 映射表同步辅助 ───
+
+function syncMemoMaps(
+  db: Database.Database,
+  memoId: number,
+  paperIds: string[],
+  conceptIds: string[],
+  noteIds: string[],
+): void {
+  db.prepare('DELETE FROM memo_paper_map WHERE memo_id = ?').run(memoId);
+  db.prepare('DELETE FROM memo_concept_map WHERE memo_id = ?').run(memoId);
+  db.prepare('DELETE FROM memo_note_map WHERE memo_id = ?').run(memoId);
+
+  const insPaper = db.prepare('INSERT INTO memo_paper_map (memo_id, paper_id) VALUES (?, ?)');
+  const insConcept = db.prepare('INSERT INTO memo_concept_map (memo_id, concept_id) VALUES (?, ?)');
+  const insNote = db.prepare('INSERT INTO memo_note_map (memo_id, note_id) VALUES (?, ?)');
+
+  for (const pid of paperIds) insPaper.run(memoId, pid);
+  for (const cid of conceptIds) insConcept.run(memoId, cid);
+  for (const nid of noteIds) insNote.run(memoId, nid);
+}
 
 // ─── §5.1 addMemo ───
 
@@ -29,13 +64,14 @@ export function addMemo(
 ): AddMemoResult {
   const timestamp = now();
 
-  const addFn = db.transaction(() => {
-    const result = db.prepare(`
+  return writeTransaction(db, () => {
+    const insertedRow = db.prepare(`
       INSERT INTO research_memos (
         text, paper_ids, concept_ids, annotation_id, outline_id,
         linked_note_ids, tags, indexed, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+      RETURNING id
+    `).get(
       memo.text,
       JSON.stringify(memo.paperIds),
       JSON.stringify(memo.conceptIds),
@@ -46,9 +82,13 @@ export function addMemo(
       embedding ? 1 : 0,
       timestamp,
       timestamp,
-    );
+    ) as { id: number };
 
-    const memoId = Number(result.lastInsertRowid);
+    const memoId = insertedRow.id;
+
+    // 同步映射表
+    syncMemoMaps(db, memoId, memo.paperIds, memo.conceptIds, memo.linkedNoteIds);
+
     const chunkId = asChunkId(`memo__${memoId}`);
 
     const chunk: TextChunk = {
@@ -77,8 +117,6 @@ export function addMemo(
 
     return { memoId: asMemoId(String(memoId)), chunkRowid };
   });
-
-  return addFn();
 }
 
 /** 标记 memo 的索引状态为已完成（Worker 写入向量后回调） */
@@ -102,7 +140,7 @@ export function updateMemo(
 
   // text 字段变更需要重建 chunk
   if (updates.text !== undefined) {
-    const updateFn = db.transaction(() => {
+    return writeTransaction(db, () => {
       // 删除旧 chunk
       deleteChunksByPrefix(db, `memo__${id}`);
 
@@ -126,6 +164,20 @@ export function updateMemo(
       const result = db.prepare(
         `UPDATE research_memos SET ${setClauses.join(', ')} WHERE id = ?`,
       ).run(...params);
+
+      // 同步映射表（取最新值，未更新的字段从当前行读取）
+      if (updates.paperIds !== undefined || updates.conceptIds !== undefined || updates.linkedNoteIds !== undefined) {
+        const current = db.prepare('SELECT paper_ids, concept_ids, linked_note_ids FROM research_memos WHERE id = ?')
+          .get(id) as { paper_ids: string; concept_ids: string; linked_note_ids: string } | undefined;
+        if (current) {
+          syncMemoMaps(
+            db, Number(id),
+            updates.paperIds ?? safeParseArray(current.paper_ids),
+            updates.conceptIds ?? safeParseArray(current.concept_ids),
+            updates.linkedNoteIds ?? safeParseArray(current.linked_note_ids),
+          );
+        }
+      }
 
       // 重新 INSERT chunk + vec
       const chunkId = asChunkId(`memo__${id}`);
@@ -151,8 +203,6 @@ export function updateMemo(
 
       return result.changes;
     });
-
-    return updateFn();
   }
 
   // 仅更新关联字段
@@ -168,9 +218,25 @@ export function updateMemo(
 
   params.push(id);
 
-  return db
+  const changes = db
     .prepare(`UPDATE research_memos SET ${setClauses.join(', ')} WHERE id = ?`)
     .run(...params).changes;
+
+  // 同步映射表
+  if (updates.paperIds !== undefined || updates.conceptIds !== undefined || updates.linkedNoteIds !== undefined) {
+    const current = db.prepare('SELECT paper_ids, concept_ids, linked_note_ids FROM research_memos WHERE id = ?')
+      .get(id) as { paper_ids: string; concept_ids: string; linked_note_ids: string } | undefined;
+    if (current) {
+      syncMemoMaps(
+        db, Number(id),
+        updates.paperIds ?? safeParseArray(current.paper_ids),
+        updates.conceptIds ?? safeParseArray(current.concept_ids),
+        updates.linkedNoteIds ?? safeParseArray(current.linked_note_ids),
+      );
+    }
+  }
+
+  return changes;
 }
 
 // ─── §5.3 getMemosByEntity ───
@@ -186,14 +252,16 @@ export function getMemosByEntity(
 
   switch (entityType) {
     case 'paper':
-      sql = `SELECT * FROM research_memos
-             WHERE id IN (SELECT m.id FROM research_memos m, json_each(m.paper_ids) je WHERE je.value = ?)
-             ORDER BY created_at DESC`;
+      sql = `SELECT m.* FROM research_memos m
+             JOIN memo_paper_map mp ON mp.memo_id = m.id
+             WHERE mp.paper_id = ?
+             ORDER BY m.created_at DESC`;
       break;
     case 'concept':
-      sql = `SELECT * FROM research_memos
-             WHERE id IN (SELECT m.id FROM research_memos m, json_each(m.concept_ids) je WHERE je.value = ?)
-             ORDER BY created_at DESC`;
+      sql = `SELECT m.* FROM research_memos m
+             JOIN memo_concept_map mc ON mc.memo_id = m.id
+             WHERE mc.concept_id = ?
+             ORDER BY m.created_at DESC`;
       break;
     case 'annotation':
       sql = 'SELECT * FROM research_memos WHERE annotation_id = ? ORDER BY created_at DESC';
@@ -202,9 +270,10 @@ export function getMemosByEntity(
       sql = 'SELECT * FROM research_memos WHERE outline_id = ? ORDER BY created_at DESC';
       break;
     case 'note':
-      sql = `SELECT * FROM research_memos
-             WHERE id IN (SELECT m.id FROM research_memos m, json_each(m.linked_note_ids) je WHERE je.value = ?)
-             ORDER BY created_at DESC`;
+      sql = `SELECT m.* FROM research_memos m
+             JOIN memo_note_map mn ON mn.memo_id = m.id
+             WHERE mn.note_id = ?
+             ORDER BY m.created_at DESC`;
       break;
   }
 
@@ -222,7 +291,7 @@ export function getMemo(
     .prepare('SELECT * FROM research_memos WHERE id = ?')
     .get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
-  return fromRow<ResearchMemo>(row);
+  return safeFromRow<ResearchMemo>(row, MemoRowSchema);
 }
 
 // ─── §5.4 deleteMemo ───
@@ -231,10 +300,9 @@ export function deleteMemo(
   db: Database.Database,
   id: MemoId,
 ): number {
-  const deleteFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     deleteChunksByPrefix(db, `memo__${id}`);
+    // 映射表通过 ON DELETE CASCADE 自动清理
     return db.prepare('DELETE FROM research_memos WHERE id = ?').run(id).changes;
   });
-
-  return deleteFn();
 }

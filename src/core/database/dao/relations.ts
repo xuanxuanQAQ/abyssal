@@ -6,6 +6,7 @@ import type { PaperId } from '../../types/common';
 import type { PaperRelation, RelationEdgeType } from '../../types/relation';
 import type { RelationType } from '../../types/mapping';
 import { fromRow, now } from '../row-mapper';
+import { writeTransaction } from '../transaction-utils';
 
 // ─── 语义搜索函数类型（依赖注入，避免 database 直接依赖 rag） ───
 
@@ -48,7 +49,7 @@ export function computeRelationsForPaper(
   paperId: PaperId,
   semanticSearchFn: SemanticSearchFn | null,
 ): void {
-  const computeFn = db.transaction(() => {
+  writeTransaction(db, () => {
     const timestamp = now();
 
     // 步骤 1：清理旧关系
@@ -141,8 +142,6 @@ export function computeRelationsForPaper(
 
     // 步骤 4：article_cites 不在此处处理（在 getRelationGraph 中动态生成）
   });
-
-  computeFn();
 }
 
 // ─── §9.2 recomputeAllRelations ───

@@ -1,28 +1,28 @@
 /**
- * Orchestrator — six deterministic workflows.
- * AI is invoked only at reasoning steps, never as pipeline controller.
+ * Orchestrator — re-exports from adapter layer.
+ *
+ * Core modules should import from here to maintain stable import paths.
+ * Actual implementation lives in src/adapter/orchestrator/.
  */
 
-export async function discover(): Promise<void> {
-  throw new Error('Not implemented');
-}
+export {
+  WorkflowRunner,
+  type WorkflowType,
+  type WorkflowStatus,
+  type WorkflowState,
+  type WorkflowProgress,
+  type WorkflowOptions,
+  type WorkflowResult,
+  type WorkflowError,
+  type WorkflowStepFn,
+  type WorkflowRunnerContext,
+} from '../../adapter/orchestrator/workflow-runner';
 
-export async function acquire(): Promise<void> {
-  throw new Error('Not implemented');
-}
-
-export async function analyze(): Promise<void> {
-  throw new Error('Not implemented');
-}
-
-export async function synthesize(conceptIds: string[]): Promise<void> {
-  throw new Error('Not implemented');
-}
-
-export async function article(articleId: number): Promise<void> {
-  throw new Error('Not implemented');
-}
-
-export async function bibliography(): Promise<void> {
-  throw new Error('Not implemented');
-}
+export {
+  parseOutput,
+  extractConceptMappings,
+  extractSuggestedConcepts,
+  type ParsedOutput,
+  type ConceptMapping,
+  type SuggestedNewConcept,
+} from '../../adapter/orchestrator/output-parser';

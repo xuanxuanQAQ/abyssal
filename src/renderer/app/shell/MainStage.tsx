@@ -47,13 +47,9 @@ const NotesView = createPreloadableLazy(() =>
   import('../../views/notes/NotesView').then((m) => ({ default: m.NotesView as React.ComponentType })),
 );
 
-function SettingsViewPlaceholder() {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-      <p>Settings — TODO</p>
-    </div>
-  );
-}
+const SettingsView = createPreloadableLazy(() =>
+  import('../../views/settings/SettingsView').then((m) => ({ default: m.SettingsView as React.ComponentType })),
+);
 
 // ═══ 视图配置 ═══
 
@@ -70,7 +66,7 @@ const VIEW_CONFIG: Record<ViewType, ViewConfig> = {
   graph:    { component: GraphView, keepAlive: false, preload: GraphView.preload }, // WebGL 上下文不兼容 display:none
   writing:  { component: WritingView, keepAlive: true, preload: WritingView.preload },
   notes:    { component: NotesView, keepAlive: true, preload: NotesView.preload },
-  settings: { component: SettingsViewPlaceholder, keepAlive: false },
+  settings: { component: SettingsView, keepAlive: false, preload: SettingsView.preload },
 };
 
 /** 最大 keep-alive 视图数量（含当前活动视图） */

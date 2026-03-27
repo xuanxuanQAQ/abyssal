@@ -395,6 +395,63 @@ export class ModelLoadError extends EmbeddingError {
   }
 }
 
+// ═══ 2.3.8 LLM 错误族 ═══
+
+export class LlmClientError extends AbyssalError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'LLM_CLIENT_ERROR',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
+export class AuthenticationError extends LlmClientError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'AUTHENTICATION_ERROR',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
+export class ContextOverflowError extends LlmClientError {
+  constructor(
+    opts: Partial<AbyssalErrorOptions> & {
+      message: string;
+      context: Record<string, unknown> & { estimatedTokens: number; modelWindow: number };
+    },
+  ) {
+    super({
+      code: 'CONTEXT_OVERFLOW',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
+export class ModelNotAvailableError extends LlmClientError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'MODEL_NOT_AVAILABLE',
+      recoverable: true,
+      ...opts,
+    });
+  }
+}
+
+export class ContentFilterError extends LlmClientError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'CONTENT_FILTER',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
 // ═══ fromJSON 反序列化映射表 ═══
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -426,4 +483,9 @@ const ERROR_CLASS_MAP: Record<string, new (opts: any) => AbyssalError> = {
   EmbeddingError,
   DimensionMismatchError,
   ModelLoadError,
+  LlmClientError,
+  AuthenticationError,
+  ContextOverflowError,
+  ModelNotAvailableError,
+  ContentFilterError,
 };

@@ -8,6 +8,8 @@ import type { ConceptMapping } from '../../types/mapping';
 import { isConceptId } from '../../types/common';
 import { IntegrityError } from '../../types/errors';
 import { fromRow, now } from '../row-mapper';
+import { safeFromRow, ConceptRowSchema } from '../schemas';
+import { writeTransaction } from '../transaction-utils';
 
 // ─── 内部工具 ───
 
@@ -47,6 +49,42 @@ const MATURITY_ORDER: Record<ConceptMaturity, number> = {
   established: 2,
 };
 
+/**
+ * DAG 循环检测：从 targetParentId 沿 parent_id 链向上遍历，
+ * 如果遇到 childId 说明 childId→targetParentId 形成循环。
+ *
+ * 最大遍历深度 64（与 ConceptId 长度上限一致），防止脏数据导致死循环。
+ */
+function detectParentCycle(
+  db: Database.Database,
+  childId: ConceptId,
+  targetParentId: ConceptId | null,
+): void {
+  if (!targetParentId) return;
+  if (targetParentId === childId) {
+    throw new IntegrityError({
+      message: `Cannot set concept "${childId}" as its own parent`,
+      context: { dbPath: db.name, conceptId: childId, parentId: targetParentId },
+    });
+  }
+
+  const stmt = db.prepare('SELECT parent_id FROM concepts WHERE id = ?');
+  let current: string | null = targetParentId;
+  const maxDepth = 64;
+
+  for (let depth = 0; depth < maxDepth && current; depth++) {
+    const row = stmt.get(current) as { parent_id: string | null } | undefined;
+    if (!row) break; // 概念不存在——链断裂，无循环
+    current = row.parent_id;
+    if (current === childId) {
+      throw new IntegrityError({
+        message: `Setting parent_id="${targetParentId}" for concept "${childId}" would create a cycle`,
+        context: { dbPath: db.name, conceptId: childId, parentId: targetParentId },
+      });
+    }
+  }
+}
+
 // ─── §4.1 addConcept ───
 
 export function addConcept(
@@ -58,6 +96,11 @@ export function addConcept(
       message: `Invalid ConceptId: "${concept.id}" — must match /^[a-z][a-z0-9_]{0,63}$/`,
       context: { dbPath: db.name, conceptId: concept.id },
     });
+  }
+
+  // DAG 循环检测
+  if (concept.parentId) {
+    detectParentCycle(db, concept.id, concept.parentId);
   }
 
   const timestamp = now();
@@ -119,7 +162,7 @@ export function updateConcept(
   isBreaking: boolean = false,
   lookbackDays: number = 30,
 ): GcConceptChangeResult {
-  const updateFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     const current = getConceptOrThrow(db, id);
     const timestamp = now();
     const newEntries: ConceptHistoryEntry[] = [];
@@ -177,6 +220,9 @@ export function updateConcept(
     }
 
     if (fields.parentId !== undefined && fields.parentId !== current.parentId) {
+      // DAG 循环检测
+      detectParentCycle(db, id, fields.parentId);
+
       newEntries.push({
         timestamp,
         changeType: 'parent_changed',
@@ -231,8 +277,6 @@ export function updateConcept(
       affectedPaperIds: [],
     };
   });
-
-  return updateFn();
 }
 
 // ─── §4.3 deprecateConcept ───
@@ -242,7 +286,7 @@ export function deprecateConcept(
   id: ConceptId,
   reason: string,
 ): GcConceptChangeResult {
-  const deprecateFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     const current = getConceptOrThrow(db, id);
     const timestamp = now();
 
@@ -267,7 +311,6 @@ export function deprecateConcept(
     return gcConceptChange(db, id, 'deprecated', false);
   });
 
-  return deprecateFn();
 }
 
 // ─── §4.4 syncConcepts ───
@@ -286,7 +329,7 @@ export function syncConcepts(
   isBreakingMap: Record<string, boolean> = {},
   lookbackDays: number = 30,
 ): SyncConceptsResult {
-  const syncFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     const existingRows = db
       .prepare('SELECT id FROM concepts WHERE deprecated = 0')
       .all() as { id: string }[];
@@ -346,7 +389,6 @@ export function syncConcepts(
     return { added, updated, deprecated, affectedMappingCount };
   });
 
-  return syncFn();
 }
 
 // ─── §4.5 mergeConcepts ───
@@ -373,7 +415,7 @@ export function mergeConcepts(
   mergeConceptId: ConceptId,
   conflictResolution: ConflictResolution = 'max_confidence',
 ): MergeConceptsResult {
-  const mergeFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     // 前置校验
     const keep = getConceptOrThrow(db, keepConceptId);
     const merge = getConceptOrThrow(db, mergeConceptId);
@@ -395,7 +437,7 @@ export function mergeConcepts(
     }
 
     // 步骤 1：检测映射冲突
-    const conflicts = db.prepare(`
+    const conflictRows = db.prepare(`
       SELECT pcm_keep.paper_id,
              pcm_keep.relation AS keep_relation,
              pcm_keep.confidence AS keep_confidence,
@@ -404,7 +446,8 @@ export function mergeConcepts(
       FROM paper_concept_map pcm_keep
       JOIN paper_concept_map pcm_merge ON pcm_keep.paper_id = pcm_merge.paper_id
       WHERE pcm_keep.concept_id = ? AND pcm_merge.concept_id = ?
-    `).all(keepConceptId, mergeConceptId) as ConflictEntry[];
+    `).all(keepConceptId, mergeConceptId) as Array<Record<string, unknown>>;
+    const conflicts: ConflictEntry[] = conflictRows.map(r => fromRow<ConflictEntry>(r));
 
     // 步骤 2：迁移非冲突映射
     const migrateResult = db.prepare(`
@@ -547,7 +590,6 @@ export function mergeConcepts(
     };
   });
 
-  return mergeFn();
 }
 
 // ─── §4.7 splitConcept ───
@@ -564,7 +606,7 @@ export function splitConcept(
   newConceptA: ConceptDefinition,
   newConceptB: ConceptDefinition,
 ): SplitConceptResult {
-  const splitFn = db.transaction(() => {
+  return writeTransaction(db, () => {
     const original = getConceptOrThrow(db, originalConceptId);
     const timestamp = now();
 
@@ -619,7 +661,6 @@ export function splitConcept(
     };
   });
 
-  return splitFn();
 }
 
 // ─── §4.6 gcConceptChange ───
@@ -708,7 +749,7 @@ export function getConcept(
     | Record<string, unknown>
     | undefined;
   if (!row) return null;
-  return fromRow<ConceptDefinition>(row);
+  return safeFromRow<ConceptDefinition>(row, ConceptRowSchema);
 }
 
 export function getAllConcepts(

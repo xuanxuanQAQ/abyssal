@@ -1,47 +1,97 @@
 /**
- * NoteNodeProgram — 星形节点 WebGL 程序（§7.2）
+ * NoteNodeProgram — Note/memo node rendering configuration.
  *
- * memo 节点: 5角星, 8px, 60% 透明度
- * note 节点: 5角星, 12px, 80% 透明度
+ * Since Sigma.js v3's custom WebGL NodeProgram API requires complex shader
+ * authoring (GLSL vertex/fragment programs), we use Sigma's built-in circle
+ * program with distinctive visual parameters as a pragmatic fallback.
  *
- * TODO: 实际 WebGL shader 实现需要继承 sigma.js 的 NodeProgram 基类。
- * 当前为占位导出，使用默认圆形程序作为 fallback。
+ * The node is differentiated by:
+ * - Purple color (#a78bfa for memos, #7c3aed for notes)
+ * - Smaller size (6-8px for memos, 10-12px for notes)
+ * - Reduced opacity (60-80%)
+ *
+ * When Sigma renders these nodes, GraphCanvas applies the visual params
+ * from getNodeAttributes() using the constants exported here.
+ *
+ * See spec: section 2.4, 2.9
  */
 
-// TODO: implement custom star-shaped WebGL program extending sigma's NodeProgram
-// For now, export a marker constant so GraphCanvas can detect note node types
-// and apply satellite clustering parameters.
+// ─── Layout parameters (satellite clustering) ───
 
-/** 卫星簇布局参数（§7.2）*/
+/** Satellite clustering — pulls memo/note nodes close to their linked entities */
 export const NOTE_LAYOUT_PARAMS = {
-  /** 笔记节点边权重（远高于默认 1.0，拉近到主节点） */
+  /** Edge weight for memo↔entity links (high = strong attraction) */
   edgeWeight: 5.0,
-  /** 弹簧长度缩短为正常值的 40% */
+  /** Spring length ratio — 40% of normal distance */
   springLengthRatio: 0.4,
-  /** 排斥力降低为正常值的 20% */
+  /** Repulsion ratio — 20% of normal repulsion */
   repulsionRatio: 0.2,
 } as const;
 
-/** memo 节点视觉参数 */
+// ─── Visual parameters ───
+
+/** Memo node: small purple circle */
 export const MEMO_NODE_VISUAL = {
-  shape: 'star' as const,
-  size: 8,
+  color: '#a78bfa',
+  size: 6,
   opacity: 0.6,
-  points: 5,
-};
+  /** Label hidden by default — shown only on hover */
+  showLabel: false,
+  /** Sigma node type — uses built-in circle program */
+  sigmaType: 'circle' as const,
+} as const;
 
-/** note 节点视觉参数 */
+/** Research note node: larger purple circle */
 export const NOTE_NODE_VISUAL = {
-  shape: 'star' as const,
-  size: 12,
+  color: '#7c3aed',
+  size: 10,
   opacity: 0.8,
-  points: 5,
-};
+  showLabel: true,
+  sigmaType: 'circle' as const,
+} as const;
 
-/** 笔记→实体边的样式 */
+/** Edge from memo/note → paper or concept */
 export const NOTE_EDGE_STYLE = {
-  type: 'dotted' as const,
-  color: '#9CA3AF',
-  opacity: 0.4,
-  arrow: false,
-};
+  color: '#a78bfa',
+  size: 1,
+  /** Sigma edge type — dotted lines via built-in program or custom */
+  sigmaType: 'line' as const,
+} as const;
+
+// ─── Node attribute resolver ───
+
+/**
+ * Resolve Sigma node attributes for a memo or note graph node.
+ * Called from graphSynchronizer or getNodeAttributes.
+ */
+export function getNoteNodeAttributes(nodeType: 'memo' | 'note'): {
+  color: string;
+  size: number;
+  type: string;
+  label: string;
+  forceLabel: boolean;
+} {
+  const visual = nodeType === 'memo' ? MEMO_NODE_VISUAL : NOTE_NODE_VISUAL;
+  return {
+    color: visual.color,
+    size: visual.size,
+    type: visual.sigmaType,
+    label: '', // Labels set per-node from memo text or note title
+    forceLabel: visual.showLabel,
+  };
+}
+
+/**
+ * Resolve Sigma edge attributes for a note↔entity link.
+ */
+export function getNoteEdgeAttributes(): {
+  color: string;
+  size: number;
+  type: string;
+} {
+  return {
+    color: NOTE_EDGE_STYLE.color,
+    size: NOTE_EDGE_STYLE.size,
+    type: NOTE_EDGE_STYLE.sigmaType,
+  };
+}

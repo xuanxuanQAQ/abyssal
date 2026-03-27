@@ -1,0 +1,49 @@
+# ══════════════════════════════════════════════════════════════
+# Abyssal Release — 打包 + 发布流水线
+#
+# 触发条件：推送 v* tag（如 v0.1.0）
+# 产出：Windows NSIS / macOS DMG / Linux AppImage
+# ══════════════════════════════════════════════════════════════
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write  # 创建 GitHub Release 需要写权限
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  release:
+    name: Build & Release (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        # postinstall → npm rebuild better-sqlite3 → 系统 Node ABI
+        # better-sqlite3 仅在 DB 子进程（系统 Node.js）中运行，无需 electron-rebuild
+
+      - name: Build
+        run: npm run build
+
+      - name: Package & Publish
+        run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false

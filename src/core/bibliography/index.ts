@@ -12,6 +12,8 @@ import type {
   AnystyleParsedEntry,
   ScanAndReplaceResult,
 } from '../types/bibliography';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { AbyssalConfig } from '../types/config';
 import type { Logger } from '../infra/logger';
 import { HttpClient } from '../infra/http-client';
@@ -27,6 +29,16 @@ import { checkBiblioCompleteness } from './completeness';
 import { parseReferences } from './parse-references';
 import { scanAndReplace, exportForLatex, exportForPandoc } from './scan-replace';
 import { generateBibtexKey } from './bibtex-key';
+import {
+  distributeCslFiles,
+  listAvailableStyles,
+  invalidateStylesCache,
+  validateCslFile,
+  renderDraftCitations,
+  reRenderDraftCitations,
+  extractDraftCitationIds,
+  type AvailableCslStyle,
+} from './csl-manager';
 
 // ─── 类型重导出 ───
 
@@ -40,6 +52,16 @@ export { checkBiblioCompleteness } from './completeness';
 export { parseReferences } from './parse-references';
 export { scanAndReplace, exportForLatex, exportForPandoc } from './scan-replace';
 export { generateBibtexKey } from './bibtex-key';
+export {
+  distributeCslFiles,
+  listAvailableStyles,
+  invalidateStylesCache,
+  validateCslFile,
+  renderDraftCitations,
+  reRenderDraftCitations,
+  extractDraftCitationIds,
+  type AvailableCslStyle,
+} from './csl-manager';
 
 // ═══ BibliographyService ═══
 
@@ -166,6 +188,50 @@ export class BibliographyService {
     existingKeys?: Set<string>,
   ): string {
     return generateBibtexKey(paper, existingKeys);
+  }
+
+  // ─── §1.6 可用格式列表 ───
+
+  listAvailableStyles(stylesDir: string): AvailableCslStyle[] {
+    return listAvailableStyles(stylesDir);
+  }
+
+  // ─── §1.5 CSL 文件校验 + 添加 ───
+
+  validateAndAddCslFile(
+    filePath: string,
+    stylesDir: string,
+  ): { success: boolean; error?: string | undefined } {
+    const result = validateCslFile(filePath);
+    if (!result.valid) {
+      return { success: false, error: result.error };
+    }
+
+    const fileName = path.basename(filePath);
+    const destPath = path.join(stylesDir, fileName);
+    try {
+      fs.copyFileSync(filePath, destPath);
+      invalidateStylesCache();
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: `Copy failed: ${(err as Error).message}` };
+    }
+  }
+
+  // ─── §7.1 综述草稿引文预格式化 ───
+
+  renderDraftCitations(
+    markdown: string,
+    paperMap: Map<PaperId, PaperMetadata>,
+  ): string {
+    return renderDraftCitations(markdown, paperMap, this.getEngine());
+  }
+
+  reRenderDraftCitations(
+    markdown: string,
+    paperMap: Map<PaperId, PaperMetadata>,
+  ): string {
+    return reRenderDraftCitations(markdown, paperMap, this.getEngine());
   }
 }
 

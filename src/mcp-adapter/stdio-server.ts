@@ -4,8 +4,8 @@
 // 启动方式: npx tsx src/mcp-adapter/stdio-server.ts --config ./config/abyssal.toml
 // 开发/调试专用，不进入 Electron 安装包。
 
-// eslint-disable-next-line deprecation/deprecation — Server is deprecated but McpServer
-// requires Zod schemas; Server + raw JSON Schema is simpler for generated definitions
+// Server is deprecated but McpServer requires Zod schemas;
+// Server + raw JSON Schema is simpler for generated definitions
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -29,6 +29,8 @@ import { getToolDefinitions } from './tool-definitions';
 import { handleToolCall, type ServiceContext } from './tool-handler';
 
 import * as path from 'node:path';
+import { acquireLock, LockError, type LockHandle } from '../electron/lock';
+import { deriveFrameworkState, type FrameworkState } from '../electron/app-context';
 
 // ─── §2.1 步骤 1: CLI 参数解析 ───
 
@@ -85,11 +87,11 @@ function parseArgs(argv: string[]): CliArgs {
 async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
 
-  // 步骤 3: 日志初始化（输出到 stderr，不干扰 JSON-RPC）
+  // Step 1: Logger init (stderr only — stdout reserved for JSON-RPC)
   const logger: Logger = new ConsoleLogger(cliArgs.logLevel);
   logger.info('Abyssal MCP Server starting', { config: cliArgs.configPath });
 
-  // 步骤 2: 配置加载
+  // Step 2: Config loading
   let config: AbyssalConfig;
   try {
     config = ConfigLoader.load(cliArgs.configPath);
@@ -98,7 +100,23 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 步骤 4: 数据库初始化
+  // Step 3: Process exclusive lock (mutual exclusion with Electron app)
+  const workspaceDir = path.dirname(cliArgs.configPath);
+  let lockHandle: LockHandle | null = null;
+  try {
+    lockHandle = acquireLock(path.resolve(workspaceDir, '..'));
+  } catch (err) {
+    if (err instanceof LockError) {
+      process.stderr.write(
+        `Error: Another Abyssal instance is running (PID: ${err.pid}). Close the Electron app first.\n`,
+      );
+      process.exit(1);
+    }
+    logger.error('Lock acquisition failed', err as Error);
+    process.exit(1);
+  }
+
+  // Step 4: Database init
   const dbPath = cliArgs.dbPath ??
     path.resolve(config.workspace.baseDir, config.workspace.dbFileName);
 
@@ -151,6 +169,18 @@ async function main(): Promise<void> {
 
   const startTime = Date.now();
 
+  // Step 7: Framework state evaluation
+  let frameworkState: FrameworkState = 'zero_concepts';
+  try {
+    const stats = dbService.getStats() as {
+      concepts: { total: number; tentative: number; working: number; established: number };
+    };
+    frameworkState = deriveFrameworkState(stats.concepts);
+    logger.info('Framework state evaluated', { state: frameworkState });
+  } catch (err) {
+    logger.warn('Framework state evaluation failed', { error: (err as Error).message });
+  }
+
   // ServiceContext
   const ctx: ServiceContext = {
     dbService,
@@ -164,10 +194,9 @@ async function main(): Promise<void> {
     startTime,
   };
 
-  // 步骤 6-7: MCP Server 启动 + Tool 注册
+  // Step 8-9: MCP Server + Tool registration
   const toolDefinitions = getToolDefinitions();
 
-  // eslint-disable-next-line deprecation/deprecation
   const server = new Server(
     { name: 'abyssal', version: '1.0.0' },
     { capabilities: { tools: {} } },
@@ -212,17 +241,24 @@ async function main(): Promise<void> {
     }
 
     try {
-      // WAL checkpoint + 关闭数据库
+      // WAL checkpoint + close database
       dbService.walCheckpoint();
       dbService.close();
     } catch {
-      // 忽略
+      // ignore
+    }
+
+    // Release process lock
+    try {
+      lockHandle?.release();
+    } catch {
+      // ignore
     }
 
     try {
       await server.close();
     } catch {
-      // 忽略
+      // ignore
     }
 
     logger.info('Server stopped');
@@ -231,6 +267,9 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', () => { gracefulShutdown(); });
   process.on('SIGTERM', () => { gracefulShutdown(); });
+
+  // stdin close = Claude Code terminated the connection (§9.7)
+  process.stdin.on('end', () => { gracefulShutdown(); });
 
   // 连接 stdio 传输
   const transport = new StdioServerTransport();

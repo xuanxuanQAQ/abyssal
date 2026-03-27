@@ -25,3 +25,22 @@ export function l2DistanceToScore(d: number): number {
 export function scoreToL2Distance(s: number): number {
   return Math.sqrt(4 * (1 - s));
 }
+
+/** 计算向量的 L2 范数（欧氏长度） */
+export function l2Norm(vec: Float32Array): number {
+  let sumSq = 0;
+  for (let i = 0; i < vec.length; i++) {
+    sumSq += vec[i]! * vec[i]!;
+  }
+  return Math.sqrt(sumSq);
+}
+
+/** 计算两个向量的 L2 距离 */
+export function l2Distance(a: Float32Array, b: Float32Array): number {
+  let sumSq = 0;
+  for (let i = 0; i < a.length; i++) {
+    const diff = a[i]! - b[i]!;
+    sumSq += diff * diff;
+  }
+  return Math.sqrt(sumSq);
+}
