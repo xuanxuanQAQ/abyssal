@@ -9,7 +9,7 @@
  * See spec: section 7 — Token Counter
  */
 
-import { countTokens as baseCountTokens, estimateTokens } from '../../core/infra/token-counter';
+import { countTokens as baseCountTokens } from '../../core/infra/token-counter';
 
 // ─── Encoder selection (§7.1) ───
 // js-tiktoken loads cl100k_base globally. For models with different tokenizers

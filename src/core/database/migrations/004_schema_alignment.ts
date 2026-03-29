@@ -25,11 +25,16 @@ function safeAddColumn(db: Database.Database, table: string, column: string, typ
  * 旧值 → 新值（规范 §1.2）。
  */
 const ANALYSIS_STATUS_MAP: Record<string, string> = {
-  pending: 'pending',
+  pending: 'not_started',
+  not_started: 'not_started',
+  in_progress: 'in_progress',
   analyzed: 'completed',
-  reviewed: 'completed',
+  completed: 'completed',
+  reviewed: 'needs_review',
+  needs_review: 'needs_review',
   integrated: 'completed',
   parse_failed: 'failed',
+  failed: 'failed',
 };
 
 export function migrate(db: Database.Database, _config: AbyssalConfig, skipVecExtension?: boolean): void {
@@ -70,10 +75,10 @@ export function migrate(db: Database.Database, _config: AbyssalConfig, skipVecEx
         url             TEXT,
         bibtex_key      TEXT,
         biblio_complete INTEGER NOT NULL DEFAULT 0,
-        fulltext_status TEXT NOT NULL DEFAULT 'pending',
+        fulltext_status TEXT NOT NULL DEFAULT 'not_attempted',
         fulltext_path   TEXT,
         text_path       TEXT,
-        analysis_status TEXT NOT NULL DEFAULT 'pending',
+        analysis_status TEXT NOT NULL DEFAULT 'not_started',
         analysis_path   TEXT,
         relevance       TEXT NOT NULL DEFAULT 'medium',
         decision_note   TEXT,

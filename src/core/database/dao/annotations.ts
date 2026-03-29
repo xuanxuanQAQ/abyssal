@@ -13,7 +13,7 @@ export function addAnnotation(
   db: Database.Database,
   annotation: Omit<Annotation, 'id'>,
 ): AnnotationId {
-  // §5.5: type='concept_tag' 时 concept_id 必须非空
+  // §5.5: type='conceptTag' 时 concept_id 必须非空
   validateAnnotationType(annotation.type);
   validateAnnotationInvariant(annotation.type, annotation.conceptId);
 

@@ -8,6 +8,7 @@
  */
 
 import type { Logger } from '../../core/infra/logger';
+import { AbyssalError } from '../../core/types/errors';
 import type { PushManager } from '../../electron/ipc/push';
 
 // ─── Types ───
@@ -126,15 +127,15 @@ export class WorkflowRunner {
     // Same-type mutex
     for (const [, ws] of this.activeWorkflows) {
       if (ws.type === type && ws.status === 'running') {
-        throw new Error(`Workflow '${type}' is already running (id: ${ws.id})`);
+        throw new AbyssalError({ message: `Workflow '${type}' is already running (id: ${ws.id})`, code: 'WORKFLOW_CONFLICT', recoverable: false });
       }
       if (ws.status === 'running' && hasConflict(ws.type, type)) {
-        throw new Error(`Cannot run '${type}' while '${ws.type}' is running (conflict)`);
+        throw new AbyssalError({ message: `Cannot run '${type}' while '${ws.type}' is running (conflict)`, code: 'WORKFLOW_CONFLICT', recoverable: false });
       }
     }
 
     const fn = this.workflowFns.get(type);
-    if (!fn) throw new Error(`No workflow registered for type '${type}'`);
+    if (!fn) throw new AbyssalError({ message: `No workflow registered for type '${type}'`, code: 'WORKFLOW_NOT_FOUND', recoverable: false });
 
     const id = crypto.randomUUID();
     const abortController = new AbortController();

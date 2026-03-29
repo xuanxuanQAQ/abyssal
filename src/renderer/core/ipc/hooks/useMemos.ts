@@ -50,7 +50,7 @@ export function useCreateMemo() {
         conceptIds: newMemo.conceptIds ?? [],
         annotationId: newMemo.annotationId ?? null,
         outlineId: newMemo.outlineId ?? null,
-        linkedNoteId: null,
+        linkedNoteIds: [],
         tags: newMemo.tags ?? [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),

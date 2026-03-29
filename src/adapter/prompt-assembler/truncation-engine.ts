@@ -12,6 +12,14 @@
  */
 
 import type { SourceType, SourcePriority } from '../context-budget/source-priority';
+import {
+  compressFulltext as compressFulltextStructured,
+  type SectionMapEntry,
+} from './fulltext-compressor';
+import {
+  truncateRagPassages as truncateRagDiversity,
+  type RagPassage as RagPassageExtended,
+} from './retrieval-formatter';
 
 // ─── Token counter interface ───
 
@@ -223,7 +231,13 @@ export function iterativeTrim(
 
     const target = candidates[0]!;
     const currentTokens = tokenCounter.count(target.content);
-    const newTarget = Math.floor(currentTokens * 0.8); // Trim 20%
+
+    // Fix #5: Trim proportional to overflow, not fixed 20%.
+    // Only cut what's needed (+ 100 token safety buffer), capped at 20% max.
+    const precisionCut = remaining + 100;
+    const maxCut = Math.floor(currentTokens * 0.2);
+    const actualCut = Math.min(precisionCut, maxCut);
+    const newTarget = Math.max(0, currentTokens - actualCut);
 
     target.content = truncateContent(
       target.content,
@@ -232,7 +246,7 @@ export function iterativeTrim(
       tokenCounter,
     );
 
-    remaining -= (currentTokens - newTarget);
+    remaining -= actualCut;
   }
 
   return remaining;
@@ -338,3 +352,35 @@ function extractFirstSentence(text: string): string {
   const match = text.match(/^[^.!?]*[.!?]/);
   return match ? match[0].trim() : text.slice(0, 200).trim();
 }
+
+// ─── Structured compression delegation (§6.1) ───
+
+/**
+ * Compress fulltext using precise sectionMap boundaries when available.
+ * Falls back to heuristic extraction when sectionMap is null.
+ *
+ * Re-exports the structured compressor from fulltext-compressor.ts.
+ */
+export function compressFulltextWithSectionMap(
+  text: string,
+  sectionMap: SectionMapEntry[] | null,
+  targetTokens: number,
+  tokenCounter: TokenCounter,
+): string {
+  return compressFulltextStructured(text, sectionMap, targetTokens, tokenCounter);
+}
+
+/**
+ * Truncate RAG passages with paper diversity using the enhanced formatter.
+ * Re-exports from retrieval-formatter.ts.
+ */
+export function truncateRagPassagesWithDiversity(
+  passages: RagPassageExtended[],
+  targetTokens: number,
+): RagPassageExtended[] {
+  return truncateRagDiversity(passages, targetTokens);
+}
+
+// Re-export types for consumers
+export type { SectionMapEntry } from './fulltext-compressor';
+export type { RagPassage as RagPassageExtended } from './retrieval-formatter';

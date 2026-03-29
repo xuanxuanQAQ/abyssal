@@ -26,13 +26,13 @@ import type { WorkflowRunner } from '../adapter/orchestrator/workflow-runner';
 import type { AgentLoop } from '../adapter/agent-loop/agent-loop';
 import type { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
 
-// ─── FrameworkState ───
+// ─── FrameworkState (re-export from canonical location) ───
 
-export type FrameworkState =
-  | 'zero_concepts'
-  | 'early_exploration'
-  | 'framework_forming'
-  | 'framework_mature';
+export {
+  type FrameworkState,
+  deriveFrameworkState,
+  effectiveMode,
+} from '../core/config/framework-state';
 
 // ─── WorkflowState (active workflow tracking) ───
 
@@ -89,6 +89,9 @@ export interface AppContext {
   workerThread: Worker | null;
   lockHandle: LockHandle | null;
   pushManager: PushManager | null;
+
+  /** §6.3 阶段3: 概念变更后需要重新生成的综述草稿 conceptId 集合 */
+  staleDrafts: Set<string>;
 
   // ── Lifecycle flags ──
   isShuttingDown: boolean;
@@ -172,6 +175,7 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
     workerThread: null,
     lockHandle: opts.lockHandle,
     pushManager: null,
+    staleDrafts: new Set(),
 
     // Lifecycle
     isShuttingDown: false,
@@ -186,14 +190,37 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
   };
 
   // ── refreshFrameworkState ──
-  // Re-queries concept counts and re-derives FrameworkState.
+  // §4.3: Re-queries concept counts and re-derives FrameworkState.
   // Called after concept mutations (add, update, deprecate, merge, split, adopt).
+  // Broadcasts to renderer via pushManager when state changes.
   ctx.refreshFrameworkState = async () => {
     try {
+      const oldState = ctx.frameworkState;
       const stats = (await ctx.dbProxy.getStats()) as {
         concepts: { total: number; tentative: number; working: number; established: number };
       };
-      ctx.frameworkState = deriveFrameworkState(stats.concepts);
+      const newState = deriveFrameworkState(stats.concepts);
+
+      if (oldState === newState) return; // 无变化——不广播
+
+      ctx.frameworkState = newState;
+      ctx.logger.info('Framework state changed', { from: oldState, to: newState });
+
+      // §4.3: 推送到渲染进程
+      // TODO — pushManager.send('push:framework-state-changed', payload) 待 PushManager 接口完善后启用
+      // if (ctx.pushManager) {
+      //   ctx.pushManager.send('push:framework-state-changed', {
+      //     oldState, newState, conceptStats: stats.concepts,
+      //   });
+      // }
+
+      // §4.3: 触发 Advisory Agent 重新评估（异步，不阻塞）
+      // TODO — advisoryAgent.generateSuggestions() 待 AdvisoryAgent 接口完善后启用
+      // if (ctx.advisoryAgent) {
+      //   ctx.advisoryAgent.generateSuggestions().catch(err =>
+      //     ctx.logger.warn('Advisory Agent failed after state change', { error: err.message })
+      //   );
+      // }
     } catch (err) {
       ctx.logger.warn('Failed to refresh framework state', {
         error: (err as Error).message,

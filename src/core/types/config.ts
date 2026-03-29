@@ -102,6 +102,38 @@ export interface ConceptsConfig {
   autoSuggestThreshold: number; // 默认 3
 }
 
+export interface ContextBudgetConfig {
+  focusedMaxTokens: number; // 默认 50000
+  broadMaxTokens: number; // 默认 100000
+  outputReserveRatio: number; // 默认 0.15
+  safetyMarginRatio: number; // 默认 0.05
+  skipRerankerThreshold: number; // 默认 0.8
+  costPreference: 'aggressive' | 'balanced' | 'conservative'; // 默认 "balanced"
+}
+
+// COST_PREFERENCES / CostPreference 定义在 retrieval.ts，此处不再重复。
+
+export interface ConceptChangeConfig {
+  jaccardThreshold: number; // 默认 0.5，范围 [0.0, 1.0]
+  additiveReviewWindowDays: number; // 默认 30，范围 [7, 180]
+  autoDetectBreaking: boolean; // 默认 true
+}
+
+export interface BatchConfig {
+  concurrency: number; // 默认 5
+}
+
+export interface AdvisoryConfig {
+  minPapersThreshold: number; // 默认 5
+}
+
+export interface NotesConfig {
+  memoMaxLength: number; // 默认 500，范围 [50, 2000]
+  memoAutoIndex: boolean; // 默认 true
+  noteAutoIndex: boolean; // 默认 true
+  notesDirectory: string; // 默认 "notes"（相对于 workspace）
+}
+
 // ═══ 全局配置（存储在 AppData，跨工作区共享） ═══
 
 export interface GlobalConfig {
@@ -124,4 +156,9 @@ export interface AbyssalConfig {
   apiKeys: ApiKeysConfig;
   workspace: WorkspaceConfig;
   concepts: ConceptsConfig;
+  contextBudget: ContextBudgetConfig;
+  conceptChange: ConceptChangeConfig;
+  notes: NotesConfig;
+  batch: BatchConfig;
+  advisory: AdvisoryConfig;
 }

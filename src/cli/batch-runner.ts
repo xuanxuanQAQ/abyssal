@@ -21,7 +21,8 @@ import { createSearchService } from '../core/search';
 import { AcquireService } from '../core/acquire';
 import { ProcessService } from '../core/process';
 import { acquireLock, type LockHandle } from '../electron/lock';
-import { deriveFrameworkState, type FrameworkState } from '../electron/app-context';
+import { deriveFrameworkState, type FrameworkState } from '../core/config/framework-state';
+import { validateConfig } from '../core/config/config-validator';
 import { createLlmClient, type LlmClient } from '../adapter/llm-client/llm-client';
 import { RerankerScheduler } from '../adapter/llm-client/reranker';
 import { createContextBudgetManager } from '../adapter/context-budget/context-budget-manager';
@@ -67,6 +68,20 @@ export async function batchRun(args: CliArgs): Promise<void> {
       ? new ConsoleLogger('debug')
       : new FileLogger(wsPaths.logs, 'info');
 
+    // ── 3.5 Configuration validation (10-level chain) ──
+    logger.info('Validating configuration...');
+    const validationResult = validateConfig(config, {
+      workspaceRoot: workspacePath,
+      skipDatabaseChecks: true, // DB not yet open
+      logger,
+    });
+
+    for (const w of validationResult.warnings) {
+      if (w.severity === 'warning') {
+        logger.warn(`Config warning: ${w.message}`);
+      }
+    }
+
     // ── 4. Database ──
     dbService = createDatabaseService({
       dbPath: path.join(workspacePath, '.abyssal', 'abyssal.db'),
@@ -90,11 +105,12 @@ export async function batchRun(args: CliArgs): Promise<void> {
     const cbm = createContextBudgetManager(logger);
 
     // ── 6. Framework state (§8.6) ──
-    let frameworkState: FrameworkState = 'zero_concepts';
+    // Use validation result first, then refine from DB stats
+    let frameworkState: FrameworkState = validationResult.frameworkState;
     try {
       const stats = dbService.getStats() as { concepts: { total: number; tentative: number; working: number; established: number } };
       frameworkState = deriveFrameworkState(stats.concepts);
-    } catch { /* use default */ }
+    } catch { /* use validation result */ }
 
     if (frameworkState === 'zero_concepts') {
       process.stderr.write('ℹ️  No concepts defined — running in concept discovery mode.\n');
@@ -253,7 +269,7 @@ function createSyncDbProxyShim(db: DatabaseService): Record<string, (...args: un
   return new Proxy({} as Record<string, (...args: unknown[]) => Promise<unknown>>, {
     get(_target, prop: string) {
       return async (...args: unknown[]) => {
-        const method = (db as unknown as Record<string, Function>)[prop];
+        const method = (db as unknown as Record<string, (...a: unknown[]) => unknown>)[prop];
         if (typeof method !== 'function') {
           throw new Error(`DatabaseService has no method: ${prop}`);
         }

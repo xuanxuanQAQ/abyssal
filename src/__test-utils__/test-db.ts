@@ -21,60 +21,110 @@ export const silentLogger: Logger = {
   error() {},
 };
 
-/** 测试用最小配置 */
+/** 测试用最小配置——字段与 AbyssalConfig 接口严格对齐 */
 export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalConfig {
   return {
-    project: { name: 'test-project' },
+    project: { name: 'test-project', description: '', mode: 'auto' },
     workspace: {
       baseDir: '/tmp/test-workspace',
       dbFileName: ':memory:',
-      pdfDir: 'pdfs',
-      textDir: 'texts',
-      reportsDir: 'reports',
-      notesDir: 'notes',
-      exportsDir: 'exports',
-      snapshotsDir: 'snapshots',
-      privateDocs: 'private-docs',
+      pdfDir: 'pdfs/',
+      textDir: 'texts/',
+      reportsDir: 'reports/',
+      notesDir: 'notes/',
+      logsDir: 'logs/',
+      snapshotsDir: 'snapshots/',
+      privateDocsDir: 'private_docs/',
     },
     acquire: {
-      sources: ['semantic_scholar'],
-      maxPapersPerRun: 100,
-      deduplication: { strategy: 'doi_first' },
-      rateLimits: {},
+      enabledSources: ['unpaywall', 'arxiv', 'pmc'],
+      enableScihub: false,
+      scihubDomain: null,
+      institutionalProxyUrl: null,
+      perSourceTimeoutMs: 30_000,
+      maxRedirects: 5,
     },
     discovery: {
-      rounds: 3,
-      mode: 'balanced',
+      traversalDepth: 2,
+      concurrency: 5,
+      maxResultsPerQuery: 100,
     },
     analysis: {
-      defaultModel: 'claude-sonnet-4-20250514',
-      concurrency: 2,
-      fulltext: { preferPdf: true },
+      templateDir: 'templates/',
+      maxTokensPerChunk: 1024,
+      overlapTokens: 128,
+      ocrEnabled: false,
+      ocrLanguages: ['eng'],
+      charDensityThreshold: 10,
+      vlmEnabled: false,
+      autoSuggestConcepts: true,
     },
     rag: {
+      embeddingBackend: 'api',
       embeddingModel: 'text-embedding-3-small',
       embeddingDimension: 4, // 极小维度，测试用
-      embeddingBackend: 'api',
-      chunkSize: 512,
-      chunkOverlap: 64,
-      topK: 10,
+      defaultTopK: 10,
+      expandFactor: 3,
+      rerankerBackend: 'local-bge',
+      rerankerModel: null,
+      tentativeExpandFactorMultiplier: 2.0,
+      tentativeTopkMultiplier: 1.5,
+      correctiveRagEnabled: false,
+      correctiveRagMaxRetries: 0,
+      correctiveRagModel: 'deepseek-chat',
+      localOnnxModelPath: null,
+      localRerankerModelPath: null,
     },
     language: {
-      primary: 'zh',
-      secondary: 'en',
+      internalWorkingLanguage: 'en',
+      defaultOutputLanguage: 'zh-CN',
     },
     llm: {
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-20250514',
-      apiKey: 'test-key',
-      temperature: 0.3,
-      maxTokens: 4096,
+      defaultProvider: 'anthropic',
+      defaultModel: 'claude-sonnet-4-20250514',
+      workflowOverrides: {},
+    },
+    apiKeys: {
+      anthropicApiKey: 'test-key',
+      openaiApiKey: null,
+      deepseekApiKey: null,
+      semanticScholarApiKey: null,
+      openalexEmail: null,
+      unpaywallEmail: null,
+      cohereApiKey: null,
+      jinaApiKey: null,
     },
     concepts: {
       additiveChangeLookbackDays: 30,
+      autoSuggestThreshold: 3,
+    },
+    contextBudget: {
+      focusedMaxTokens: 50_000,
+      broadMaxTokens: 100_000,
+      outputReserveRatio: 0.15,
+      safetyMarginRatio: 0.05,
+      skipRerankerThreshold: 0.8,
+      costPreference: 'balanced',
+    },
+    conceptChange: {
+      jaccardThreshold: 0.5,
+      additiveReviewWindowDays: 30,
+      autoDetectBreaking: true,
+    },
+    notes: {
+      memoMaxLength: 500,
+      memoAutoIndex: true,
+      noteAutoIndex: true,
+      notesDirectory: 'notes',
+    },
+    batch: {
+      concurrency: 2,
+    },
+    advisory: {
+      minPapersThreshold: 5,
     },
     ...overrides,
-  } as AbyssalConfig;
+  };
 }
 
 /** 迁移文件目录 */
@@ -100,7 +150,7 @@ export function createTestDB(): Database.Database {
     runMigrations(db, MIGRATIONS_DIR, config, silentLogger, /* skipVecExtension */ true);
   } catch (err) {
     db.close();
-    throw new Error(`createTestDB migration failed: ${(err as Error).message}`);
+    throw new Error(`createTestDB migration failed: ${(err as Error).message}`, { cause: err });
   }
 
   return db;

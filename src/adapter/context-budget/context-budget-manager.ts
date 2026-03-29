@@ -19,13 +19,11 @@
 import {
   selectStrategy,
   type StrategyMode,
-  type StrategyParams,
 } from './strategies';
 import {
   allocateByPriority,
   getSourcePriority,
   type SourceType,
-  type SourcePriority,
   type SourceEstimate,
   type SourceAllocation,
   type TaskType,

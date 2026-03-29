@@ -1,13 +1,23 @@
 import type { ConceptId } from './common';
+import type {
+  Maturity as ConceptMaturity,
+  ConceptHistoryEventType,
+} from '../../shared-types/enums';
 
 // ═══ 字面量联合 + const 数组 ═══
+// 唯一定义源在 shared-types/enums，此处 re-export 并提供 const 数组用于运行时校验。
+
+export type { ConceptMaturity };
 
 export const CONCEPT_MATURITIES = [
   'tentative',
   'working',
   'established',
 ] as const;
-export type ConceptMaturity = (typeof CONCEPT_MATURITIES)[number];
+
+/** @deprecated 使用 ConceptHistoryEventType 代替 */
+export type ConceptChangeType = ConceptHistoryEventType;
+export type { ConceptHistoryEventType };
 
 export const CONCEPT_CHANGE_TYPES = [
   'created',
@@ -22,13 +32,12 @@ export const CONCEPT_CHANGE_TYPES = [
   'split_into',
   'deprecated',
 ] as const;
-export type ConceptChangeType = (typeof CONCEPT_CHANGE_TYPES)[number];
 
 // ═══ ConceptHistoryEntry ═══
 
 export interface ConceptHistoryEntry {
   timestamp: string; // ISO 8601
-  changeType: ConceptChangeType;
+  changeType: ConceptHistoryEventType;
   oldValueSummary: string; // 截断到前 200 字符，created 类型为 ""
   reason: string | null;
   isBreaking: boolean;

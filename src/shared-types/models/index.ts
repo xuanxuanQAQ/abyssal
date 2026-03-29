@@ -19,6 +19,8 @@ import type {
   ConceptChangeType,
   ConceptHistoryEventType,
   AdvisoryNotificationType,
+  ViewType,
+  WorkflowType,
 } from '../enums';
 
 // ═══ Paper ═══
@@ -220,11 +222,11 @@ export interface GraphNode {
   type: 'paper' | 'concept' | 'memo' | 'note';
   metadata?: Record<string, unknown> | undefined;
   /** §1.1 论文节点的 relevance */
-  relevance?: import('../enums').Relevance | undefined;
+  relevance?: Relevance | undefined;
   /** §1.1 论文被引次数 */
   citationCount?: number | undefined;
   /** §1.1 论文分析状态 */
-  analysisStatus?: import('../enums').AnalysisStatus | undefined;
+  analysisStatus?: AnalysisStatus | undefined;
   /** §1.1 概念层级 */
   level?: number | undefined;
   /** §1.1 概念父 ID */
@@ -235,7 +237,7 @@ export interface GraphEdge {
   id?: string | undefined;
   source: string;
   target: string;
-  type: 'citation' | 'conceptAgree' | 'conceptConflict' | 'semanticNeighbor';
+  type: 'citation' | 'conceptAgree' | 'conceptConflict' | 'conceptExtend' | 'semanticNeighbor';
   weight: number;
   /** §1.2 concept_agree/conflict 关联的概念 ID */
   conceptId?: string | undefined;
@@ -269,9 +271,9 @@ export interface Tag {
 
 export interface PaperCounts {
   total: number;
-  byRelevance: Record<import('../enums').Relevance, number>;
-  byAnalysisStatus: Record<import('../enums').AnalysisStatus, number>;
-  byFulltextStatus: Record<import('../enums').FulltextStatus, number>;
+  byRelevance: Record<Relevance, number>;
+  byAnalysisStatus: Record<AnalysisStatus, number>;
+  byFulltextStatus: Record<FulltextStatus, number>;
 }
 
 // ═══ DiscoverRun ═══
@@ -412,7 +414,7 @@ export interface PaginationOpts {
 export interface PaperContext {
   type: 'paper';
   paperId: string;
-  originView: import('../enums').ViewType;
+  originView: ViewType;
 }
 
 export interface ConceptContext {
@@ -482,7 +484,7 @@ export interface ProactiveTip {
 
 export interface TaskUIState {
   taskId: string;
-  workflow: import('../enums').WorkflowType;
+  workflow: WorkflowType;
   status: string;
   currentStep: string;
   progress: { current: number; total: number };
@@ -645,7 +647,7 @@ export interface Memo {
   conceptIds: string[];
   annotationId: string | null;
   outlineId: string | null;
-  linkedNoteId: string | null;
+  linkedNoteIds: string[];
   tags: string[];
   createdAt: string; // ISO 8601
   updatedAt: string;
@@ -733,6 +735,56 @@ export interface GlobalSearchResult {
 
 export interface SectionQualityReport {
   sectionId: string;
-  coverage: import('../enums').RetrievalCoverage;
+  coverage: RetrievalCoverage;
   gaps: string[];
+}
+
+// ═══ Concept Stats ═══
+
+export interface ConceptStats {
+  conceptId: string;
+  mappingCount: number;
+  paperCount: number;
+}
+
+export interface SuggestedConceptsStats {
+  pendingCount: number;
+  adoptedCount: number;
+  dismissedCount: number;
+}
+
+// ═══ Workspace ═══
+
+export interface WorkspaceInfo {
+  rootDir: string;
+  meta: {
+    name: string;
+    createdAt: string;
+    version: string;
+    description: string;
+  };
+}
+
+export interface RecentWorkspaceEntry {
+  path: string;
+  name: string;
+  lastOpenedAt: string;
+  pinned: boolean;
+}
+
+export interface CurrentWorkspaceInfo {
+  rootDir: string;
+  name: string;
+  paths: {
+    root: string;
+    internal: string;
+    db: string;
+    config: string;
+    pdfs: string;
+    texts: string;
+    notes: string;
+    reports: string;
+    exports: string;
+    privateDocs: string;
+  };
 }

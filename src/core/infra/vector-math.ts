@@ -23,7 +23,8 @@ export function l2DistanceToScore(d: number): number {
 
 /** 将 [0, 1] 相似度分数转换为 L2 距离 */
 export function scoreToL2Distance(s: number): number {
-  return Math.sqrt(4 * (1 - s));
+  const clamped = Math.max(0, Math.min(1, s));
+  return Math.sqrt(4 * (1 - clamped));
 }
 
 /** 计算向量的 L2 范数（欧氏长度） */
@@ -37,6 +38,11 @@ export function l2Norm(vec: Float32Array): number {
 
 /** 计算两个向量的 L2 距离 */
 export function l2Distance(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) {
+    throw new Error(
+      `Vector dimension mismatch: a.length=${a.length}, b.length=${b.length}`,
+    );
+  }
   let sumSq = 0;
   for (let i = 0; i < a.length; i++) {
     const diff = a[i]! - b[i]!;

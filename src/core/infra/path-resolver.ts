@@ -78,9 +78,9 @@ export class PathResolver {
 
   /** 路径遍历检测 + Windows 路径长度检测 */
   private assertWithinBase(resolved: string, input: string): void {
-    // 归一化比较（处理大小写不敏感的文件系统）
-    const normalizedResolved = resolved.toLowerCase();
-    const normalizedBase = this.baseDir.toLowerCase();
+    // Windows 文件系统大小写不敏感；Linux 大小写敏感——仅 win32 做 toLowerCase
+    const normalizedResolved = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    const normalizedBase = process.platform === 'win32' ? this.baseDir.toLowerCase() : this.baseDir;
     if (
       !normalizedResolved.startsWith(normalizedBase + path.sep) &&
       normalizedResolved !== normalizedBase

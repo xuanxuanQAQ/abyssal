@@ -66,7 +66,7 @@ export function MemoCard({ memo }: MemoCardProps) {
       </div>
 
       {/* Linked note indicator */}
-      {memo.linkedNoteId && (
+      {memo.linkedNoteIds.length > 0 && (
         <div style={{ marginTop: 4, fontSize: 11, color: 'var(--accent-color)' }}>
           已展开为笔记 →
         </div>

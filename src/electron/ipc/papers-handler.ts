@@ -95,7 +95,7 @@ export function registerPapersHandlers(ctx: AppContext): void {
       total: stats.papers.total,
       byRelevance: { seed: 0, high: 0, medium: stats.papers.total, low: 0, excluded: 0 },
       byAnalysisStatus: { not_started: stats.papers.total, in_progress: 0, completed: 0, needs_review: 0, failed: 0 },
-      byFulltextStatus: { available: 0, pending: 0, failed: 0, not_attempted: stats.papers.total },
+      byFulltextStatus: { not_attempted: stats.papers.total, pending: 0, available: 0, abstract_only: 0, failed: 0 },
     };
   });
 

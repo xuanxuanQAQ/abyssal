@@ -6,4 +6,5 @@
  */
 export { makePaper, makeChunk, makeAnnotation, makeConcept, makeMapping, resetFixtureSeq } from './fixtures';
 export { createMockLLM } from './mock-llm';
-export { createMockDB, createTestDB } from './mock-db';
+export { createMockDB } from './mock-db';
+export { createTestDB, createTestConfig, silentLogger } from './test-db';

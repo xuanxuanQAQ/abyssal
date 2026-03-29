@@ -8,51 +8,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { GlobalConfig, ApiKeysConfig, LlmConfig, RagConfig, AcquireConfig } from '../types/config';
-
-// ═══ 默认值 ═══
-
-const DEFAULT_API_KEYS: ApiKeysConfig = {
-  anthropicApiKey: null,
-  openaiApiKey: null,
-  deepseekApiKey: null,
-  semanticScholarApiKey: null,
-  openalexEmail: null,
-  unpaywallEmail: null,
-  cohereApiKey: null,
-  jinaApiKey: null,
-};
-
-const DEFAULT_LLM: LlmConfig = {
-  defaultProvider: 'anthropic',
-  defaultModel: 'claude-sonnet-4-20250514',
-  workflowOverrides: {},
-};
-
-const DEFAULT_RAG: RagConfig = {
-  embeddingBackend: 'api',
-  embeddingModel: 'text-embedding-3-small',
-  embeddingDimension: 1536,
-  defaultTopK: 10,
-  expandFactor: 3,
-  rerankerBackend: 'local-bge',
-  rerankerModel: null,
-  tentativeExpandFactorMultiplier: 2.0,
-  tentativeTopkMultiplier: 1.5,
-  correctiveRagEnabled: true,
-  correctiveRagMaxRetries: 2,
-  correctiveRagModel: 'deepseek-chat',
-  localOnnxModelPath: null,
-  localRerankerModelPath: null,
-};
-
-const DEFAULT_ACQUIRE: AcquireConfig = {
-  enabledSources: ['unpaywall', 'arxiv', 'pmc'],
-  enableScihub: false,
-  scihubDomain: null,
-  institutionalProxyUrl: null,
-  perSourceTimeoutMs: 30_000,
-  maxRedirects: 5,
-};
+import {
+  DEFAULT_API_KEYS,
+  DEFAULT_LLM,
+  DEFAULT_RAG,
+  DEFAULT_ACQUIRE,
+} from './config';
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   apiKeys: DEFAULT_API_KEYS,

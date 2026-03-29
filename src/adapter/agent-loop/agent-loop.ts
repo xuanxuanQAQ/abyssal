@@ -9,7 +9,7 @@
  * See spec: section 7
  */
 
-import type { LlmClient, Message, StreamChunk } from '../llm-client/llm-client';
+import type { LlmClient, Message } from '../llm-client/llm-client';
 import type { PushManager, AgentStreamChunk } from '../../electron/ipc/push';
 import type { ToolRegistry } from './tool-registry';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt-builder';

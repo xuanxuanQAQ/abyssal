@@ -17,7 +17,9 @@ import yaml from 'js-yaml';
 import { jsonrepair } from 'jsonrepair';
 import { applyRepairRules } from './auto-repair';
 import { validateConceptMappings, type ConceptLookup, type ValidatedMapping } from './field-validator';
-import { parseSuggestedConcepts, type NormalizedSuggestion } from './suggestion-parser';
+import { parseSuggestedConcepts, type NormalizedSuggestion, type SuggestionParseContext } from './suggestion-parser';
+import { failSave, type FailSaveContext } from './level5-fail-save';
+import { type ParseDiagnostics } from './diagnostics';
 
 // ─── Types ───
 
@@ -48,12 +50,24 @@ export interface ValidatedOutput {
   conceptMappings: ValidatedMapping[];
   suggestedConcepts: NormalizedSuggestion[];
   warnings: string[];
+  /** Level 5: path to .raw.txt archive (only set on failure) */
+  rawPath: string | null;
+  /** Level 5: structured diagnostics (only set on failure) */
+  diagnostics: ParseDiagnostics | null;
 }
 
 export interface ParseContext {
   paperId: string;
   model?: string;
+  workflow?: string;
+  frameworkState?: string;
   conceptLookup?: ConceptLookup;
+  /** All known concept IDs — for suggestion closest_existing matching */
+  knownConceptIds?: Set<string>;
+  /** Concept name lookup for fuzzy matching */
+  getConceptName?: (id: string) => string | null;
+  /** Workspace root for Level 5 .raw.txt save */
+  workspaceRoot?: string;
 }
 
 // ─── Logger interface ───
@@ -73,18 +87,21 @@ export function parseAndValidate(
   context: ParseContext,
   logger?: ParserLogger,
 ): ValidatedOutput {
-  const parsed = parse(llmOutput);
+  // §1.3: Preprocess — remove backend noise
+  const cleaned = preprocess(llmOutput);
+
+  const parsed = parse(cleaned);
 
   if (!parsed.success || !parsed.frontmatter) {
-    logger?.warn('Output parse failed', {
+    // §6: Level 5 — fail-save archive
+    const failSaveCtx: FailSaveContext = {
       paperId: context.paperId,
-      outputLength: llmOutput.length,
-      hasTripleDash: llmOutput.includes('---'),
-      hasYamlKeywords: /concept_mappings|concept_id|relation|confidence/.test(llmOutput),
-      firstChars: llmOutput.slice(0, 500),
       model: context.model,
-      strategy: 'parse_failed',
-    });
+      workflow: context.workflow,
+      frameworkState: context.frameworkState,
+      workspaceRoot: context.workspaceRoot,
+    };
+    const { rawPath, diagnostics } = failSave(llmOutput, cleaned, failSaveCtx, logger);
 
     return {
       success: false,
@@ -95,6 +112,8 @@ export function parseAndValidate(
       conceptMappings: [],
       suggestedConcepts: [],
       warnings: ['All parse strategies failed'],
+      rawPath,
+      diagnostics,
     };
   }
 
@@ -106,7 +125,10 @@ export function parseAndValidate(
   );
 
   const rawSuggestions = parsed.frontmatter['suggested_new_concepts'];
-  let suggestions = parseSuggestedConcepts(rawSuggestions);
+  const suggestionCtx: SuggestionParseContext | undefined = context.knownConceptIds
+    ? { knownConceptIds: context.knownConceptIds, getConceptName: context.getConceptName }
+    : undefined;
+  let suggestions = parseSuggestedConcepts(rawSuggestions, suggestionCtx);
 
   // Merge diverted unknown concept_ids into suggestions.
   // Unknown IDs are stripped from mappings to prevent FK constraint violations,
@@ -152,7 +174,58 @@ export function parseAndValidate(
     conceptMappings: mappingResult.mappings,
     suggestedConcepts: suggestions,
     warnings: mappingResult.warnings,
+    rawPath: null,
+    diagnostics: null,
   };
+}
+
+// ─── §1.3: Preprocess — backend noise removal ───
+
+/**
+ * Remove known backend-specific noise from raw LLM output.
+ */
+function preprocess(rawOutput: string): string {
+  let text = rawOutput;
+
+  // Remove BOM marker
+  text = text.replace(/^\uFEFF/, '');
+
+  // Remove DeepSeek-Reasoner think chain (double safety — LLM Client should handle this too)
+  text = text.replace(/^<think>[\s\S]*?<\/think>\s*/m, '');
+
+  // Normalize line endings
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // Remove trailing whitespace
+  text = text.trimEnd();
+
+  return text;
+}
+
+// ─── §2.2: looksLikeYaml heuristic ───
+
+/**
+ * Heuristic: does this text look like YAML content?
+ * Returns true if ≥50% of non-empty lines match YAML patterns.
+ */
+function looksLikeYaml(text: string): boolean {
+  const lines = text.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length < 3) return false;
+
+  const yamlPatterns = [
+    /^\s*\w[\w_]*\s*:/, // key: value
+    /^\s*-\s+/,          // - list item
+    /^\s*#/,             // YAML comment
+  ];
+
+  let matchCount = 0;
+  for (const line of lines) {
+    if (yamlPatterns.some((p) => p.test(line))) {
+      matchCount++;
+    }
+  }
+
+  return matchCount / lines.length >= 0.5;
 }
 
 // ─── Five-level fallback chain ───
@@ -189,42 +262,80 @@ export function parse(llmOutput: string): ParsedOutput {
 // ─── Level 1: Standard YAML fence (§7.2) ───
 
 function tryYamlFence(text: string): ParsedOutput | null {
-  // Match --- delimiters, tolerating prefix text before first ---
-  // Claude occasionally prepends explanation text like "Here's my analysis:"
-  const match = text.match(/^[\s\S]*?^---\n([\s\S]*?)\n^---/m);
+  // §2.1 Strategy A: Standard double --- delimiters, tolerating prefix text
+  const match = text.match(/^[\s\S]*?^---[ \t]*\n([\s\S]*?)\n^---[ \t]*$/m);
 
-  if (!match) {
-    // Tolerate single --- at start (LLM forgot closing ---)
-    const singleMatch = text.match(/^---\n([\s\S]+)$/m);
-    if (singleMatch) {
-      const yamlText = singleMatch[1]!;
-      return attemptYamlParse(yamlText, '', 'yaml_fence');
-    }
-    return null;
+  if (match) {
+    const yamlText = match[1]!;
+    const bodyStart = match.index! + match[0].length;
+    const body = text.slice(bodyStart).trim();
+    return attemptYamlParse(yamlText, body, 'yaml_fence');
   }
 
-  const yamlText = match[1]!;
-  const bodyStart = match.index! + match[0].length;
-  const body = text.slice(bodyStart).trim();
+  // §2.1 Strategy B: Single --- at start (LLM forgot closing ---)
+  // Use ## or ** as heuristic body boundary
+  const singleMatch = text.match(/^---[ \t]*\n([\s\S]*?)(?:\n---|\n##|\n\*\*|$)/m);
+  if (singleMatch) {
+    const yamlText = singleMatch[1]!;
+    const bodyStart = singleMatch.index! + singleMatch[0].length;
+    const body = text.slice(bodyStart).trim();
+    return attemptYamlParse(yamlText, body, 'yaml_fence');
+  }
 
-  return attemptYamlParse(yamlText, body, 'yaml_fence');
+  // §2.1 Strategy C: No --- but content looks like YAML
+  const first20Lines = text.split('\n').slice(0, 20).join('\n');
+  if (looksLikeYaml(first20Lines)) {
+    // Find boundary between YAML-like content and Markdown body
+    const lines = text.split('\n');
+    let splitPoint = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      // Body likely starts with a Markdown heading or blank line after YAML
+      if (i > 3 && (line.startsWith('# ') || line.startsWith('## ') || line.startsWith('**'))) {
+        splitPoint = lines.slice(0, i).join('\n').length;
+        break;
+      }
+    }
+    if (splitPoint > 0) {
+      const yamlText = text.slice(0, splitPoint);
+      const body = text.slice(splitPoint).trim();
+      return attemptYamlParse(yamlText, body, 'yaml_fence');
+    }
+  }
+
+  return null;
 }
 
 // ─── Level 2: Code-block wrapped YAML (§7.3) ───
 
 function tryCodeBlock(text: string): ParsedOutput | null {
-  // Try yaml-tagged code block first
-  let match = text.match(/```ya?ml\n([\s\S]*?)```/m);
-  if (!match) {
-    // Try untagged code block
-    match = text.match(/```\n([\s\S]*?)```/m);
+  // §3.1 Strategy A: yaml/yml tagged code block
+  const matchA = text.match(/```ya?ml\s*\n([\s\S]*?)```/m);
+  if (matchA) {
+    const yamlText = matchA[1]!;
+    const body = text.replace(matchA[0], '').trim();
+    return attemptYamlParse(yamlText, body, 'code_block');
   }
-  if (!match) return null;
 
-  const yamlText = match[1]!;
-  const body = text.replace(match[0], '').trim();
+  // §3.1 Strategy B: untagged code block that looks like YAML
+  const matchB = text.match(/```\s*\n([\s\S]*?)```/m);
+  if (matchB && looksLikeYaml(matchB[1]!)) {
+    const yamlText = matchB[1]!;
+    const body = text.replace(matchB[0], '').trim();
+    return attemptYamlParse(yamlText, body, 'code_block');
+  }
 
-  return attemptYamlParse(yamlText, body, 'code_block');
+  // §3.1 Strategy C: multiple code blocks — take first YAML-like one
+  const allBlocks = [...text.matchAll(/```(?:\w*)\s*\n([\s\S]*?)```/gm)];
+  for (const block of allBlocks) {
+    if (looksLikeYaml(block[1]!)) {
+      const yamlText = block[1]!;
+      const body = text.replace(block[0], '').trim();
+      return attemptYamlParse(yamlText, body, 'code_block');
+    }
+  }
+
+  return null;
 }
 
 // ─── Level 3: JSON fallback (§7.4) ───
@@ -280,37 +391,118 @@ function tryRegexExtraction(text: string): ParsedOutput | null {
   const result: Record<string, unknown> = {};
   let extracted = false;
 
-  // Extract concept_mappings
+  // ── §5.3: Extract concept_mappings ──
   const mappings: Array<Record<string, unknown>> = [];
-  const mappingPattern =
+  const seenConceptIds = new Set<string>();
+
+  // Pattern A: Standard YAML-style multi-line (most common variant)
+  const patternA =
     /concept_id\s*[:=]\s*["']?(\w+)["']?\s*\n\s*relation\s*[:=]\s*["']?(\w+)["']?\s*\n\s*confidence\s*[:=]\s*([\d.]+)/gm;
   let match: RegExpExecArray | null;
 
-  while ((match = mappingPattern.exec(text)) !== null) {
-    const evidenceText = extractNearbyEvidence(text, match.index + match[0].length);
+  while ((match = patternA.exec(text)) !== null) {
+    const conceptId = match[1]!;
+    if (seenConceptIds.has(conceptId)) continue;
+    seenConceptIds.add(conceptId);
     mappings.push({
-      concept_id: match[1]!,
+      concept_id: conceptId,
       relation: match[2]!,
       confidence: parseFloat(match[3]!),
-      evidence: evidenceText ?? undefined,
+      evidence: extractNearbyEvidence(text, match.index + match[0].length),
     });
     extracted = true;
   }
-  result['concept_mappings'] = mappings;
 
-  // Extract suggested_new_concepts
-  const suggestions: Array<{ term: string }> = [];
-  const termPattern = /term\s*[:=]\s*["']([^"'\n]+)["']/gm;
-  while ((match = termPattern.exec(text)) !== null) {
-    suggestions.push({ term: match[1]! });
+  // Pattern B: Compact format — "theory_of_mind: supports (0.85)"
+  const patternB =
+    /(\w+)\s*[:=]\s*(supports|challenges|extends|operationalizes)\s*\(?\s*([\d.]+)\s*\)?/gm;
+  while ((match = patternB.exec(text)) !== null) {
+    const conceptId = match[1]!;
+    if (seenConceptIds.has(conceptId)) continue;
+    seenConceptIds.add(conceptId);
+    mappings.push({
+      concept_id: conceptId,
+      relation: match[2]!,
+      confidence: parseFloat(match[3]!),
+      evidence: extractNearbyEvidence(text, match.index + match[0].length),
+    });
     extracted = true;
   }
+
+  // Pattern C: Table format — | concept_id | relation | confidence |
+  const patternC =
+    /\|\s*(\w+)\s*\|\s*(supports|challenges|extends|operationalizes|irrelevant)\s*\|\s*([\d.]+)\s*\|/gm;
+  while ((match = patternC.exec(text)) !== null) {
+    const conceptId = match[1]!;
+    if (seenConceptIds.has(conceptId)) continue;
+    seenConceptIds.add(conceptId);
+    mappings.push({
+      concept_id: conceptId,
+      relation: match[2]!,
+      confidence: parseFloat(match[3]!),
+      evidence: extractNearbyEvidence(text, match.index + match[0].length),
+    });
+    extracted = true;
+  }
+
+  result['concept_mappings'] = mappings;
+
+  // ── §5.5: Extract suggested_new_concepts ──
+  const suggestions: Array<Record<string, unknown>> = [];
+  const seenTerms = new Set<string>();
+
+  // Pattern A: YAML-style term: "..."
+  const termPattern = /term\s*[:=]\s*["']([^"'\n]{2,80})["']/gm;
+  while ((match = termPattern.exec(text)) !== null) {
+    const term = match[1]!.trim();
+    if (seenTerms.has(term.toLowerCase())) continue;
+    seenTerms.add(term.toLowerCase());
+
+    const suggestion: Record<string, unknown> = { term };
+
+    // Search nearby region for associated fields
+    const region = text.slice(match.index, match.index + 500);
+
+    const freqMatch = region.match(/frequency[_\s]*(?:in[_\s]*paper)?\s*[:=]\s*(\d+)/i);
+    if (freqMatch) suggestion['frequency_in_paper'] = parseInt(freqMatch[1]!);
+
+    const reasonMatch = region.match(/reason\s*[:=]\s*["']([^"']{10,300})["']/i);
+    if (reasonMatch) suggestion['reason'] = reasonMatch[1]!.trim();
+
+    const defMatch = region.match(/suggested[_\s]*definition\s*[:=]\s*["']([^"']{10,300})["']/i);
+    if (defMatch) suggestion['suggested_definition'] = defMatch[1]!.trim();
+
+    const kwMatch = region.match(/suggested[_\s]*keywords\s*[:=]\s*\[([^\]]{5,200})\]/i);
+    if (kwMatch) {
+      suggestion['suggested_keywords'] = kwMatch[1]!
+        .split(',')
+        .map((k: string) => k.replace(/["'\s]/g, '').trim())
+        .filter((k: string) => k.length > 0);
+    }
+
+    suggestions.push(suggestion);
+    extracted = true;
+  }
+
+  // Pattern B: Natural language suggestion mentions
+  const naturalPattern =
+    /(?:suggest|recommend|consider)\s+(?:adding|tracking|including)\s+['"]([^'"]{2,50})['"]/gim;
+  while ((match = naturalPattern.exec(text)) !== null) {
+    const term = match[1]!.trim();
+    if (seenTerms.has(term.toLowerCase())) continue;
+    seenTerms.add(term.toLowerCase());
+    suggestions.push({ term });
+    extracted = true;
+  }
+
   result['suggested_new_concepts'] = suggestions;
 
-  // Extract paper_type
-  const typeMatch = text.match(/paper_type\s*[:=]\s*["']?(\w+)["']?/m);
+  // ── §5.6: Extract paper_type ──
+  const typeMatch = text.match(/paper_type\s*[:=]\s*["']?(\w+)["']?/im);
   if (typeMatch) {
-    result['paper_type'] = typeMatch[1]!;
+    const typeVal = typeMatch[1]!.toLowerCase();
+    const validTypes = ['journal', 'conference', 'theoretical', 'review', 'preprint', 'book', 'chapter'];
+    result['paper_type'] = validTypes.includes(typeVal) ? typeVal : 'unknown';
     extracted = true;
   }
 
@@ -325,20 +517,35 @@ function tryRegexExtraction(text: string): ParsedOutput | null {
 }
 
 /**
- * Search ±500 chars around a position for evidence text in quotes.
+ * §5.4: Search region after match position for evidence text.
+ *
+ * Three strategies:
+ * 1. Explicit evidence: "..." or evidence: '...'
+ * 2. Multi-line evidence: > or | block
+ * 3. Evidence keyword to next key: boundary
  */
-function extractNearbyEvidence(text: string, position: number): string | null {
-  const start = Math.max(0, position - 200);
-  const end = Math.min(text.length, position + 500);
-  const region = text.slice(start, end);
+function extractNearbyEvidence(text: string, searchStartIndex: number): string | null {
+  const searchRegion = text.slice(searchStartIndex, searchStartIndex + 800);
 
-  // Look for evidence keyword followed by quoted text
-  const evidenceMatch = region.match(/evidence\s*[:=]\s*["']([^"'\n]{10,})["']/i);
-  if (evidenceMatch) return evidenceMatch[1]!;
+  // Strategy 1: explicit quoted evidence
+  const quotedMatch = searchRegion.match(/evidence\s*[:=]\s*["']([^"']{10,300})["']/i);
+  if (quotedMatch) return quotedMatch[1]!.trim();
 
-  // Look for evidence keyword followed by unquoted text on same line
-  const unquotedMatch = region.match(/evidence\s*[:=]\s*([^\n]{10,})/i);
-  if (unquotedMatch) return unquotedMatch[1]!.trim();
+  // Strategy 2: multi-line evidence (> or | block)
+  // Fix #9: Use non-backtracking boundary (match until next top-level key or EOF)
+  // instead of nested quantifier ((?:\s{2,}.*\n?)+) which causes catastrophic backtracking.
+  const multilineMatch = searchRegion.match(/evidence\s*[:=]\s*[>|]\s*\n([\s\S]*?)(?=\n\S|$)/i);
+  if (multilineMatch) {
+    const evidenceText = multilineMatch[1]!.replace(/^\s{2,}/gm, '').trim();
+    if (evidenceText.length >= 10) return evidenceText.slice(0, 300);
+  }
+
+  // Strategy 3: evidence keyword to next key:
+  const afterEvidence = searchRegion.match(/evidence\s*[:=]\s*\n?\s*([\s\S]*?)(?:\n\s*\w+\s*[:=]|$)/i);
+  if (afterEvidence) {
+    const cleaned = afterEvidence[1]!.replace(/^[\s-]+/gm, '').trim();
+    if (cleaned.length >= 10) return cleaned.slice(0, 300);
+  }
 
   return null;
 }

@@ -168,6 +168,70 @@ function checkDimensionConsistency(
   }
 }
 
+// ─── 结构化维度检查结果 ───
+
+export interface DimensionCheckResult {
+  consistent: boolean;
+  existingDim?: number;
+  configDim?: number;
+  existingModel?: string;
+  configModel?: string;
+  action?: 'embedding_migration_required' | 'embedding_migration_recommended';
+  message?: string;
+}
+
+/**
+ * 返回结构化的维度/模型一致性检查结果。
+ * 供 config-validator Level 8 使用——不抛异常。
+ */
+export function checkEmbeddingDimensionStructured(
+  db: Database.Database,
+  config: AbyssalConfig,
+): DimensionCheckResult {
+  try {
+    const dimRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_dimension'",
+    ).get() as { value: string } | undefined;
+
+    if (!dimRow) return { consistent: true };
+
+    const storedDim = parseInt(dimRow.value, 10);
+    const configDim = config.rag.embeddingDimension;
+
+    if (Number.isNaN(storedDim)) return { consistent: true };
+
+    if (storedDim !== configDim) {
+      return {
+        consistent: false,
+        existingDim: storedDim,
+        configDim,
+        action: 'embedding_migration_required',
+        message: `Embedding dimension mismatch: database has ${storedDim}D, config specifies ${configDim}D. Migration required.`,
+      };
+    }
+
+    const modelRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_model'",
+    ).get() as { value: string } | undefined;
+
+    if (modelRow && modelRow.value !== config.rag.embeddingModel) {
+      return {
+        consistent: false,
+        existingDim: storedDim,
+        configDim,
+        existingModel: modelRow.value,
+        configModel: config.rag.embeddingModel,
+        action: 'embedding_migration_recommended',
+        message: `Embedding model changed: "${modelRow.value}" → "${config.rag.embeddingModel}". Dimensions match but semantics differ.`,
+      };
+    }
+
+    return { consistent: true };
+  } catch {
+    return { consistent: true }; // _meta 表不存在
+  }
+}
+
 // ─── 公开接口 ───
 
 /**

@@ -12,7 +12,7 @@
 import type { LlmClient } from '../llm-client/llm-client';
 import type { PushManager } from '../../electron/ipc/push';
 import type { Logger } from '../../core/infra/logger';
-import { runDiagnosticQueries, evaluateRules, type RawSuggestion } from './diagnostic-queries';
+import { runDiagnosticQueries, evaluateRules } from './diagnostic-queries';
 import {
   formatSuggestionsWithLlm,
   formatSuggestionsWithoutLlm,

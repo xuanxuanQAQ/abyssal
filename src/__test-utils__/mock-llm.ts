@@ -18,7 +18,7 @@ export function createMockLLM() {
       text: '[mock] default LLM response',
     } satisfies CompleteResult),
     embed: vi.fn().mockResolvedValue([
-      new Array(1536).fill(0),
+      new Float32Array(1536), // 零向量，与 EmbedFunction 返回 Float32Array[] 对齐
     ]),
   };
 }

@@ -44,6 +44,11 @@ import {
   type TrimBlock,
 } from './truncation-engine';
 
+// §2.1: Fragment assembly engine
+import { assembleTemplate, type FragmentAssemblyParams } from './variable-injector';
+// §8: Compact mode
+import { shouldUseCompactMode, compactConceptFormat, compactMemos, compactAnnotations } from './compact-mode';
+
 // ─── Types ───
 
 export type FrameworkState = 'zero_concepts' | 'early_exploration' | 'framework_forming' | 'framework_mature';
@@ -79,18 +84,28 @@ export interface AssemblyRequest {
   privateKnowledge?: string;
   precedingContext?: string;
   writingInstruction?: string;
+
+  // §1.2: Extended fields
+  conceptId?: string;
+  articleStyle?: string;
+  qualityReport?: { coverage?: string; sufficiency?: string };
+  sectionMap?: Array<{ sectionType: string; title: string; startOffset: number; endOffset: number }>;
 }
 
 export interface AssemblyResult {
   systemPrompt: string;
   userMessage: string;
-  estimatedTokens: number;
+  estimatedInputTokens: number;
+  estimatedOutputReserve: number;
   truncated: boolean;
   truncationDetails: Array<{ sourceType: string; originalTokens: number; truncatedTo: number }>;
   injectedMemoCount: number;
   injectedAnnotationCount: number;
+  conceptSubsetSize: number;
   strategy: string;
   templateId: string;
+  /** @deprecated use estimatedInputTokens */
+  estimatedTokens: number;
 }
 
 // ─── Logger interface ───
@@ -493,11 +508,14 @@ export class PromptAssembler {
     const result: AssemblyResult = {
       systemPrompt,
       userMessage,
-      estimatedTokens: totalTokens,
+      estimatedInputTokens: totalTokens,
+      estimatedOutputReserve: allocation.outputReserve,
+      estimatedTokens: totalTokens, // deprecated compat
       truncated,
       truncationDetails,
       injectedMemoCount: request.memos.length,
       injectedAnnotationCount: request.annotations.length,
+      conceptSubsetSize: request.conceptFramework.length,
       strategy: allocation.strategy,
       templateId,
     };

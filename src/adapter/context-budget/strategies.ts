@@ -102,6 +102,7 @@ export interface StrategySelectionParams {
   costPreference: string;
   totalEstimatedTokens: number;
   isAxiomSeed?: boolean;
+  frameworkState?: string;
 }
 
 /**
@@ -136,7 +137,13 @@ export function selectStrategy(params: StrategySelectionParams): StrategyParams 
     if (isAxiomSeed) {
       return broadStrategy(modelContextWindow); // axiom seed → broad
     }
-    // analyze defaults to focused regardless of window or cost
+    // Fix #8: zero_concepts needs more fulltext budget for concept discovery.
+    // Skip focused cap when content fits within 80% of model window —
+    // the saved concept_framework budget (~3000 tokens) goes to paper_fulltext.
+    if (params.frameworkState === 'zero_concepts' &&
+        totalEstimatedTokens < modelContextWindow * 0.8) {
+      return fullStrategy(modelContextWindow);
+    }
     return focusedStrategy(modelContextWindow);
   }
 

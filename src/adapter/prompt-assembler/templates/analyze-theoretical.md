@@ -1,39 +1,44 @@
-You are an expert academic analyst specializing in theoretical and conceptual analysis.
+## Task: Theoretical Paper Analysis
 
-## Task
+Analyze this theoretical/conceptual paper against the researcher's concept framework. Theoretical papers require different analytical attention than empirical work — focus on argument structure, conceptual innovation, and logical coherence rather than methodological validity.
 
-Analyze the following theoretical paper against the researcher's concept framework. Focus on how the paper's theoretical arguments relate to, refine, or challenge the existing conceptual definitions.
+### Concept Framework
 
 {concept_framework}
 
-## Output Format
+### Theoretical-Specific Requirements
 
-Output your analysis as a YAML frontmatter block (between --- markers) followed by a Markdown body.
+In addition to concept mappings, extract:
 
-YAML schema:
-- paper_id: "{paper_id}"
-- paper_type: string (one of: theoretical, book, chapter)
-- concept_mappings: array of objects with { concept_id, relation, confidence, evidence }
-  - relation: one of "supports", "challenges", "extends", "operationalizes", "irrelevant"
-  - confidence: float between 0.0 and 1.0
-  - evidence: object with { en, original, original_lang }
-- suggested_new_concepts: array of objects with { term, frequency_in_paper, closest_existing, reason }
+1. **Core Argument**:
+   - `thesis`: The paper's central theoretical claim (1-2 sentences).
+   - `premises`: Key premises the argument depends on (list).
+   - `conclusion`: What the argument ultimately establishes.
 
-### Theoretical-Specific Fields
+2. **Key Concepts**: Novel or refined concepts introduced by this paper:
+   - `term`: The concept as the paper uses it.
+   - `definition`: The paper's definition or characterization.
+   - `novelty`:
+     - `original` — genuinely new concept
+     - `refinement` — existing concept with added precision
+     - `synthesis` — combining multiple existing concepts
+     - `application` — applying concept to new domain
 
-In addition to standard fields, include in your YAML frontmatter:
-- theoretical_contributions: array of { contribution, relation_to_existing, novelty }
-- key_arguments: array of { argument, supporting_logic, counterarguments }
-- definitional_refinements: array of { concept_id, proposed_refinement, justification }
+3. **Known Criticisms**:
+   - `critic`: Who has criticized this argument.
+   - `criticism`: The substance of the critique.
+   - `severity`: fatal / significant / minor
+
+4. **Internal Tensions**: Logical tensions or unresolved contradictions WITHIN the paper's own argument (at least 1). If truly none exist, explain why the argument is unusually coherent.
 
 {maturity_instructions}
 
-{yaml_example}
+{suggested_concepts_instruction}
 
-## Critical Requirements
+{output_format}
 
-1. Pay special attention to definitional boundaries — how does this paper's use of terms compare to the framework's definitions?
-2. Identify conceptual overlaps and tensions between the paper's theoretical stance and the existing framework
-3. Theoretical papers often propose implicit concepts — surface these as suggested_new_concepts
-4. Confidence should reflect theoretical strength, not empirical evidence
-5. Note any paradigmatic assumptions that differ from the framework's perspective
+{bilingual_evidence}
+
+{confidence_calibration}
+
+{language_instruction}

@@ -1,40 +1,42 @@
-You are an expert academic analyst specializing in systematic and narrative literature reviews.
+## Task: Review Paper Analysis
 
-## Task
+Analyze this review/survey paper against the researcher's concept framework. Review papers are valuable both for their synthesis and as sources of bibliography — extract both.
 
-Analyze the following review/survey paper against the researcher's concept framework. Reviews aggregate findings across multiple studies — focus on the meta-level patterns, identified gaps, and synthesis conclusions rather than individual study details.
+### Concept Framework
 
 {concept_framework}
 
-## Output Format
+### Review-Specific Requirements
 
-Output your analysis as a YAML frontmatter block (between --- markers) followed by a Markdown body.
+1. **Scope**:
+   - `topic`: What the review covers.
+   - `time_range`: Publication date range of reviewed literature.
+   - `paper_count`: Approximate number of papers reviewed.
 
-YAML schema:
-- paper_id: "{paper_id}"
-- paper_type: "review"
-- concept_mappings: array of objects with { concept_id, relation, confidence, evidence }
-  - relation: one of "supports", "challenges", "extends", "operationalizes", "irrelevant"
-  - confidence: float between 0.0 and 1.0
-  - evidence: object with { en, original, original_lang }
-- suggested_new_concepts: array of objects with { term, frequency_in_paper, closest_existing, reason }
+2. **Taxonomy**: How the review organizes its subject matter:
+   - `category`: Category label.
+   - `description`: What this category encompasses.
+   - `representative_works`: 1-3 key papers cited.
 
-### Review-Specific Fields
+3. **Consensus Points**: Findings where the reviewed literature agrees.
 
-In addition to standard fields, include in your YAML frontmatter:
-- review_scope: object with { databases_searched, date_range, inclusion_criteria, n_studies }
-- consensus_findings: array of { finding, strength_of_evidence, n_supporting_studies }
-- identified_gaps: array of { gap_description, relevance_to_framework }
-- conflicting_evidence: array of { topic, position_a, position_b, resolution }
+4. **Open Debates**: Active disagreements in the field.
+
+5. **Identified Gaps**: Research questions the review identifies as underexplored.
+
+6. **Bibliography Mining** ★ HIGH VALUE: Review papers cite dozens of relevant works. Identify papers that Abyssal should track:
+   - `title`: Paper title.
+   - `reason`: Why it's relevant to the researcher's framework.
+   - Priority: papers that appear in multiple review categories or are cited as foundational works.
 
 {maturity_instructions}
 
-{yaml_example}
+{suggested_concepts_instruction}
 
-## Critical Requirements
+{output_format}
 
-1. Reviews carry higher-weight evidence for concept_mappings — adjust confidence accordingly
-2. Distinguish between the review's own conclusions and individual study findings it cites
-3. Pay special attention to identified_gaps — these often suggest productive research directions
-4. If the review proposes a taxonomy or typology, extract these as suggested_new_concepts
-5. Note any systematic biases in the review's coverage that might affect reliability
+{bilingual_evidence}
+
+{confidence_calibration}
+
+{language_instruction}

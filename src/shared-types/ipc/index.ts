@@ -70,6 +70,11 @@ import type {
   HistoryEntry,
   AdvisoryNotification,
   GlobalSearchResult,
+  ConceptStats,
+  SuggestedConceptsStats,
+  WorkspaceInfo,
+  RecentWorkspaceEntry,
+  CurrentWorkspaceInfo,
 } from '../models';
 
 // ═══ Filter / Query 参数 ═══
@@ -173,11 +178,15 @@ export interface SectionSearchResult {
 
 // ═══ 错误结构体 ═══
 
+/**
+ * IPC 错误传输格式。
+ * 与 electron/ipc/register.ts wrapHandler() 实际序列化的结构对齐。
+ */
 export interface AbyssalIPCError {
   code: string;
   message: string;
-  details?: Record<string, unknown>;
-  retryable: boolean;
+  recoverable: boolean;
+  context?: Record<string, unknown>;
   retryAfterMs?: number;
 }
 
@@ -193,7 +202,7 @@ export interface AbyssalAPI {
   db: {
     papers: {
       list(filter?: PaperFilter): Promise<Paper[]>;
-      get(id: string): Promise<Paper>;
+      get(id: string): Promise<Paper | null>;
       update(id: string, patch: Partial<Paper>): Promise<void>;
       batchUpdateRelevance(ids: string[], rel: Relevance): Promise<void>;
       importBibtex(content: string): Promise<ImportResult>;
@@ -216,7 +225,9 @@ export interface AbyssalAPI {
       updateFramework(fw: ConceptFramework): Promise<AffectedMappings>;
       search(query: string): Promise<Concept[]>;
       /** v2.0 创建概念 */
-      create(draft: ConceptDraft): Promise<Concept>;
+      create(draft: ConceptDraft): Promise<Concept | null>;
+      /** v2.0 获取统计 */
+      getStats(conceptId: string): Promise<ConceptStats>;
       /** v2.0 更新成熟度 */
       updateMaturity(conceptId: string, maturity: Maturity): Promise<{ historyEntry: HistoryEntry }>;
       /** v2.0 更新定义（含语义判定） */
@@ -235,19 +246,20 @@ export interface AbyssalAPI {
       list(filter?: MemoFilter): Promise<Memo[]>;
       get(memoId: string): Promise<Memo>;
       create(memo: NewMemo): Promise<Memo>;
-      update(memoId: string, patch: Partial<Memo>): Promise<Memo>;
+      update(memoId: string, patch: Partial<Memo>): Promise<void>;
       delete(memoId: string): Promise<void>;
-      upgradeToNote(memoId: string): Promise<{ noteId: string; filePath: string }>;
-      upgradeToConcept(memoId: string, draft: ConceptDraft): Promise<Concept>;
+      upgradeToNote(memoId: string): Promise<{ noteId: string }>;
+      upgradeToConcept(memoId: string, draft: ConceptDraft): Promise<void>;
+      getByEntity(entityType: string, entityId: string): Promise<Memo[]>;
     };
     /** v2.0 结构化笔记 */
     notes: {
       list(filter?: NoteFilter): Promise<NoteMeta[]>;
-      get(noteId: string): Promise<NoteMeta>;
+      get(noteId: string): Promise<NoteMeta | null>;
       create(note: NewNote): Promise<{ noteId: string; filePath: string }>;
       updateMeta(noteId: string, patch: Partial<NoteMeta>): Promise<NoteMeta>;
       delete(noteId: string): Promise<void>;
-      upgradeToConcept(noteId: string, draft: ConceptDraft): Promise<Concept>;
+      upgradeToConcept(noteId: string, draft: ConceptDraft): Promise<void>;
     };
     /** v2.0 概念建议队列 */
     suggestedConcepts: {
@@ -255,6 +267,7 @@ export interface AbyssalAPI {
       accept(suggestedId: string, draft: ConceptDraft): Promise<Concept>;
       dismiss(suggestedId: string): Promise<void>;
       restore(suggestedId: string): Promise<void>;
+      getStats(): Promise<SuggestedConceptsStats>;
     };
     mappings: {
       getForPaper(paperId: string): Promise<ConceptMapping[]>;
@@ -395,38 +408,4 @@ export interface AbyssalAPI {
   };
 }
 
-// ═══ 工作区类型 ═══
-
-export interface WorkspaceInfo {
-  rootDir: string;
-  meta: {
-    name: string;
-    createdAt: string;
-    version: string;
-    description: string;
-  };
-}
-
-export interface RecentWorkspaceEntry {
-  path: string;
-  name: string;
-  lastOpenedAt: string;
-  pinned: boolean;
-}
-
-export interface CurrentWorkspaceInfo {
-  rootDir: string;
-  name: string;
-  paths: {
-    root: string;
-    internal: string;
-    db: string;
-    config: string;
-    pdfs: string;
-    texts: string;
-    notes: string;
-    reports: string;
-    exports: string;
-    privateDocs: string;
-  };
-}
+// 工作区类型定义源在 ../models/index.ts

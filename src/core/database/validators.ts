@@ -50,16 +50,16 @@ export function validateChunkSource(v: string): asserts v is ChunkSource {
 // ─── §5.5 标注不变量 ───
 
 /**
- * type='concept_tag' 时 concept_id 必须非空。
+ * type='conceptTag' 时 concept_id 必须非空。
  * 在 addAnnotation 入口调用。
  */
 export function validateAnnotationInvariant(
   type: string,
   conceptId: unknown,
 ): void {
-  if (type === 'concept_tag' && (conceptId === null || conceptId === undefined)) {
+  if (type === 'conceptTag' && (conceptId === null || conceptId === undefined)) {
     throw new IntegrityError({
-      message: 'Annotation type "concept_tag" requires a non-null concept_id',
+      message: 'Annotation type "conceptTag" requires a non-null concept_id',
       context: { dbPath: '', field: 'concept_id', annotationType: type },
     });
   }
@@ -84,7 +84,7 @@ export function validateRelationType(v: string): asserts v is RelationType {
 
 // ─── §5.1 标注类型 ───
 
-const ANNOTATION_TYPES = ['highlight', 'note', 'concept_tag'] as const;
+const ANNOTATION_TYPES = ['highlight', 'note', 'conceptTag'] as const;
 export type AnnotationType = (typeof ANNOTATION_TYPES)[number];
 
 export function validateAnnotationType(v: string): asserts v is AnnotationType {
@@ -105,8 +105,8 @@ export function validateEdgeType(v: string): asserts v is EdgeType {
 
 // ─── §14.1 建议状态 ───
 
-const SUGGESTION_STATUSES = ['pending', 'adopted', 'dismissed'] as const;
-export type SuggestionStatus = (typeof SUGGESTION_STATUSES)[number];
+import { SUGGESTION_STATUSES } from '../types/suggestion';
+import type { SuggestionStatus } from '../types/suggestion';
 
 export function validateSuggestionStatus(v: string): asserts v is SuggestionStatus {
   assertEnum(v, SUGGESTION_STATUSES, 'suggestion_status');

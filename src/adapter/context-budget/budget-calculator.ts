@@ -19,17 +19,34 @@ export interface BudgetBreakdown {
 }
 
 /**
+ * Configurable budget ratios. Defaults match spec §5.3.
+ * Can be overridden with values from AbyssalConfig.contextBudget.
+ */
+export interface BudgetRatios {
+  outputReserveRatio: number; // default 0.15
+  safetyMarginRatio: number;  // default 0.05
+}
+
+const DEFAULT_RATIOS: BudgetRatios = {
+  outputReserveRatio: 0.15,
+  safetyMarginRatio: 0.05,
+};
+
+/**
  * Compute the universal budget breakdown for a given model context window.
  *
- * Output reserve (15%, min 4096): guarantees sufficient output space across
- * all workflow scenarios (analyze ~4K, synthesize ~2K, article ~3K tokens).
+ * T_output  = max(4096, T_window × outputReserveRatio)
+ * T_safety  = T_window × safetyMarginRatio
+ * T_available = T_window - T_output - T_safety
  *
- * Safety margin (15%): covers tokenizer approximation error (<8% for CJK with
- * cl100k_base) plus template instruction fixed overhead (~800-1500 tokens).
+ * @param ratios - Configurable ratios from AbyssalConfig.contextBudget
  */
-export function computeBudgetBreakdown(windowSize: number): BudgetBreakdown {
-  const outputReserve = Math.max(4096, Math.floor(windowSize * 0.15));
-  const safetyMargin = Math.floor(windowSize * 0.15);
+export function computeBudgetBreakdown(
+  windowSize: number,
+  ratios: BudgetRatios = DEFAULT_RATIOS,
+): BudgetBreakdown {
+  const outputReserve = Math.max(4096, Math.floor(windowSize * ratios.outputReserveRatio));
+  const safetyMargin = Math.floor(windowSize * ratios.safetyMarginRatio);
   const availableBudget = windowSize - outputReserve - safetyMargin;
 
   return {

@@ -8,13 +8,22 @@
 import { vi, afterEach } from 'vitest';
 
 // Mock Electron preload 暴露的 API，防止 "window.abyssal is undefined"
+// 所有命名空间与 AbyssalAPI 接口对齐
 const mockAbyssalAPI = {
-  db: {},
+  db: {
+    papers: {}, tags: {}, discoverRuns: {}, concepts: {},
+    memos: {}, notes: {}, suggestedConcepts: {},
+    mappings: {}, annotations: {}, articles: {},
+    relations: {}, chat: {},
+  },
   rag: {},
   pipeline: {},
   chat: {},
+  reader: {},
   fs: {},
-  app: {},
+  advisory: {},
+  app: { window: {} },
+  workspace: {},
 };
 
 Object.defineProperty(globalThis, 'window', {

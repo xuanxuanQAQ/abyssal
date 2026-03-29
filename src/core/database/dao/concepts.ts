@@ -308,6 +308,11 @@ export function deprecateConcept(
       WHERE id = ?
     `).run(timestamp, reason, history, timestamp, id);
 
+    // §8: 概念建议表清理——解除 suggested_concepts 的 closest_existing_concept_id 引用
+    db.prepare(
+      'UPDATE suggested_concepts SET closest_existing_concept_id = NULL WHERE closest_existing_concept_id = ?',
+    ).run(id);
+
     return gcConceptChange(db, id, 'deprecated', false);
   });
 
@@ -663,8 +668,52 @@ export function splitConcept(
 
 }
 
-// ─── §4.6 gcConceptChange ───
+// ─── §7.3 completeSplit ───
 
+export interface SplitAssignment {
+  paperId: PaperId;
+  targetConceptId: ConceptId;
+}
+
+/**
+ * §7.3: 完成拆分——用户分配映射后执行。
+ *
+ * 将原概念的映射按用户指定的 assignments 迁移到新概念 A 或 B，
+ * 然后废弃原概念。
+ *
+ * TODO — LLM 预分配（>20 条映射时），需注入 LlmClient
+ */
+export function completeSplit(
+  db: Database.Database,
+  originalConceptId: ConceptId,
+  assignments: SplitAssignment[],
+): GcConceptChangeResult {
+  return writeTransaction(db, () => {
+    const timestamp = now();
+
+    for (const assignment of assignments) {
+      db.prepare(
+        'UPDATE paper_concept_map SET concept_id = ?, reviewed = 0, updated_at = ? ' +
+        'WHERE concept_id = ? AND paper_id = ?',
+      ).run(assignment.targetConceptId, timestamp, originalConceptId, assignment.paperId);
+    }
+
+    // 废弃原概念
+    return deprecateConcept(db, originalConceptId, 'Split into new concepts');
+  });
+}
+
+// ─── §4.6 gcConceptChange（五阶段级联） ───
+
+/**
+ * §6.3: gcConceptChange 的五阶段级联操作。
+ *
+ * 阶段 1: 映射标记（按补充性/替换性区分范围）
+ * 阶段 2: 派生关系清理（concept_agree/conflict/extend 边）
+ * 阶段 3: 综述标记 stale（返回标记供上层处理）
+ * 阶段 4: 收集受影响论文
+ * 阶段 5: 触发通知（返回标记供上层 pushManager 处理）
+ */
 export function gcConceptChange(
   db: Database.Database,
   conceptId: ConceptId,
@@ -677,9 +726,11 @@ export function gcConceptChange(
   let requiresRelationRecompute = false;
   let requiresSynthesizeRefresh = false;
   const affectedPaperIds: PaperId[] = [];
+  let deletedRelations = 0;
 
+  // ═══ 阶段 1：映射标记 ═══
   if (changeType === 'definition_refined' && !isBreaking) {
-    // 分支 A：补充性修改 — 仅标记近期映射
+    // 补充性修改 — 仅标记近期映射
     const result = db.prepare(`
       UPDATE paper_concept_map
       SET reviewed = 0, updated_at = ?
@@ -688,7 +739,7 @@ export function gcConceptChange(
     `).run(timestamp, conceptId, timestamp);
     affectedMappings = result.changes;
   } else if (changeType === 'definition_refined' && isBreaking) {
-    // 分支 B：替换性修改 — 全部映射标记未审阅
+    // 替换性修改 — 全部映射标记未审阅
     const result = db.prepare(`
       UPDATE paper_concept_map
       SET reviewed = 0, updated_at = ?
@@ -697,39 +748,55 @@ export function gcConceptChange(
     affectedMappings = result.changes;
     requiresSynthesizeRefresh = true;
     requiresRelationRecompute = true;
-
-    const rows = db.prepare(
-      'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
-    ).all(conceptId) as { paper_id: string }[];
-    affectedPaperIds.push(...rows.map((r) => r.paper_id as PaperId));
   } else if (changeType === 'deprecated') {
-    // 分支 C：概念废弃 — 删除关联的 paper_relations 边
-    db.prepare(
-      "DELETE FROM paper_relations WHERE json_extract(metadata, '$.conceptId') = ?",
-    ).run(conceptId);
-
-    const rows = db.prepare(
-      'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
-    ).all(conceptId) as { paper_id: string }[];
-    affectedPaperIds.push(...rows.map((r) => r.paper_id as PaperId));
-    affectedMappings = rows.length;
+    // 概念废弃 — 标记映射未审阅
+    const result = db.prepare(`
+      UPDATE paper_concept_map
+      SET reviewed = 0, updated_at = ?
+      WHERE concept_id = ?
+    `).run(timestamp, conceptId);
+    affectedMappings = result.changes;
   } else if (changeType === 'deleted') {
-    // 分支 D：物理删除（内部使用）
-    const rows = db.prepare(
-      'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
-    ).all(conceptId) as { paper_id: string }[];
-    affectedPaperIds.push(...rows.map((r) => r.paper_id as PaperId));
-
+    // 物理删除
     affectedMappings = db.prepare(
       'DELETE FROM paper_concept_map WHERE concept_id = ?',
     ).run(conceptId).changes;
-    // annotations.concept_id → NULL 由 ON DELETE SET NULL 处理
-    db.prepare(
-      "DELETE FROM paper_relations WHERE json_extract(metadata, '$.conceptId') = ?",
-    ).run(conceptId);
-    db.prepare('DELETE FROM concepts WHERE id = ?').run(conceptId);
     requiresRelationRecompute = true;
   }
+
+  // ═══ 阶段 2：派生关系清理 ═══
+  // 对所有 changeType 都清理概念相关的 paper_relations 边
+  const relResult = db.prepare(
+    "DELETE FROM paper_relations WHERE " +
+    "edge_type IN ('concept_agree', 'concept_conflict', 'concept_extend') AND " +
+    "json_extract(metadata, '$.conceptId') = ?",
+  ).run(conceptId);
+  deletedRelations = relResult.changes;
+  if (deletedRelations > 0) {
+    requiresRelationRecompute = true;
+  }
+
+  // ═══ 阶段 3：综述标记 stale ═══
+  // 由返回值告知上层（AppContext.staleDrafts）需要标记
+  // 当 definition 变更或概念废弃时，相关综述需要重新生成
+  if (changeType === 'definition_refined' || changeType === 'deprecated') {
+    requiresSynthesizeRefresh = true;
+  }
+
+  // ═══ 阶段 4：收集受影响论文 ═══
+  const rows = db.prepare(
+    'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
+  ).all(conceptId) as { paper_id: string }[];
+  affectedPaperIds.push(...rows.map((r) => r.paper_id as PaperId));
+
+  // deleted 分支的额外清理
+  if (changeType === 'deleted') {
+    // annotations.concept_id → NULL 由 ON DELETE SET NULL 处理
+    db.prepare('DELETE FROM concepts WHERE id = ?').run(conceptId);
+  }
+
+  // ═══ 阶段 5：触发通知（标记） ═══
+  // 返回结构化结果供上层 pushManager.enqueueDbChange 使用
 
   return {
     affectedMappings,

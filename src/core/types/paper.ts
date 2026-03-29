@@ -1,10 +1,16 @@
 import type { PaperId } from './common';
-import type { PaperType } from '../../shared-types/enums';
+import type {
+  PaperType,
+  Relevance,
+  AnalysisStatus,
+  FulltextStatus,
+} from '../../shared-types/enums';
 
 // ═══ 字面量联合 + const 数组 ═══
+// 唯一定义源在 shared-types/enums，此处 re-export 并提供 const 数组用于运行时校验。
 
-// PaperType 的唯一定义源在 shared-types/enums
-export type { PaperType };
+export type { PaperType, Relevance, AnalysisStatus, FulltextStatus };
+
 export const PAPER_TYPES = [
   'journal',
   'conference',
@@ -27,23 +33,22 @@ export const PAPER_SOURCES = [
 export type PaperSource = (typeof PAPER_SOURCES)[number];
 
 export const FULLTEXT_STATUSES = [
+  'not_attempted',
   'pending',
-  'acquired',
+  'available',
   'abstract_only',
   'failed',
 ] as const;
-export type FulltextStatus = (typeof FULLTEXT_STATUSES)[number];
 
 export const ANALYSIS_STATUSES = [
-  'pending',
+  'not_started',
   'in_progress',
   'completed',
+  'needs_review',
   'failed',
 ] as const;
-export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
-export const RELEVANCES = ['high', 'medium', 'low', 'excluded'] as const;
-export type Relevance = (typeof RELEVANCES)[number];
+export const RELEVANCES = ['seed', 'high', 'medium', 'low', 'excluded'] as const;
 
 // ═══ PaperMetadata ═══
 

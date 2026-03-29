@@ -7,10 +7,11 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import type { FulltextStatus } from '../../../../../shared-types/enums';
 
 const STATUS_CONFIG: Record<FulltextStatus, { icon: string; color: string; tooltip: string }> = {
-  available: { icon: '✅', color: 'var(--success)', tooltip: '全文已获取' },
-  pending: { icon: '⏳', color: 'var(--warning)', tooltip: '正在获取…' },
-  failed: { icon: '⚠️', color: 'var(--danger)', tooltip: '获取失败' },
   not_attempted: { icon: '○', color: 'var(--text-muted)', tooltip: '未尝试获取' },
+  pending: { icon: '⏳', color: 'var(--warning)', tooltip: '正在获取…' },
+  available: { icon: '✅', color: 'var(--success)', tooltip: '全文已获取' },
+  abstract_only: { icon: '📄', color: 'var(--info)', tooltip: '仅有摘要' },
+  failed: { icon: '⚠️', color: 'var(--danger)', tooltip: '获取失败' },
 };
 
 interface FulltextStatusCellProps {

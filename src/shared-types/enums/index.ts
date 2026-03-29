@@ -13,10 +13,11 @@ export type AnalysisStatus =
 
 /** 全文获取状态 */
 export type FulltextStatus =
-  | 'available'
+  | 'not_attempted'
   | 'pending'
-  | 'failed'
-  | 'not_attempted';
+  | 'available'
+  | 'abstract_only'
+  | 'failed';
 
 /** 论文类型（与后端 core/types/paper.ts 统一） */
 export type PaperType =
@@ -88,8 +89,6 @@ export type PipelineStatus =
   | 'failed'
   | 'cancelled';
 
-// ═══ v1.2 新增枚举 ═══
-
 /** 检索路径来源 */
 export type RetrievalPath = 'vector' | 'structured' | 'annotation';
 
@@ -111,8 +110,6 @@ export type RecommendationType =
   | 'fill_evidence_gap'
   | 'general';
 
-// ═══ v2.0 新增枚举 ═══
-
 /** 概念成熟度 */
 export type Maturity = 'tentative' | 'working' | 'established';
 
@@ -127,9 +124,10 @@ export type ConceptHistoryEventType =
   | 'keywords_removed'
   | 'maturity_upgraded'
   | 'maturity_downgraded'
+  | 'layer_changed'
+  | 'parent_changed'
   | 'merged_from'
   | 'split_into'
-  | 'parent_changed'
   | 'deprecated';
 
 /** Advisory 通知卡片类型 */

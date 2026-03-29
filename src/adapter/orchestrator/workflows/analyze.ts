@@ -30,6 +30,7 @@ import type { WorkflowOptions, WorkflowRunnerContext } from '../workflow-runner'
 import type { LlmClient } from '../../llm-client/llm-client';
 import type { ContextBudgetManager, FrameworkState } from '../../context-budget/context-budget-manager';
 import type { Logger } from '../../../core/infra/logger';
+import { PaperNotFoundError } from '../../../core/types/errors';
 
 import {
   buildConceptFrameworkSection,
@@ -52,7 +53,6 @@ import { resolveAnalysisRoute, type PaperFeatures } from './analyze-modes/model-
 import { runIntermediateAnalysis } from './analyze-modes/intermediate-analysis';
 import { runGenericAnalysis } from './analyze-modes/generic-analysis';
 import { selectConceptSubsetEnhanced, type SubsetSelectorDb } from './concept-evolution/concept-subset-selector';
-import { buildMaturityInstructions } from './concept-evolution/maturity-evaluator';
 import { aggregateSuggestions, type SuggestionDb, type PushNotifier } from './suggested-concepts/suggestion-aggregator';
 import { computeRelationsAfterAnalysis, type RelationComputeDb } from './relations/compute-relations';
 
@@ -112,7 +112,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
           `Found ${staleResult.items.length} papers stuck in in_progress (previous crash?), resetting to pending`,
         );
         for (const p of staleResult.items) {
-          await dbProxy.updatePaper(p['id'] as string, { analysisStatus: 'pending' });
+          await dbProxy.updatePaper(p['id'] as string, { analysisStatus: 'not_started' });
         }
       }
     } catch { /* ignore stale detection errors */ }
@@ -274,7 +274,7 @@ async function analyzeSinglePaper(
 
   // ══ Step 1: Precheck (§6.1) ══
   const paper = await dbProxy.getPaper(paperId);
-  if (!paper) throw new Error(`Paper not found: ${paperId}`);
+  if (!paper) throw new PaperNotFoundError({ message: `Paper not found: ${paperId}` });
 
   const analysisStatus = paper['analysisStatus'] ?? paper['analysis_status'];
   if (analysisStatus === 'completed' && !ctx.force) {

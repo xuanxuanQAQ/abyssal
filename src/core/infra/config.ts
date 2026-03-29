@@ -11,10 +11,13 @@ import type {
   ApiKeysConfig,
   WorkspaceConfig,
   ConceptsConfig,
+  ContextBudgetConfig,
+  ConceptChangeConfig,
+  NotesConfig,
+  BatchConfig,
+  AdvisoryConfig,
 } from '../types/config';
-import { ConfigError, MissingFieldError } from '../types/errors';
-
-// TODO: smol-toml 需确认已安装到 dependencies
+import { ConfigError, ConfigParseError, MissingFieldError } from '../types/errors';
 
 // ═══ 默认值 ═══
 
@@ -23,7 +26,7 @@ const DEFAULT_PROJECT: Omit<ProjectConfig, 'name'> = {
   mode: 'auto',
 };
 
-const DEFAULT_ACQUIRE: AcquireConfig = {
+export const DEFAULT_ACQUIRE: AcquireConfig = {
   enabledSources: ['unpaywall', 'arxiv', 'pmc'],
   enableScihub: false,
   scihubDomain: null,
@@ -49,7 +52,7 @@ const DEFAULT_ANALYSIS: AnalysisConfig = {
   autoSuggestConcepts: true,
 };
 
-const DEFAULT_RAG: RagConfig = {
+export const DEFAULT_RAG: RagConfig = {
   embeddingBackend: 'api',
   embeddingModel: 'text-embedding-3-small',
   embeddingDimension: 1536,
@@ -71,13 +74,13 @@ const DEFAULT_LANGUAGE: LanguageConfig = {
   defaultOutputLanguage: 'zh-CN',
 };
 
-const DEFAULT_LLM: LlmConfig = {
+export const DEFAULT_LLM: LlmConfig = {
   defaultProvider: 'anthropic',
   defaultModel: 'claude-sonnet-4-20250514',
   workflowOverrides: {},
 };
 
-const DEFAULT_API_KEYS: ApiKeysConfig = {
+export const DEFAULT_API_KEYS: ApiKeysConfig = {
   anthropicApiKey: null,
   openaiApiKey: null,
   deepseekApiKey: null,
@@ -103,6 +106,73 @@ const DEFAULT_CONCEPTS: ConceptsConfig = {
   additiveChangeLookbackDays: 30,
   autoSuggestThreshold: 3,
 };
+
+const DEFAULT_CONTEXT_BUDGET: ContextBudgetConfig = {
+  focusedMaxTokens: 50_000,
+  broadMaxTokens: 100_000,
+  outputReserveRatio: 0.15,
+  safetyMarginRatio: 0.05,
+  skipRerankerThreshold: 0.8,
+  costPreference: 'balanced',
+};
+
+const DEFAULT_CONCEPT_CHANGE: ConceptChangeConfig = {
+  jaccardThreshold: 0.5,
+  additiveReviewWindowDays: 30,
+  autoDetectBreaking: true,
+};
+
+const DEFAULT_NOTES: NotesConfig = {
+  memoMaxLength: 500,
+  memoAutoIndex: true,
+  noteAutoIndex: true,
+  notesDirectory: 'notes',
+};
+
+const DEFAULT_BATCH: BatchConfig = {
+  concurrency: 5,
+};
+
+const DEFAULT_ADVISORY: AdvisoryConfig = {
+  minPapersThreshold: 5,
+};
+
+// ═══ BOM 清除 ═══
+
+function stripBom(text: string): string {
+  if (text.charCodeAt(0) === 0xfeff) return text.slice(1);
+  return text;
+}
+
+// ═══ TOML 节展平 ═══
+
+/**
+ * §1.2: [llm.analysis] 等子节映射到 llm.workflowOverrides.analysis
+ *
+ * smol-toml 将 [llm.analysis] 解析为 { llm: { analysis: { ... } } }。
+ * 需要将 workflow 子键提升到 workflowOverrides 中。
+ */
+function flattenTomlSections(parsed: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...parsed };
+
+  if (result['llm'] && typeof result['llm'] === 'object') {
+    const llm = { ...(result['llm'] as Record<string, unknown>) };
+    const workflowKeys = ['discovery', 'analysis', 'synthesize', 'article', 'agent'];
+    const overrides: Record<string, unknown> = (llm['workflowOverrides'] as Record<string, unknown>) ?? {};
+
+    for (const key of workflowKeys) {
+      if (llm[key] && typeof llm[key] === 'object') {
+        overrides[key] = llm[key];
+        delete llm[key];
+      }
+    }
+
+    llm['workflowOverrides'] = overrides;
+    result['llm'] = llm;
+  }
+
+  return result;
+}
 
 // ═══ 环境变量覆盖 ═══
 
@@ -209,34 +279,45 @@ export class ConfigLoader {
   static load(tomlFilePath: string): Readonly<AbyssalConfig> {
     // 1. 读取 TOML 文件
     const fs = require('node:fs');
-    const content = fs.readFileSync(tomlFilePath, 'utf-8') as string;
+    let content = fs.readFileSync(tomlFilePath, 'utf-8') as string;
 
-    // 2. TOML 解析
+    // 2. BOM 清除
+    content = stripBom(content);
+
+    // 3. TOML 解析
     let raw: Record<string, unknown>;
     try {
       const toml = require('smol-toml');
       raw = toml.parse(content) as Record<string, unknown>;
     } catch (cause) {
-      throw new ConfigError({
-        message: `Failed to parse TOML config: ${tomlFilePath}`,
+      const err = cause as Error & { line?: number; column?: number };
+      throw new ConfigParseError({
+        message: `TOML syntax error in ${tomlFilePath}: ${err.message}`,
         cause: cause instanceof Error ? cause : undefined,
-        context: { filePath: tomlFilePath },
+        context: {
+          file: tomlFilePath,
+          line: err.line,
+          column: err.column,
+        },
       });
     }
 
-    // 3. 环境变量覆盖
+    // 4. 展平 TOML 子节（[llm.analysis] → llm.workflowOverrides.analysis）
+    raw = flattenTomlSections(raw);
+
+    // 5. 环境变量覆盖
     applyEnvOverrides(raw);
 
-    // 4. 默认值填充 + 必填校验
+    // 6. 默认值填充 + 必填校验
     requireField(raw, 'project.name', 'string');
     requireField(raw, 'workspace.baseDir', 'string');
 
     const config = ConfigLoader.fillDefaults(raw);
 
-    // 5. 类型校验
+    // 7. 类型校验
     ConfigLoader.validate(config);
 
-    // 6. 冻结
+    // 8. 冻结
     return deepFreeze(config);
   }
 
@@ -256,6 +337,11 @@ export class ConfigLoader {
     >;
     const rawWorkspace = (raw['workspace'] ?? {}) as Record<string, unknown>;
     const rawConcepts = (raw['concepts'] ?? {}) as Record<string, unknown>;
+    const rawContextBudget = (raw['contextBudget'] ?? raw['context_budget'] ?? {}) as Record<string, unknown>;
+    const rawConceptChange = (raw['conceptChange'] ?? raw['concept_change'] ?? {}) as Record<string, unknown>;
+    const rawNotes = (raw['notes'] ?? {}) as Record<string, unknown>;
+    const rawBatch = (raw['batch'] ?? {}) as Record<string, unknown>;
+    const rawAdvisory = (raw['advisory'] ?? {}) as Record<string, unknown>;
 
     return {
       project: {
@@ -302,6 +388,26 @@ export class ConfigLoader {
         ...DEFAULT_CONCEPTS,
         ...rawConcepts,
       } as ConceptsConfig,
+      contextBudget: {
+        ...DEFAULT_CONTEXT_BUDGET,
+        ...rawContextBudget,
+      } as ContextBudgetConfig,
+      conceptChange: {
+        ...DEFAULT_CONCEPT_CHANGE,
+        ...rawConceptChange,
+      } as ConceptChangeConfig,
+      notes: {
+        ...DEFAULT_NOTES,
+        ...rawNotes,
+      } as NotesConfig,
+      batch: {
+        ...DEFAULT_BATCH,
+        ...rawBatch,
+      } as BatchConfig,
+      advisory: {
+        ...DEFAULT_ADVISORY,
+        ...rawAdvisory,
+      } as AdvisoryConfig,
     };
   }
 
@@ -410,9 +516,10 @@ export class ConfigLoader {
     let raw: Record<string, unknown> = {};
     if (fs.existsSync(configPath)) {
       try {
-        const content = fs.readFileSync(configPath, 'utf-8') as string;
+        let content = fs.readFileSync(configPath, 'utf-8') as string;
+        content = stripBom(content);
         const toml = require('smol-toml');
-        raw = toml.parse(content) as Record<string, unknown>;
+        raw = flattenTomlSections(toml.parse(content) as Record<string, unknown>);
       } catch (cause) {
         // 工作区 TOML 解析失败，使用默认值
         raw = {};
@@ -446,6 +553,13 @@ export class ConfigLoader {
       snapshotsDir: path.join('.abyssal', 'snapshots'),
       privateDocsDir: 'private_docs',
     };
+
+    // 新增段
+    const rawContextBudget = (raw['contextBudget'] ?? raw['context_budget'] ?? {}) as Record<string, unknown>;
+    const rawConceptChange = (raw['conceptChange'] ?? raw['concept_change'] ?? {}) as Record<string, unknown>;
+    const rawNotes = (raw['notes'] ?? {}) as Record<string, unknown>;
+    const rawBatch = (raw['batch'] ?? {}) as Record<string, unknown>;
+    const rawAdvisory = (raw['advisory'] ?? {}) as Record<string, unknown>;
 
     const config: AbyssalConfig = {
       project: {
@@ -495,6 +609,26 @@ export class ConfigLoader {
         ...DEFAULT_CONCEPTS,
         ...rawConcepts,
       } as ConceptsConfig,
+      contextBudget: {
+        ...DEFAULT_CONTEXT_BUDGET,
+        ...rawContextBudget,
+      } as ContextBudgetConfig,
+      conceptChange: {
+        ...DEFAULT_CONCEPT_CHANGE,
+        ...rawConceptChange,
+      } as ConceptChangeConfig,
+      notes: {
+        ...DEFAULT_NOTES,
+        ...rawNotes,
+      } as NotesConfig,
+      batch: {
+        ...DEFAULT_BATCH,
+        ...rawBatch,
+      } as BatchConfig,
+      advisory: {
+        ...DEFAULT_ADVISORY,
+        ...rawAdvisory,
+      } as AdvisoryConfig,
     };
 
     ConfigLoader.validate(config);

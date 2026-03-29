@@ -17,9 +17,9 @@ import type { RankedChunk } from '../../core/types/chunk';
 
 import { ModelRouter, type ModelRoute, getModelContextWindow } from './model-router';
 import { ClaudeAdapter } from './claude-adapter';
-import { OpenAIAdapter, type OpenAIBackendConfig } from './openai-adapter';
+import { OpenAIAdapter } from './openai-adapter';
 import { RerankerScheduler } from './reranker';
-import { retryableCall, type RetryOptions } from './retry-engine';
+import { retryableCall } from './retry-engine';
 import { CostTracker, type CostStats } from './cost-tracker';
 import { countTokens } from './token-counter';
 

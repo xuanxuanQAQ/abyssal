@@ -84,10 +84,19 @@ export class ConsoleLogger implements Logger {
 export class FileLogger implements Logger {
   private readonly minLevel: number;
   private readonly logDir: string;
+  private readonly _fs: typeof import('node:fs');
+  private readonly _path: typeof import('node:path');
 
   constructor(logDir: string, level: LogLevel = 'info') {
     this.logDir = logDir;
     this.minLevel = LEVEL_SEVERITY[level];
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    this._fs = require('node:fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    this._path = require('node:path');
+    try {
+      this._fs.mkdirSync(this.logDir, { recursive: true });
+    } catch { /* ignore — writeLine will fallback to stderr */ }
   }
 
   debug(message: string, context?: Record<string, unknown>): void {
@@ -127,16 +136,10 @@ export class FileLogger implements Logger {
       ...(ctx && Object.keys(ctx).length > 0 ? { ctx } : {}),
     });
 
-    // TODO: 实际文件写入 — 需要 Node.js fs.appendFileSync
-    // 日志文件路径: {logDir}/abyssal-{YYYY-MM-DD}.log
-    // 日志轮转：按日期自动创建新文件，保留最近 30 天
     try {
-      const fs = require('node:fs');
-      const path = require('node:path');
       const date = new Date().toISOString().slice(0, 10);
-      const filePath = path.join(this.logDir, `abyssal-${date}.log`);
-      fs.mkdirSync(this.logDir, { recursive: true });
-      fs.appendFileSync(filePath, line + '\n', 'utf-8');
+      const filePath = this._path.join(this.logDir, `abyssal-${date}.log`);
+      this._fs.appendFileSync(filePath, line + '\n', 'utf-8');
     } catch {
       // 日志写入失败不应中断业务流程，降级到 stderr
       process.stderr.write(line + '\n');
@@ -146,16 +149,14 @@ export class FileLogger implements Logger {
   /** 启动时清理过期日志（保留最近 30 天） */
   cleanupOldLogs(): void {
     try {
-      const fs = require('node:fs');
-      const path = require('node:path');
       const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const files = fs.readdirSync(this.logDir) as string[];
+      const files = this._fs.readdirSync(this.logDir) as string[];
       for (const f of files) {
         if (!f.startsWith('abyssal-') || !f.endsWith('.log')) continue;
-        const filePath = path.join(this.logDir, f);
-        const stat = fs.statSync(filePath);
+        const filePath = this._path.join(this.logDir, f);
+        const stat = this._fs.statSync(filePath);
         if (stat.mtimeMs < cutoff) {
-          fs.unlinkSync(filePath);
+          this._fs.unlinkSync(filePath);
         }
       }
     } catch {

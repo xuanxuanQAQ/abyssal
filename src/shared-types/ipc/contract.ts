@@ -22,6 +22,7 @@ import type {
   Recommendation, AdvisoryNotification,
   AppConfig, ProjectInfo, ProjectSetupConfig, ImportResult, SnapshotInfo,
   PDFAnnotation, CleanupPolicy, GlobalSearchResult,
+  ConceptStats, SuggestedConceptsStats, LayerVisibility,
 } from '../models';
 
 import type {
@@ -30,10 +31,14 @@ import type {
 
 import type {
   PaperFilter, GraphFilter, RAGFilter,
-  WorkflowConfig, WorkspaceInfo, RecentWorkspaceEntry, CurrentWorkspaceInfo,
+  WorkflowConfig,
   PipelineProgressEvent, StreamChunkEvent, ChatResponseEvent,
   ChatContext, WindowMaximizedEvent, SectionSearchResult,
 } from './index';
+
+import type {
+  WorkspaceInfo, RecentWorkspaceEntry, CurrentWorkspaceInfo,
+} from '../models';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Invoke Contract — request/response channels
@@ -128,7 +133,7 @@ export interface IpcContract {
 
   // ── db:relations ──
   'db:relations:getGraph':            { args: [filter?: GraphFilter];                    result: GraphData };
-  'db:relations:getNeighborhood':     { args: [nodeId: string, depth: number, layers?: import('../models').LayerVisibility]; result: GraphData };
+  'db:relations:getNeighborhood':     { args: [nodeId: string, depth: number, layers?: LayerVisibility]; result: GraphData };
 
   // ── db:chat ──
   'db:chat:saveMessage':              { args: [record: ChatMessageRecord];               result: void };
@@ -214,11 +219,11 @@ export interface IpcEventContract {
   'advisory:notifications-updated$event': AdvisoryNotification[];
   'workspace:switched$event':           { rootDir: string; name: string };
   // Push manager channels
-  'push:workflow-progress':             unknown;
-  'push:agent-stream':                  unknown;
+  'push:workflow-progress':             PipelineProgressEvent;
+  'push:agent-stream':                  StreamChunkEvent;
   'push:db-changed':                    { tables: string[]; operation: string };
   'push:notification':                  { type: string; title: string; message: string };
-  'push:advisory-suggestions':          unknown[];
+  'push:advisory-suggestions':          Recommendation[];
   'push:memo-created':                  { memoId: string };
   'push:note-indexed':                  { noteId: string; chunkCount: number };
 }
@@ -253,18 +258,4 @@ export type IpcEventPayload<C extends IpcEventChannel> = IpcEventContract[C];
 /** All fire-and-forget channel names */
 export type IpcFireAndForgetChannel = keyof IpcFireAndForgetContract;
 
-// ═══════════════════════════════════════════════════════════════════════
-// Extra model types used in contract
-// ═══════════════════════════════════════════════════════════════════════
-
-export interface ConceptStats {
-  conceptId: string;
-  mappingCount: number;
-  paperCount: number;
-}
-
-export interface SuggestedConceptsStats {
-  pendingCount: number;
-  adoptedCount: number;
-  dismissedCount: number;
-}
+// ConceptStats, SuggestedConceptsStats 已移至 ../models/index.ts

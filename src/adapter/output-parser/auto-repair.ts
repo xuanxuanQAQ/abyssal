@@ -83,12 +83,18 @@ function applyR1(text: string): string {
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const match = line.match(/^(\s+)([\w_-]+):\s+(.+)$/);
+    const match = line.match(/^(\s*)([\w_-]+):\s+(.+)$/);
     if (!match) continue;
 
     const [, indent, key, value] = match as [string, string, string, string];
     if (!value.includes(':')) continue;
     if (value.startsWith('"') || value.startsWith("'")) continue;
+
+    // §7.2: Exclude legitimate YAML values containing colons
+    // ISO date/time (e.g., 2026-03-25T14:30:00)
+    if (/^\d{4}-\d{2}-\d{2}/.test(value)) continue;
+    // URLs (e.g., https://example.com)
+    if (/^https?:\/\//.test(value)) continue;
 
     // Value contains a colon and is not already quoted — wrap in double quotes
     const escapedValue = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -151,9 +157,37 @@ function applyR4(text: string): string {
   const lines = text.split('\n');
   const result: string[] = [];
 
+  // Fix #11: Track multi-line scalar blocks (| or >) to avoid false positives.
+  // Lines inside a block scalar are literal text, NOT YAML structure.
+  let inBlockScalar = false;
+  let blockScalarIndent = 0;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const prevLine = i > 0 ? lines[i - 1]! : '';
+    const lineIndent = (line.match(/^(\s*)/)?.[1] ?? '').length;
+
+    // Track block scalar state
+    if (inBlockScalar) {
+      // Block scalar ends when indentation drops to or below the parent level
+      if (line.trim().length > 0 && lineIndent <= blockScalarIndent) {
+        inBlockScalar = false;
+      } else {
+        result.push(line); // Inside block scalar — never modify
+        continue;
+      }
+    }
+
+    // Detect block scalar start: any line ending with | or > (optionally with modifiers like |2, >-)
+    if (/:\s*[|>][+-]?\d*\s*$/.test(prevLine)) {
+      const prevIndent = (prevLine.match(/^(\s*)/)?.[1] ?? '').length;
+      if (lineIndent > prevIndent) {
+        inBlockScalar = true;
+        blockScalarIndent = prevIndent;
+        result.push(line);
+        continue;
+      }
+    }
 
     // Check if previous line ends with ":" (list parent) and current line
     // is an indented key: value without dash
@@ -164,10 +198,8 @@ function applyR4(text: string): string {
       const parentIndent = parentMatch[1]!.length;
       const childIndent = childMatch[1]!.length;
 
-      // Child should be indented more than parent and not already a list item
       if (childIndent > parentIndent && !line.trimStart().startsWith('-')) {
         const indent = childMatch[1]!;
-        // Replace leading whitespace to add "- " before the key
         const adjustedIndent = indent.slice(0, -2) || '';
         result.push(`${adjustedIndent}- ${line.trimStart()}`);
         continue;
@@ -200,8 +232,9 @@ function applyR5(text: string): string {
 
 function applyR6(text: string): string {
   return text
-    .replace(/[\u201C\u201D]/g, '"')  // left/right double smart quotes
-    .replace(/[\u2018\u2019]/g, "'"); // left/right single smart quotes
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')  // left/right/low double smart quotes + double prime
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")  // left/right/low single smart quotes + single prime
+    .replace(/\uFF1A/g, ':');  // §7.7: fullwidth colon → ASCII colon
 }
 
 // ─── R7: Missing leading zero in floats ───

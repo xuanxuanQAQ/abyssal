@@ -13,9 +13,10 @@ const EVENT_ICONS: Record<ConceptHistoryEventType, string> = {
   keywords_removed: '🏷️',
   maturity_upgraded: '⬆️',
   maturity_downgraded: '⬇️',
+  layer_changed: '📊',
+  parent_changed: '📂',
   merged_from: '🔗',
   split_into: '✂️',
-  parent_changed: '📂',
   deprecated: '🗑️',
 };
 

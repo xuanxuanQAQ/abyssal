@@ -1,13 +1,16 @@
 import type { AnnotationId, PaperId, ConceptId } from './common';
+import type { AnnotationType } from '../../shared-types/enums';
 
 // ═══ 字面量联合 + const 数组 ═══
+// 唯一定义源在 shared-types/enums（使用 camelCase: 'conceptTag'）。
+
+export type { AnnotationType };
 
 export const ANNOTATION_TYPES = [
   'highlight',
   'note',
-  'concept_tag',
+  'conceptTag',
 ] as const;
-export type AnnotationType = (typeof ANNOTATION_TYPES)[number];
 
 // ═══ PdfRect ═══
 
@@ -30,6 +33,6 @@ export interface Annotation {
   type: AnnotationType;
   color: string; // CSS 颜色值，如 "#FFEB3B"
   comment: string | null;
-  conceptId: ConceptId | null; // 仅 concept_tag 类型有值
+  conceptId: ConceptId | null; // 仅 conceptTag 类型有值
   createdAt: string; // ISO 8601
 }

@@ -74,7 +74,7 @@ describe('validators — enum checks', () => {
 
   it('accepts valid fulltext statuses', () => {
     expect(() => validateFulltextStatus('pending')).not.toThrow();
-    expect(() => validateFulltextStatus('acquired')).not.toThrow();
+    expect(() => validateFulltextStatus('available')).not.toThrow();
   });
 
   it('accepts valid relevances', () => {
@@ -105,13 +105,13 @@ describe('validators — enum checks', () => {
 });
 
 describe('validators — annotation invariant', () => {
-  it('accepts concept_tag with concept_id', () => {
-    expect(() => validateAnnotationInvariant('concept_tag', 'some_id')).not.toThrow();
+  it('accepts conceptTag with concept_id', () => {
+    expect(() => validateAnnotationInvariant('conceptTag', 'some_id')).not.toThrow();
   });
 
-  it('rejects concept_tag without concept_id', () => {
-    expect(() => validateAnnotationInvariant('concept_tag', null)).toThrow(IntegrityError);
-    expect(() => validateAnnotationInvariant('concept_tag', undefined)).toThrow(IntegrityError);
+  it('rejects conceptTag without concept_id', () => {
+    expect(() => validateAnnotationInvariant('conceptTag', null)).toThrow(IntegrityError);
+    expect(() => validateAnnotationInvariant('conceptTag', undefined)).toThrow(IntegrityError);
   });
 
   it('allows highlight without concept_id', () => {
@@ -125,7 +125,7 @@ describe('validators — annotation invariant', () => {
   it('accepts valid annotation types', () => {
     expect(() => validateAnnotationType('highlight')).not.toThrow();
     expect(() => validateAnnotationType('note')).not.toThrow();
-    expect(() => validateAnnotationType('concept_tag')).not.toThrow();
+    expect(() => validateAnnotationType('conceptTag')).not.toThrow();
   });
 
   it('rejects invalid annotation type', () => {

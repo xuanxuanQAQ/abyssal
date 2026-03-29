@@ -22,6 +22,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+// Re-export fragment assembly engine from new module
+export {
+  assembleTemplate,
+  loadFile as loadTemplateFile,
+  type FragmentAssemblyParams,
+} from './variable-injector';
+
 // ─── Template directory ───
 
 const TEMPLATES_DIR = path.join(__dirname, 'templates');

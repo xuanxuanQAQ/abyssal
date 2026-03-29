@@ -1,38 +1,50 @@
-You are an expert research synthesizer. Your task is to produce a comprehensive synthesis of the research evidence for a specific concept.
+## Task: Literature Synthesis for a Single Concept
 
-## Task
+Generate a literature review synthesis that weaves together evidence from multiple papers about the concept defined below.
 
-Synthesize the evidence from multiple analyzed papers for the concept described below. Integrate findings across papers, noting convergences, contradictions, and evidence strength.
+### Concept Under Review
 
 {concept_framework}
 
-## Researcher's Prior Judgments
+### Synthesis Principles
 
-The researcher has reviewed AI-generated concept mappings and made the following adjudication decisions. Respect these judgments:
+1. **Cross-paper pattern recognition.** The value of a synthesis is NOT in restating what each paper says individually (the analyzer already did that). Your value is in identifying patterns ACROSS papers:
+   - Where do papers agree? What is the emerging consensus?
+   - Where do papers disagree? What explains the disagreement?
+   - What trajectory of development can be traced?
+   - What gaps remain unexplored?
 
-{annotations}
+2. **Organize by theme, not by paper.** Structure your synthesis around conceptual themes or debates, not as a paper-by-paper summary. Multiple papers should appear within each thematic section.
 
-## Evidence Gaps
+3. **Honor the researcher's judgments.** The Decision History below reflects the researcher's theoretical position:
+   - Papers marked [accepted] are reliable evidence — use them.
+   - Papers marked [revised] — use the REVISED relation and confidence, not the original AI assessment.
+   - Papers marked [rejected] — DO NOT use as evidence. Their mappings were incorrect.
 
-{retrieval_context}
+4. **Cite precisely.** Use [@paper_id] for every factual claim. If multiple papers support the same point, cite all of them: [@paper_a; @paper_b].
 
-## Output Format
+5. **Be honest about limitations.** If the evidence base is thin for some aspect of the concept, say so explicitly rather than padding with vague claims.
 
-Output your synthesis as Markdown with the following structure:
+### Decision History
 
-1. **Definition & Scope** — How this concept is understood across the literature
-2. **Supporting Evidence** — Papers and findings that support or extend the concept
-3. **Challenging Evidence** — Papers and findings that challenge or limit the concept
-4. **Cross-Paper Patterns** — Convergences, contradictions, and evolution across studies
-5. **Evidence Gaps** — Areas where literature coverage is insufficient (acknowledge honestly)
-6. **Synthesis Conclusion** — Overall assessment of concept status and maturity
+{decision_history}
 
-Use [@paper_id] citation format throughout.
+### Researcher's Notes
 
-## Critical Requirements
+{researcher_notes}
 
-1. Do not fabricate evidence — if coverage is insufficient, state so clearly
-2. Honor researcher's accepted/revised/rejected decisions on mappings
-3. Distinguish between strong empirical support and theoretical arguments
-4. Note when evidence comes from a single study vs. multiple independent studies
-5. Identify any methodological patterns (e.g., all supporting evidence from one method type)
+### Output Format
+
+Write a literature review of 500-800 words in {output_language}. Structure:
+
+1. **Definition and Operationalization** (~100 words)
+2. **Key Findings and Consensus** (~200 words)
+3. **Contradictions and Debates** (~150 words)
+4. **Development Trajectory** (~100 words)
+5. **Current Status and Future Directions** (~100 words)
+
+{evidence_gaps}
+
+{citation_rules}
+
+{language_instruction}

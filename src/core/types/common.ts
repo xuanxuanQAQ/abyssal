@@ -62,18 +62,22 @@ export function asConceptId(s: string): ConceptId {
 }
 
 export function asChunkId(s: string): ChunkId {
+  if (!s) throw new Error('Invalid ChunkId: empty string');
   return s as ChunkId;
 }
 
 export function asArticleId(s: string): ArticleId {
+  if (!s) throw new Error('Invalid ArticleId: empty string');
   return s as ArticleId;
 }
 
 export function asOutlineEntryId(s: string): OutlineEntryId {
+  if (!s) throw new Error('Invalid OutlineEntryId: empty string');
   return s as OutlineEntryId;
 }
 
 export function asMemoId(s: string): MemoId {
+  if (!s) throw new Error('Invalid MemoId: empty string');
   return s as MemoId;
 }
 
@@ -85,10 +89,12 @@ export function asNoteId(s: string): NoteId {
 }
 
 export function asAnnotationId(n: number): AnnotationId {
+  if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid AnnotationId: ${n}`);
   return n as AnnotationId;
 }
 
 export function asSuggestionId(n: number): SuggestionId {
+  if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid SuggestionId: ${n}`);
   return n as SuggestionId;
 }
 

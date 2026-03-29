@@ -363,12 +363,85 @@ export class MissingFieldError extends ConfigError {
   }
 }
 
+export class ConfigParseError extends ConfigError {
+  constructor(
+    opts: Partial<AbyssalErrorOptions> & {
+      message: string;
+      context: Record<string, unknown> & { file: string };
+    },
+  ) {
+    super({
+      code: 'CONFIG_PARSE_ERROR',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
+/** Validation entry used by ConfigValidationError */
+export interface ValidationEntry {
+  level: number;
+  severity: 'fatal' | 'error' | 'warning' | 'info';
+  field?: string;
+  message: string;
+  hint?: string;
+}
+
+export class ConfigValidationError extends ConfigError {
+  readonly errors: ValidationEntry[];
+  readonly warnings: ValidationEntry[];
+
+  constructor(errors: ValidationEntry[], warnings: ValidationEntry[]) {
+    const summary = errors.map((e) => e.message).join('; ');
+    super({
+      code: 'CONFIG_VALIDATION_ERROR',
+      message: `Configuration validation failed (${errors.length} error(s)): ${summary}`,
+      recoverable: false,
+      context: { errorCount: errors.length, warningCount: warnings.length },
+    });
+    this.errors = errors;
+    this.warnings = warnings;
+  }
+}
+
+// ═══ 2.3.6b 概念错误族 ═══
+
+export class ConceptNotFoundError extends AbyssalError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'CONCEPT_NOT_FOUND',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
+export class ConceptDeprecatedError extends AbyssalError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'CONCEPT_DEPRECATED',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
 // ═══ 2.3.7 嵌入错误族 ═══
 
 export class EmbeddingError extends AbyssalError {
   constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
     super({
       code: 'EMBEDDING_ERROR',
+      recoverable: false,
+      ...opts,
+    });
+  }
+}
+
+export class EmbeddingMigrationError extends EmbeddingError {
+  constructor(opts: Partial<AbyssalErrorOptions> & { message: string }) {
+    super({
+      code: 'EMBEDDING_MIGRATION_ERROR',
       recoverable: false,
       ...opts,
     });
@@ -480,9 +553,15 @@ const ERROR_CLASS_MAP: Record<string, new (opts: any) => AbyssalError> = {
   CslFormatError,
   ConfigError,
   MissingFieldError,
+  ConfigParseError,
+  // ConfigValidationError 省略：其构造器 (errors[], warnings[]) 与标准 (opts) 不兼容，
+  // fromJSON 回退到 ConfigError 即可。
+  ConceptNotFoundError,
+  ConceptDeprecatedError,
   EmbeddingError,
   DimensionMismatchError,
   ModelLoadError,
+  EmbeddingMigrationError,
   LlmClientError,
   AuthenticationError,
   ContextOverflowError,

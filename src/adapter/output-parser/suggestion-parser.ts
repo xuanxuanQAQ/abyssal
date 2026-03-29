@@ -12,6 +12,13 @@
 
 // ─── Types ───
 
+export interface SuggestionParseContext {
+  /** All known concept IDs — for resolveClosestExisting fuzzy matching */
+  knownConceptIds?: Set<string> | undefined;
+  /** Concept name lookup — for name-based fuzzy matching */
+  getConceptName?: ((id: string) => string | null) | undefined;
+}
+
 export interface RawSuggestion {
   term?: unknown;
   frequency_in_paper?: unknown;
@@ -19,6 +26,7 @@ export interface RawSuggestion {
   closest_existing?: unknown;
   reason?: unknown;
   suggested_definition?: unknown;
+  definition?: unknown;
   suggested_keywords?: unknown;
   [key: string]: unknown;
 }
@@ -42,7 +50,16 @@ export interface NormalizedSuggestion {
  * - Deduplicates by normalized term (case-insensitive, trimmed)
  * - Preserves zero-concept mode extra fields (suggested_definition, suggested_keywords)
  */
-export function parseSuggestedConcepts(suggestions: unknown): NormalizedSuggestion[] {
+/**
+ * Parse and normalize suggested_new_concepts from frontmatter.
+ *
+ * @param suggestions - Raw array from frontmatter
+ * @param context - Optional context for closest_existing fuzzy matching
+ */
+export function parseSuggestedConcepts(
+  suggestions: unknown,
+  context?: SuggestionParseContext,
+): NormalizedSuggestion[] {
   if (!Array.isArray(suggestions)) return [];
 
   const parsed: NormalizedSuggestion[] = [];
@@ -64,14 +81,31 @@ export function parseSuggestedConcepts(suggestions: unknown): NormalizedSuggesti
     if (seen.has(termNormalized)) continue;
     seen.add(termNormalized);
 
+    // §10.1: Resolve closest_existing with fuzzy matching
+    const closestRaw = toStringOrNull(s.closest_existing);
+    const closestExisting = resolveClosestExisting(closestRaw, context);
+
+    // §10.1: suggested_definition from either field name
+    const suggestedDef = toStringOrNull(s.suggested_definition) ?? toStringOrNull(s.definition);
+
+    // §10.1: suggested_keywords — handle comma-separated string
+    let suggestedKeywords = toStringArray(s.suggested_keywords);
+    if (!suggestedKeywords && typeof s.suggested_keywords === 'string') {
+      const parts = (s.suggested_keywords as string)
+        .split(',')
+        .map((k: string) => k.trim().toLowerCase())
+        .filter((k: string) => k.length > 0);
+      suggestedKeywords = parts.length > 0 ? parts.slice(0, 10) : null;
+    }
+
     const normalized: NormalizedSuggestion = {
       term,
       termNormalized,
-      frequencyInPaper: toPositiveInt(s.frequency_in_paper ?? s.frequency, 1),
-      closestExisting: toStringOrNull(s.closest_existing),
-      reason: typeof s.reason === 'string' ? s.reason : '',
-      suggestedDefinition: toStringOrNull(s.suggested_definition),
-      suggestedKeywords: toStringArray(s.suggested_keywords),
+      frequencyInPaper: clampInt(s.frequency_in_paper ?? s.frequency, 1, 9999),
+      closestExisting,
+      reason: truncateString(typeof s.reason === 'string' ? s.reason : '', 500),
+      suggestedDefinition: suggestedDef ? truncateString(suggestedDef, 500) : null,
+      suggestedKeywords,
     };
 
     parsed.push(normalized);
@@ -82,13 +116,47 @@ export function parseSuggestedConcepts(suggestions: unknown): NormalizedSuggesti
 
 // ─── Helpers ───
 
-function toPositiveInt(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && value > 0) return Math.floor(value);
+// ─── §10.1: Resolve closest_existing with fuzzy matching ───
+
+function resolveClosestExisting(
+  closestField: string | null,
+  context?: SuggestionParseContext,
+): string | null {
+  if (!closestField || !context?.knownConceptIds) return closestField;
+
+  // Exact ID match
+  if (context.knownConceptIds.has(closestField)) return closestField;
+
+  // Name-based fuzzy match
+  if (context.getConceptName) {
+    for (const id of context.knownConceptIds) {
+      const name = context.getConceptName(id);
+      if (name && name.toLowerCase() === closestField.toLowerCase()) {
+        return id;
+      }
+    }
+  }
+
+  return null; // No match — don't set closest
+}
+
+// ─── Helpers ───
+
+function clampInt(value: unknown, min: number, max: number): number {
+  if (typeof value === 'number') {
+    const n = Math.floor(value);
+    return Math.max(min, Math.min(max, isNaN(n) ? min : n));
+  }
   if (typeof value === 'string') {
     const n = parseInt(value, 10);
-    if (!isNaN(n) && n > 0) return n;
+    if (!isNaN(n)) return Math.max(min, Math.min(max, n));
   }
-  return fallback;
+  return min;
+}
+
+function truncateString(str: string, maxLen: number): string {
+  if (typeof str !== 'string') return '';
+  return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
 }
 
 function toStringOrNull(value: unknown): string | null {
@@ -100,6 +168,7 @@ function toStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
   const filtered = value
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-    .map((v) => v.trim());
+    .map((v) => v.trim().toLowerCase())
+    .slice(0, 10); // §10.1: max 10 keywords
   return filtered.length > 0 ? filtered : null;
 }

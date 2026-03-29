@@ -29,6 +29,7 @@ import type { AcquireService } from '../../../core/acquire';
 import type { ProcessService } from '../../../core/process';
 import type { Logger } from '../../../core/infra/logger';
 import { CircuitBreaker, withRetry, classifyError } from '../error-classifier';
+import { PaperNotFoundError } from '../../../core/types/errors';
 import { createConcurrencyGuard } from '../concurrency-guard';
 
 // ─── Services interface ───
@@ -157,10 +158,10 @@ async function acquireSinglePaper(
 
   // ── Zone 1: Read (no lock) ──
   const paper = await dbProxy.getPaper(paperId);
-  if (!paper) throw new Error(`Paper not found: ${paperId}`);
+  if (!paper) throw new PaperNotFoundError({ message: `Paper not found: ${paperId}` });
 
   const fulltextStatus = paper['fulltextStatus'] ?? paper['fulltext_status'];
-  if (fulltextStatus === 'acquired') {
+  if (fulltextStatus === 'available') {
     return; // Already processed — idempotent skip
   }
 
@@ -266,7 +267,7 @@ async function acquireSinglePaper(
   // ══ Step 11: Status update (Zone 3: Write) ══
   await writeExclusive(async () => {
     await dbProxy.updatePaper(paperId, {
-      fulltextStatus: 'acquired',
+      fulltextStatus: 'available',
       fulltextPath: pdfPath,
       textPath,
       failureReason: null,

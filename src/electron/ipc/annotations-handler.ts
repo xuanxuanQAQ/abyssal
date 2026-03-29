@@ -25,7 +25,7 @@ export function registerAnnotationsHandlers(ctx: AppContext): void {
     const rect = a['rect'] as Record<string, number> | undefined;
     const result = await dbProxy.addAnnotation({
       paperId: asPaperId(a['paperId'] as string),
-      type: a['type'] as 'highlight' | 'note' | 'concept_tag',
+      type: a['type'] as 'highlight' | 'note' | 'conceptTag',
       page: ((a['pageNumber'] ?? a['page']) as number) || 0,
       rect: rect
         ? ({ x0: rect['x0'] ?? rect['x'] ?? 0, y0: rect['y0'] ?? rect['y'] ?? 0, x1: rect['x1'] ?? ((rect['x'] ?? 0) + (rect['width'] ?? 0)), y1: rect['y1'] ?? ((rect['y'] ?? 0) + (rect['height'] ?? 0)) } as PdfRect)

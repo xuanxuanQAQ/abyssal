@@ -15,6 +15,7 @@ import {
   AccessDeniedError,
 } from '../types/errors';
 import type { Logger } from './logger';
+import { RateLimiter } from './rate-limiter';
 
 // ─── 配置 ───
 
@@ -235,6 +236,11 @@ export class HttpClient {
           controller.abort();
         }, timeoutMs);
 
+        // 防止 abort + writeStream.error 双重 reject
+        let settled = false;
+        const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err); } };
+        const safeResolve = (v: { type: 'redirect'; location: string; status: number } | { type: 'done'; status: number; fileSizeBytes: number }) => { if (!settled) { settled = true; resolve(v); } };
+
         const req = transport.request(
           currentUrl,
           {
@@ -251,7 +257,7 @@ export class HttpClient {
               clearTimeout(timeoutId);
               const location = res.headers['location'];
               if (!location) {
-                reject(
+                safeReject(
                   new NetworkError({
                     message: `Redirect ${status} without Location: ${currentUrl}`,
                     context: { url: currentUrl, status },
@@ -259,7 +265,7 @@ export class HttpClient {
                 );
                 return;
               }
-              resolve({
+              safeResolve({
                 type: 'redirect',
                 location: new URL(location, currentUrl).toString(),
                 status,
@@ -277,7 +283,7 @@ export class HttpClient {
                 try {
                   this.throwForStatus(status, currentUrl, body, res.headers);
                 } catch (err) {
-                  reject(err);
+                  safeReject(err as Error);
                 }
               });
               return;
@@ -295,7 +301,7 @@ export class HttpClient {
 
             writeStream.on('finish', () => {
               clearTimeout(timeoutId);
-              resolve({
+              safeResolve({
                 type: 'done',
                 status,
                 fileSizeBytes: written,
@@ -305,7 +311,7 @@ export class HttpClient {
             writeStream.on('error', (err) => {
               clearTimeout(timeoutId);
               fs.unlink(destPath, () => {}); // 清理碎片文件
-              reject(
+              safeReject(
                 new NetworkError({
                   message: `Write stream error: ${err.message}`,
                   context: { url: currentUrl, destPath },
@@ -317,9 +323,8 @@ export class HttpClient {
             controller.signal.addEventListener('abort', () => {
               res.destroy();
               writeStream.destroy();
-              // 清理中断产生的碎片文件
               fs.unlink(destPath, () => {});
-              reject(
+              safeReject(
                 new TimeoutError({
                   message: `Download timed out after ${timeoutMs}ms: ${currentUrl}`,
                   context: { url: currentUrl, timeoutMs },
@@ -332,14 +337,14 @@ export class HttpClient {
         req.on('error', (err) => {
           clearTimeout(timeoutId);
           if (controller.signal.aborted) {
-            reject(
+            safeReject(
               new TimeoutError({
                 message: `Download timed out after ${timeoutMs}ms: ${currentUrl}`,
                 context: { url: currentUrl, timeoutMs },
               }),
             );
           } else {
-            reject(
+            safeReject(
               new NetworkError({
                 message: `Download failed: ${(err as Error).message}`,
                 context: { url: currentUrl },
@@ -423,5 +428,4 @@ export function computeSha256(filePath: string): Promise<string> {
   });
 }
 
-// 供 throwForStatus 引用
-import { RateLimiter } from './rate-limiter';
+// RateLimiter import 已移至文件顶部

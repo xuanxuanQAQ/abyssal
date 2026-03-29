@@ -49,6 +49,7 @@ export function countTokens(text: string): number {
  *   - 精度：纯英文 ±15%，纯中文 ±20%，混合 ±25%
  */
 export function estimateTokens(text: string): number {
+  if (!text) return 0;
   const cjkMatches = text.match(CJK_RE);
   const cjkCharCount = cjkMatches ? cjkMatches.length : 0;
   // 使用 Unicode 码点数量而非 UTF-16 code unit 数量，

@@ -12,7 +12,7 @@ function makeServices(overrides: Partial<AnalyzeServices> = {}): AnalyzeServices
         id: 'a1b2c3d4e5f6',
         title: 'Test Paper',
         abstract: 'Test abstract about affordance theory.',
-        fulltextStatus: 'acquired',
+        fulltextStatus: 'available',
         analysisStatus: 'not_started',
       }),
       updatePaper: vi.fn().mockResolvedValue(undefined),
@@ -102,7 +102,7 @@ describe('analyze workflow', () => {
     (services.dbProxy.getPaper as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 'a1b2c3d4e5f6',
       analysisStatus: 'completed',
-      fulltextStatus: 'acquired',
+      fulltextStatus: 'available',
     });
 
     const workflow = createAnalyzeWorkflow(services);
@@ -133,7 +133,7 @@ describe('analyze workflow', () => {
       callCount++;
       if (callCount === 1) throw new Error('DB error');
       return {
-        id, title: 'Paper 2', abstract: '', fulltextStatus: 'acquired', analysisStatus: 'not_started',
+        id, title: 'Paper 2', abstract: '', fulltextStatus: 'available', analysisStatus: 'not_started',
       };
     });
 

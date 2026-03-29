@@ -32,8 +32,9 @@ const ANALYSIS_WEIGHT: Record<AnalysisStatus, number> = {
 };
 
 const FULLTEXT_WEIGHT: Record<FulltextStatus, number> = {
-  pending: 3,
-  not_attempted: 2,
+  pending: 4,
+  not_attempted: 3,
+  abstract_only: 2,
   failed: 1,
   available: 0,
 };

@@ -8,5 +8,5 @@ export { countTokens, estimateTokens } from './token-counter';
 export { PathResolver } from './path-resolver';
 export { RateLimiter, createRateLimiter, API_RATE_LIMITS, DEFAULT_BACKOFF_MS } from './rate-limiter';
 export { HttpClient, computeSha256 } from './http-client';
-export { l2DistanceToScore, scoreToL2Distance } from './vector-math';
+export { l2DistanceToScore, scoreToL2Distance, l2Norm, l2Distance } from './vector-math';
 export { ConfigLoader } from './config';
