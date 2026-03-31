@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search, X, Download, ChevronDown } from 'lucide-react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useAppStore } from '../../../core/store';
@@ -18,6 +19,7 @@ interface TableToolbarProps {
 }
 
 export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
+  const { t } = useTranslation();
   const librarySearchQuery = useAppStore((s) => s.librarySearchQuery);
   const setLibrarySearchQuery = useAppStore((s) => s.setLibrarySearchQuery);
   const [inputFocused, setInputFocused] = useState(false);
@@ -99,7 +101,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
             onChange={(e) => handleSearchChange(e.target.value)}
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
-            placeholder="搜索论文…"
+            placeholder={t('library.search.placeholder')}
             style={{
               flex: 1,
               border: 'none',
@@ -145,7 +147,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
           ))}
           {librarySearchQuery && (
             <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
-              找到 {resultCount} 篇匹配论文
+              {t('library.search.matchCount', { count: resultCount })}
             </span>
           )}
         </div>
@@ -168,7 +170,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
               }}
             >
               <Download size={14} />
-              导入
+              {t('library.import.button')}
               <ChevronDown size={10} />
             </button>
           </DropdownMenu.Trigger>
@@ -189,32 +191,32 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
                 onSelect={() => { setImportMode('file'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                导入 BibTeX 文件 (.bib)
+                {t('library.import.bibtex')}
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 onSelect={() => { setImportMode('file'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                导入 RIS 文件 (.ris)
+                {t('library.import.ris')}
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 onSelect={() => { setImportMode('file'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                导入 PDF 文件
+                {t('library.import.pdf')}
               </DropdownMenu.Item>
               <DropdownMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
               <DropdownMenu.Item
                 onSelect={() => { setImportMode('text'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                粘贴 BibTeX 文本
+                {t('library.import.pasteBibtex')}
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 onSelect={() => { setImportMode('doi'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                从 DOI 导入
+                {t('library.import.fromDoi')}
               </DropdownMenu.Item>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>

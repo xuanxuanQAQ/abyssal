@@ -49,10 +49,22 @@ export function generateBibtexKey(
   let key = `${authorPart}${yearPart}${titlePart}`.replace(/[^a-z0-9\-_:]/g, '');
 
   // 5. 冲突处理
-  if (existingKeys) {
-    if (existingKeys.has(key)) {
-      for (let suffix = 97; suffix <= 122; suffix++) { // a-z
-        const candidate = key + String.fromCharCode(suffix);
+  // Fix #20: a-z 耗尽后扩展到数字后缀（aa, ab, ... 或 2, 3, ...）
+  if (existingKeys && existingKeys.has(key)) {
+    let resolved = false;
+    // 先尝试 a-z
+    for (let suffix = 97; suffix <= 122; suffix++) {
+      const candidate = key + String.fromCharCode(suffix);
+      if (!existingKeys.has(candidate)) {
+        key = candidate;
+        resolved = true;
+        break;
+      }
+    }
+    // a-z 耗尽，使用数字后缀 2, 3, 4, ...
+    if (!resolved) {
+      for (let n = 2; n < 1000; n++) {
+        const candidate = key + String(n);
         if (!existingKeys.has(candidate)) {
           key = candidate;
           break;

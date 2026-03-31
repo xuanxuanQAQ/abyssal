@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { FolderOpen, Plus, ChevronDown } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -16,6 +17,7 @@ import type { ProjectInfo } from '../../../shared-types/models';
 import { Z_INDEX } from '../../styles/zIndex';
 
 export function ProjectSelector() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -43,7 +45,7 @@ export function ProjectSelector() {
       // 重新拉取真实数据
       getAPI().app.getProjectInfo().then(setCurrentProject).catch(() => {});
 
-      toast.success(`已切换到：${event.name}`);
+      toast.success(t('projectSelector.switchedTo', { name: event.name }));
     });
     return unsub;
   }, [queryClient]);
@@ -64,7 +66,7 @@ export function ProjectSelector() {
         await getAPI().workspace.switch(projectPath);
         // renderer 侧刷新由 onSwitched 事件处理
       } catch (err) {
-        toast.error(`项目切换失败：${err instanceof Error ? err.message : '未知错误'}`);
+        toast.error(`${t('projectSelector.switchFailed')}: ${err instanceof Error ? err.message : ''}`);
       }
     },
     [],
@@ -80,7 +82,7 @@ export function ProjectSelector() {
       if (!wsPath) return;
       await getAPI().workspace.switch(wsPath);
     } catch (err) {
-      toast.error(`打开项目失败：${err instanceof Error ? err.message : '未知错误'}`);
+      toast.error(`${t('projectSelector.openFailed')}: ${err instanceof Error ? err.message : ''}`);
     }
   }, []);
 
@@ -110,7 +112,7 @@ export function ProjectSelector() {
         >
           <FolderOpen size={14} style={{ flexShrink: 0 }} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {currentProject?.name ?? 'No Project'}
+            {currentProject?.name ?? t('projectSelector.noProject')}
           </span>
           <ChevronDown size={12} style={{ flexShrink: 0, opacity: 0.5 }} />
         </button>
@@ -173,7 +175,7 @@ export function ProjectSelector() {
               outline: 'none',
             }}
           >
-            <Plus size={14} /> 新建项目
+            <Plus size={14} /> {t('projectSelector.newProject')}
           </DropdownMenu.Item>
 
           {/* 打开项目文件夹 */}
@@ -191,7 +193,7 @@ export function ProjectSelector() {
               outline: 'none',
             }}
           >
-            <FolderOpen size={14} /> 打开项目文件夹…
+            <FolderOpen size={14} /> {t('projectSelector.openFolder')}
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

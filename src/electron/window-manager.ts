@@ -8,7 +8,7 @@ import { BrowserWindow, screen, ipcMain } from 'electron';
 import * as path from 'node:path';
 import { loadWindowState, saveWindowState, type WindowState } from './windowState';
 // Event channel names (from IpcEventContract)
-const WINDOW_MAXIMIZED_EVENT = 'app:window:maximized$event';
+const WINDOW_MAXIMIZED_EVENT = 'app:window:maximizedChange$event';
 import type { Logger } from '../core/infra/logger';
 
 export interface WindowManagerOptions {

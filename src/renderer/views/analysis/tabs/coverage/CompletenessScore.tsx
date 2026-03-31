@@ -6,6 +6,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface CompletenessScoreProps {
   completeness: number; // 0-100
@@ -18,6 +19,7 @@ export function CompletenessScore({
   completedCount,
   totalCount,
 }: CompletenessScoreProps) {
+  const { t } = useTranslation();
   const clampedPct = Math.max(0, Math.min(100, completeness));
 
   return (
@@ -48,7 +50,7 @@ export function CompletenessScore({
           {clampedPct}%
         </span>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          {completedCount} / {totalCount} concepts fully covered
+          {completedCount} / {totalCount} {t('analysis.coverage.fullyCovered')}
         </span>
       </div>
 

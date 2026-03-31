@@ -2,16 +2,16 @@
  * PaperReviewTab -- Top-level container for paper review workflow.
  *
  * Vertical scrollable layout:
- *   PaperSelector -> AnalysisReport -> MappingReviewList -> AdjudicationTimeline
+ *   Toolbar (selector + actions) -> AnalysisReport -> MappingReviewList -> AdjudicationTimeline
  *
  * Reads selectedPaperId from the app store; falls back to the first paper
  * with analysisStatus === 'completed'.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../../../core/store';
-import { usePaperList } from '../../../../core/ipc/hooks/usePapers';
-import { usePaper } from '../../../../core/ipc/hooks/usePapers';
+import { usePaperList, usePaper, useResetAnalysis } from '../../../../core/ipc/hooks/usePapers';
 import { useMappingsForPaper } from '../../../../core/ipc/hooks/useMappings';
 import { PaperSelector } from './PaperSelector';
 import { AnalysisReport } from './AnalysisReport';
@@ -30,6 +30,7 @@ const RELEVANCE_ORDER: Record<Relevance, number> = {
 };
 
 export function PaperReviewTab() {
+  const { t } = useTranslation();
   const storePaperId = useAppStore((s) => s.selectedPaperId);
   const { data: allPapers, isLoading: papersLoading } = usePaperList();
 
@@ -55,6 +56,31 @@ export function PaperReviewTab() {
 
   const { data: paper } = usePaper(activePaperId);
   const { data: mappings } = useMappingsForPaper(activePaperId);
+  const resetAnalysis = useResetAnalysis();
+
+  // Fetch concept timeline entries for adjudication timestamps
+  const [timelineEntries, setTimelineEntries] = useState<Array<{ conceptId: string; timestamp: string; changeType: string }>>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTimeline = async () => {
+      try {
+        const { getAPI } = await import('../../../../core/ipc/bridge');
+        const entries = await getAPI().db.concepts.getTimeline();
+        if (!cancelled) {
+          setTimelineEntries(entries as any);
+        }
+      } catch { /* optional data */ }
+    };
+    void loadTimeline();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleDeleteAnalysis = useCallback(() => {
+    if (!activePaperId) return;
+    if (!window.confirm(t('analysis.review.confirmDelete', { defaultValue: 'Delete analysis report and all concept mappings for this paper? This cannot be undone.' }))) return;
+    resetAnalysis.mutate(activePaperId);
+  }, [activePaperId, resetAnalysis, t]);
 
   // Selector items
   const selectorItems = useMemo(
@@ -71,52 +97,100 @@ export function PaperReviewTab() {
 
   if (papersLoading) {
     return (
-      <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        Loading...
+      <div style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+        {t('analysis.review.loading')}
       </div>
     );
   }
 
   if (completedPapers.length === 0) {
     return (
-      <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        No completed analyses yet.
+      <div style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+        {t('analysis.review.noAnalyses')}
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        overflow: 'auto',
-      }}
-    >
-      <div style={{ padding: '16px 20px', flexShrink: 0 }}>
-        <PaperSelector
-          papers={selectorItems}
-          selectedId={activePaperId}
-          onSelect={setLocalSelectedId}
-        />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
+      {/* ── Toolbar: selector + actions ── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          padding: 'var(--space-4) var(--space-5)',
+          flexShrink: 0,
+          borderBottom: '1px solid var(--border-subtle)',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PaperSelector
+            papers={selectorItems}
+            selectedId={activePaperId}
+            onSelect={setLocalSelectedId}
+          />
+        </div>
+        {paper?.analysisReport && (
+          <button
+            onClick={handleDeleteAnalysis}
+            disabled={resetAnalysis.isPending}
+            title={t('analysis.review.deleteReport', { defaultValue: 'Delete Analysis' })}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-1)',
+              padding: '5px 10px',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--text-muted)',
+              backgroundColor: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-sm, 6px)',
+              cursor: resetAnalysis.isPending ? 'not-allowed' : 'pointer',
+              opacity: resetAnalysis.isPending ? 0.5 : 1,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              if (!resetAnalysis.isPending) {
+                e.currentTarget.style.color = 'var(--danger)';
+                e.currentTarget.style.borderColor = 'var(--danger)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--text-muted)';
+              e.currentTarget.style.borderColor = 'var(--border-subtle)';
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+              <path d="M5.5 1.5h5M2.5 4h11M6 7v4.5M10 7v4.5M3.5 4l.75 8.5a1.5 1.5 0 001.5 1.375h4.5a1.5 1.5 0 001.5-1.375L12.5 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            {resetAnalysis.isPending
+              ? t('analysis.review.deleting', { defaultValue: 'Deleting...' })
+              : t('analysis.review.deleteReport', { defaultValue: 'Delete' })}
+          </button>
+        )}
       </div>
 
+      {/* ── Report card ── */}
       {paper && (
-        <div style={{ padding: '0 20px 16px', flexShrink: 0 }}>
+        <div style={{ padding: 'var(--space-4) var(--space-5)', flexShrink: 0 }}>
           <AnalysisReport report={paper.analysisReport} />
         </div>
       )}
 
+      {/* ── Concept mappings ── */}
       {activePaperId && (
-        <div style={{ padding: '0 20px 16px', flexShrink: 0 }}>
+        <div style={{ padding: '0 var(--space-5) var(--space-4)', flexShrink: 0 }}>
           <MappingReviewList paperId={activePaperId} />
         </div>
       )}
 
+      {/* ── Adjudication timeline ── */}
       {mappings && mappings.length > 0 && (
-        <div style={{ padding: '0 20px 24px', flexShrink: 0 }}>
-          <AdjudicationTimeline mappings={mappings} />
+        <div style={{ padding: '0 var(--space-5) var(--space-6)', flexShrink: 0 }}>
+          <AdjudicationTimeline mappings={mappings} timelineEntries={timelineEntries} />
         </div>
       )}
     </div>

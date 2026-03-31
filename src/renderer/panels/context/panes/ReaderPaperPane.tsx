@@ -9,16 +9,18 @@ import { AnalysisSummaryCard } from '../cards/AnalysisSummaryCard';
 import { MappingSuggestionList } from '../cards/MappingSuggestionList';
 import { AIProactiveTips } from '../cards/AIProactiveTips';
 
+const scrollContainerStyle: React.CSSProperties = { overflowY: 'auto', height: '100%' };
+
 interface ReaderPaperPaneProps {
   paperId: string;
 }
 
-export function ReaderPaperPane({ paperId }: ReaderPaperPaneProps) {
+export const ReaderPaperPane = React.memo(function ReaderPaperPane({ paperId }: ReaderPaperPaneProps) {
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
+    <div style={scrollContainerStyle}>
       <AnalysisSummaryCard paperId={paperId} />
       <MappingSuggestionList paperId={paperId} />
       <AIProactiveTips />
     </div>
   );
-}
+});

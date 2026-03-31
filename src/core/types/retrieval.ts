@@ -46,6 +46,8 @@ export interface RetrievalRequest {
   skipReranker?: boolean | undefined;
   /** §9.2 智能降级：跳过 query 扩展 */
   skipQueryExpansion?: boolean | undefined;
+  /** Fix #1: adapter 层 budget-calculator 推导的 topK（优先于 budgetMode 硬编码值） */
+  topK?: number | undefined;
 }
 
 // ═══ RetrievalQualityReport ═══
@@ -54,6 +56,12 @@ export interface RetrievalQualityReport {
   coverage: RetrievalCoverage;
   retryCount: number; // 0 = 一次通过
   gaps: string[];
+  /** Average reranker score across returned chunks (0-1). */
+  avgRerankerScore?: number;
+  /** Proportion of chunks that passed the reranker threshold. */
+  passRate?: number;
+  /** Number of unique source papers represented. */
+  sourceDiversity?: number;
 }
 
 // ═══ RetrievalResult ═══
@@ -63,4 +71,6 @@ export interface RetrievalResult {
   qualityReport: RetrievalQualityReport;
   totalTokenCount: number;
   injectedMemoCount: number;
+  /** Fix #6: BM25 通道是否可用（FTS5 表存在且正常） */
+  bm25Available?: boolean | undefined;
 }

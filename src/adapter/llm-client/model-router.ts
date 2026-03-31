@@ -4,8 +4,10 @@
  * Resolution order:
  * 1. Exact match in config.llm.workflowOverrides
  * 2. Prefix match (workflowId.split('.')[0])
- * 3. Built-in default mapping table
- * 4. Global default (config.llm.defaultProvider + defaultModel)
+ * 3. Global default (config.llm.defaultProvider + defaultModel)
+ *
+ * Config is read lazily via getter functions so that settings changes
+ * propagate immediately without requiring router reconstruction.
  *
  * See spec: section 4 — ModelRouter
  */
@@ -19,18 +21,11 @@ export interface ModelRoute {
   model: string;
 }
 
-// ─── Built-in default mapping (§4.2) ───
-
-const BUILTIN_DEFAULTS: Record<string, ModelRoute> = {
-  discover:        { provider: 'deepseek',  model: 'deepseek-chat' },
-  analyze:         { provider: 'anthropic',  model: 'claude-opus-4' },
-  synthesize:      { provider: 'anthropic',  model: 'claude-opus-4' },
-  article:         { provider: 'anthropic',  model: 'claude-opus-4' },
-  corrective_rag:  { provider: 'deepseek',  model: 'deepseek-chat' },
-  advisory:        { provider: 'deepseek',  model: 'deepseek-chat' },
-  agent:           { provider: 'anthropic',  model: 'claude-sonnet-4' },
-  vision:          { provider: 'anthropic',  model: 'claude-sonnet-4' },
-};
+/** Getter-based config source — allows ModelRouter to always read latest config. */
+export interface ModelRouterConfigSource {
+  getLlmConfig: () => LlmConfig;
+  getApiKeys: () => ApiKeysConfig;
+}
 
 // ─── o3 reasoning_effort mapping ───
 
@@ -67,84 +62,77 @@ export function getModelContextWindow(model: string): number {
 // ─── Provider → API key field mapping ───
 
 const PROVIDER_KEY_MAP: Record<string, keyof ApiKeysConfig> = {
-  anthropic: 'anthropicApiKey',
-  openai:    'openaiApiKey',
-  deepseek:  'deepseekApiKey',
+  anthropic:   'anthropicApiKey',
+  openai:      'openaiApiKey',
+  deepseek:    'deepseekApiKey',
+  siliconflow: 'siliconflowApiKey',
 };
 
 // ─── ModelRouter ───
 
 export class ModelRouter {
-  private readonly llmConfig: LlmConfig;
-  private readonly apiKeys: ApiKeysConfig;
+  private readonly configSource: ModelRouterConfigSource;
 
-  constructor(llmConfig: LlmConfig, apiKeys: ApiKeysConfig) {
-    this.llmConfig = llmConfig;
-    this.apiKeys = apiKeys;
+  constructor(configSource: ModelRouterConfigSource) {
+    this.configSource = configSource;
   }
 
   /**
    * Resolve workflowId to { provider, model }.
    *
-   * Four-tier resolution: exact → prefix → builtin → global default.
+   * Resolution order: exact override → prefix override → global default.
    */
   resolve(workflowId?: string | null): ModelRoute {
+    const llmConfig = this.configSource.getLlmConfig();
+
     if (workflowId) {
       // 1. Exact match in config overrides
-      const exact = this.llmConfig.workflowOverrides[workflowId];
+      const exact = llmConfig.workflowOverrides[workflowId];
       if (exact) return { provider: exact.provider, model: exact.model };
 
       // 2. Prefix match
       const prefix = workflowId.split('.')[0]!;
-      const prefixMatch = this.llmConfig.workflowOverrides[prefix];
+      const prefixMatch = llmConfig.workflowOverrides[prefix];
       if (prefixMatch) return { provider: prefixMatch.provider, model: prefixMatch.model };
-
-      // 3. Built-in defaults
-      const builtin = BUILTIN_DEFAULTS[prefix];
-      if (builtin) return { ...builtin };
     }
 
-    // 4. Global default
+    // 3. Global default (user's explicit choice takes precedence)
     return {
-      provider: this.llmConfig.defaultProvider,
-      model: this.llmConfig.defaultModel,
+      provider: llmConfig.defaultProvider,
+      model: llmConfig.defaultModel,
     };
   }
 
   /**
-   * Resolve with availability validation and fallback chain (§4.3).
-   *
-   * If the target model's API key is missing or provider is unavailable,
-   * falls back through: config default → claude-sonnet-4 → throw.
+   * Resolve and validate that the target provider has a valid API key.
+   * Throws if the provider is unavailable — no silent fallback.
    */
-  resolveWithFallback(workflowId?: string | null): ModelRoute {
-    const primary = this.resolve(workflowId);
-    if (this.isAvailable(primary)) return primary;
+  resolveAndValidate(workflowId?: string | null): ModelRoute {
+    const apiKeys = this.configSource.getApiKeys();
+    const route = this.resolve(workflowId);
 
-    // Fallback 1: global default
-    const fallback1: ModelRoute = {
-      provider: this.llmConfig.defaultProvider,
-      model: this.llmConfig.defaultModel,
-    };
-    if (this.isAvailable(fallback1)) return fallback1;
+    if (!isAvailable(route, apiKeys)) {
+      throw new Error(
+        `Provider "${route.provider}" is not configured — please set its API key in settings.` +
+        (workflowId ? ` (workflow: ${workflowId})` : ''),
+      );
+    }
 
-    // Fallback 2: hardcoded claude-sonnet-4
-    const fallback2: ModelRoute = { provider: 'anthropic', model: 'claude-sonnet-4' };
-    if (this.isAvailable(fallback2)) return fallback2;
-
-    // No model available — return primary anyway, let caller handle the error
-    return primary;
-  }
-
-  /**
-   * Check if a model route's provider has the required API key.
-   * Local models (ollama/vllm) always pass — they don't need keys.
-   */
-  private isAvailable(route: ModelRoute): boolean {
-    if (route.provider === 'ollama' || route.provider === 'vllm') return true;
-    const keyField = PROVIDER_KEY_MAP[route.provider];
-    if (!keyField) return false;
-    const key = this.apiKeys[keyField];
-    return key != null && key !== '';
+    return route;
   }
 }
+
+// ─── Helpers (pure functions, no state) ───
+
+/**
+ * Check if a model route's provider has the required API key.
+ * Local models (ollama/vllm) always pass — they don't need keys.
+ */
+function isAvailable(route: ModelRoute, apiKeys: ApiKeysConfig): boolean {
+  if (route.provider === 'ollama' || route.provider === 'vllm') return true;
+  const keyField = PROVIDER_KEY_MAP[route.provider];
+  if (!keyField) return false;
+  const key = apiKeys[keyField];
+  return key != null && key !== '';
+}
+

@@ -1,8 +1,8 @@
 /**
- * Cost tracker — in-memory session-level LLM cost accounting.
+ * Cost tracker — session-level LLM cost accounting with optional DB persistence.
  *
  * Tracks per-call cost, aggregates by model/workflow, exposes via getCostStats().
- * Clears on process exit — not persisted to DB.
+ * When a persistFn is provided, each record is also written to llm_audit_log table.
  *
  * See spec: section 8 — Cost Tracker
  */
@@ -76,13 +76,37 @@ export interface CostStats {
   recentCalls: CostRecord[];
 }
 
+// ─── Persistence callback type ───
+
+/** Optional callback to persist audit records to database. */
+export type AuditPersistFn = (entry: {
+  workflowId: string | null;
+  model: string;
+  provider: string;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  costUsd: number;
+  paperId: string | null;
+  finishReason: string | null;
+}) => void;
+
 // ─── CostTracker ───
+
+/** Maximum number of detailed records kept in memory. */
+const MAX_RECORDS = 500;
 
 export class CostTracker {
   private readonly records: CostRecord[] = [];
   private readonly byModel = new Map<string, AggregateEntry>();
   private readonly byWorkflow = new Map<string, AggregateEntry>();
   private sessionTotal: AggregateEntry = { inputTokens: 0, outputTokens: 0, totalCost: 0, callCount: 0 };
+  private persistFn: AuditPersistFn | null = null;
+
+  /** Attach a persistence callback (e.g., to write to llm_audit_log table). */
+  setPersistFn(fn: AuditPersistFn): void {
+    this.persistFn = fn;
+  }
 
   /**
    * Record a completed LLM call.
@@ -118,10 +142,32 @@ export class CostTracker {
     };
 
     this.records.push(record);
+    if (this.records.length > MAX_RECORDS) {
+      this.records.shift();
+    }
     this.addToAggregate(this.sessionTotal, record);
     this.addToMapAggregate(this.byModel, params.model, record);
     if (params.workflowId) {
       this.addToMapAggregate(this.byWorkflow, params.workflowId, record);
+    }
+
+    // Persist to DB audit log (fire-and-forget, non-blocking)
+    if (this.persistFn) {
+      try {
+        this.persistFn({
+          workflowId: record.workflowId,
+          model: record.model,
+          provider: record.provider,
+          inputTokens: record.inputTokens,
+          outputTokens: record.outputTokens,
+          durationMs: record.durationMs,
+          costUsd: record.totalCost,
+          paperId: record.paperId,
+          finishReason: null,
+        });
+      } catch {
+        // Non-critical: audit log failure should never break the main flow
+      }
     }
 
     return record;

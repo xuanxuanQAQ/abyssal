@@ -49,14 +49,22 @@ export async function enrichBibliography(
 
   await limiter.acquire();
 
-  const url = `https://api.crossref.org/works/${encodeURIComponent(paper.doi)}`;
+  // Fix #18: DOI 按 `/` 分段编码，保留路径结构（CrossRef 要求 prefix/suffix 格式）
+  const doiParts = paper.doi.split('/');
+  const encodedDoi = doiParts.map(part => encodeURIComponent(part)).join('/');
+  const url = `https://api.crossref.org/works/${encodedDoi}`;
   let data: { message: Record<string, unknown> };
 
   try {
     data = await http.requestJson<typeof data>(url);
   } catch (err) {
-    if ((err as { code?: string }).code === 'PAPER_NOT_FOUND' ||
-        (err as { message?: string }).message?.includes('404')) {
+    // Fix #19: 使用 instanceof 和结构化字段检测 404，而非字符串匹配
+    if (err instanceof PaperNotFoundError) {
+      return { enriched: false, enrichedFields: [], metadata: paper };
+    }
+    const status = (err as { status?: number; statusCode?: number }).status
+      ?? (err as { status?: number; statusCode?: number }).statusCode;
+    if (status === 404) {
       return { enriched: false, enrichedFields: [], metadata: paper };
     }
     throw err;

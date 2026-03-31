@@ -1,4 +1,5 @@
 import React, { useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../../core/store';
 
 export interface SimilaritySliderProps {
@@ -6,6 +7,7 @@ export interface SimilaritySliderProps {
 }
 
 export function SimilaritySlider({ visibleCount }: SimilaritySliderProps) {
+  const { t } = useTranslation();
   const similarityThreshold = useAppStore((s) => s.similarityThreshold);
   const setSimilarityThreshold = useAppStore((s) => s.setSimilarityThreshold);
 
@@ -41,7 +43,7 @@ export function SimilaritySlider({ visibleCount }: SimilaritySliderProps) {
         }}
       >
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          Similarity Threshold
+          {t('graph.similarityThreshold')}
         </span>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', fontWeight: 500 }}>
           {similarityThreshold.toFixed(2)}
@@ -59,7 +61,7 @@ export function SimilaritySlider({ visibleCount }: SimilaritySliderProps) {
       />
 
       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        显示 {visibleCount} 条语义邻居边
+        {t('graph.semanticNeighborCount', { count: visibleCount })}
       </span>
     </div>
   );

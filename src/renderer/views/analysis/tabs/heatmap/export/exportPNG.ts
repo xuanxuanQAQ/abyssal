@@ -1,5 +1,6 @@
 import type { HeatmapCell } from '../../../../../../shared-types/models';
 import type { AdjudicationStatus } from '../../../../../../shared-types/enums';
+import { cellKey } from '../../../shared/cellKey';
 import {
   CELL_WIDTH,
   CELL_HEIGHT,
@@ -94,12 +95,12 @@ export async function exportHeatmapPNG(
   // Build a lookup map for O(1) cell access
   const cellMap = new Map<string, HeatmapCell>();
   for (const cell of cells) {
-    cellMap.set(`${cell.conceptIndex}:${cell.paperIndex}`, cell);
+    cellMap.set(cellKey(cell.conceptIndex, cell.paperIndex), cell);
   }
 
   for (let row = 0; row < numConcepts; row++) {
     for (let col = 0; col < numPapers; col++) {
-      const cell = cellMap.get(`${row}:${col}`);
+      const cell = cellMap.get(cellKey(row, col));
       if (!cell) continue;
 
       const x = ROW_HEADER_WIDTH + col * stride;

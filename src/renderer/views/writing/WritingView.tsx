@@ -16,16 +16,16 @@
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
 import { useCreateArticle } from '../../core/ipc/hooks/useArticles';
 import { useHotkey } from '../../core/hooks/useHotkey';
 import { OutlineTree } from './outline/OutlineTree';
-import { SectionEditor } from './editor/SectionEditor';
+import { UnifiedEditor } from './editor/UnifiedEditor';
 import { ExportDialog } from './export/ExportDialog';
 import { VersionHistoryDialog } from './history/VersionHistoryDialog';
 import { useArticle, useArticleList } from './hooks/useArticle';
-import { useOutlineData } from './hooks/useOutlineData';
 import { useSectionContent } from './hooks/useSectionContent';
 
 // ── Styles ──
@@ -93,6 +93,7 @@ const emptyStateMessageStyle: React.CSSProperties = {
 // ── Component ──
 
 export function WritingView(): React.JSX.Element {
+  const { t } = useTranslation();
   // ── Local state ──
   const [activeArticleId, setActiveArticleId] = useState<string | null>(null);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -100,12 +101,10 @@ export function WritingView(): React.JSX.Element {
 
   // ── Store selectors ──
   const selectedSectionId = useAppStore((s) => s.selectedSectionId);
-  const selectSection = useAppStore((s) => s.selectSection);
 
   // ── Data hooks ──
   const { articles, isLoading: isLoadingList } = useArticleList();
   const { article } = useArticle(activeArticleId);
-  const outlineData = useOutlineData(activeArticleId);
   const createArticle = useCreateArticle();
   const { content: currentSectionContent } = useSectionContent(selectedSectionId);
 
@@ -153,14 +152,14 @@ export function WritingView(): React.JSX.Element {
     return (
       <div style={rootStyle}>
         <div style={emptyStateContainerStyle}>
-          <span>创建您的第一篇文章</span>
+          <span>{t('writing.createFirst')}</span>
           <button
             type="button"
             style={emptyStateButtonStyle}
             onClick={handleCreateArticle}
             disabled={createArticle.isPending}
           >
-            新建文章
+            {t('writing.newArticle')}
           </button>
         </div>
       </div>
@@ -188,7 +187,7 @@ export function WritingView(): React.JSX.Element {
               <OutlineTree article={article} />
             ) : (
               <div style={emptyStateContainerStyle}>
-                <span>加载中…</span>
+                <span>{t('writing.loading')}</span>
               </div>
             )}
           </div>
@@ -204,11 +203,11 @@ export function WritingView(): React.JSX.Element {
           minSize={50}
         >
           <div style={editorPanelStyle}>
-            {article !== null && selectedSectionId !== null ? (
-              <SectionEditor />
+            {article !== null && resolvedArticleId !== null ? (
+              <UnifiedEditor articleId={resolvedArticleId} />
             ) : (
               <div style={emptyStateMessageStyle}>
-                选择一个节开始编辑
+                {t('writing.selectSection')}
               </div>
             )}
           </div>

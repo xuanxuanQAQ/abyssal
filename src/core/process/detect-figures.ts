@@ -167,8 +167,9 @@ export async function detectFigurePages(
         if (page.toDisplayList) {
           try {
             const list = page.toDisplayList();
-            // TODO: mupdf.js DisplayList API 可能不暴露 path 操作级别枚举
-            // 当前使用字符密度作为近似判断
+            // mupdf.js WASM 版本的 DisplayList API 不暴露 path 操作级别枚举（如 moveTo/lineTo/curveTo），
+            // 因此无法直接统计矢量路径数量。当前使用字符密度作为近似判断。
+            // 长期方案：可通过 page.toPixmap() 渲染后做简单图像分析（边缘检测/颜色直方图）判断是否含图表。
             list.destroy();
           } catch {
             // DisplayList 不可用

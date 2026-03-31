@@ -6,6 +6,7 @@
  */
 
 import React, { useCallback, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
 import { useAnnotations } from '../../core/ipc/hooks/useAnnotations';
@@ -16,6 +17,7 @@ import { AnnotationList } from './annotations/AnnotationList';
 import type { ScrollContainerHandle } from './viewport/ScrollContainer';
 
 export function ReaderView() {
+  const { t } = useTranslation();
   const selectedPaperId = useAppStore((s) => s.selectedPaperId);
   const readerThumbsOpen = useAppStore((s) => s.readerThumbsOpen);
   const readerAnnotationListOpen = useAppStore(
@@ -83,7 +85,7 @@ export function ReaderView() {
           fontSize: 'var(--text-sm)',
         }}
       >
-        从 Library 选择论文打开
+        {t('reader.selectPaper')}
       </div>
     );
   }
@@ -100,7 +102,7 @@ export function ReaderView() {
           fontSize: 'var(--text-sm)',
         }}
       >
-        Loading…
+        {t('common.loading')}
       </div>
     );
   }
@@ -117,7 +119,7 @@ export function ReaderView() {
           fontSize: 'var(--text-sm)',
         }}
       >
-        {error ?? 'Failed to load document'}
+        {error ?? t('reader.loadFailed')}
       </div>
     );
   }

@@ -5,18 +5,29 @@
  * ConceptCoverageBar components.
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CompletenessScore } from './CompletenessScore';
 import { ConceptCoverageBar } from './ConceptCoverageBar';
 import { useCoverageData } from './useCoverageData';
+import { useAppStore } from '../../../../core/store';
 
 export function CoverageTab() {
+  const { t } = useTranslation();
   const { completeness, concepts, isLoading } = useCoverageData();
+  const switchView = useAppStore((s) => s.switchView);
+  const setLibrarySearchQuery = useAppStore((s) => s.setLibrarySearchQuery);
+
+  const handleSearchRelated = useCallback((conceptName: string, _conceptId: string) => {
+    // Navigate to library with concept name as search query to trigger discovery
+    setLibrarySearchQuery(conceptName);
+    switchView('library');
+  }, [switchView, setLibrarySearchQuery]);
 
   if (isLoading) {
     return (
       <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        Loading coverage data...
+        {t('analysis.coverage.loading')}
       </div>
     );
   }
@@ -24,7 +35,7 @@ export function CoverageTab() {
   if (concepts.length === 0) {
     return (
       <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        No concept framework defined yet. Configure concepts to see coverage analysis.
+        {t('analysis.coverage.empty')}
       </div>
     );
   }
@@ -57,7 +68,7 @@ export function CoverageTab() {
             color: 'var(--text-primary)',
           }}
         >
-          Concept Coverage ({concepts.length})
+          {t('analysis.coverage.conceptCount', { count: concepts.length })}
         </h3>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -72,6 +83,7 @@ export function CoverageTab() {
               pending={c.pending}
               excluded={c.excluded}
               total={c.total}
+              onSearchRelated={() => handleSearchRelated(c.conceptName, c.conceptId)}
             />
           ))}
         </div>

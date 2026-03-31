@@ -188,6 +188,143 @@ export function deleteMapping(
     .run(paperId, conceptId).changes;
 }
 
+// ─── deleteMappingsForPaper ───
+
+export function deleteMappingsForPaper(
+  db: Database.Database,
+  paperId: PaperId,
+): number {
+  return db
+    .prepare('DELETE FROM paper_concept_map WHERE paper_id = ?')
+    .run(paperId).changes;
+}
+
+// ─── adjudicateMapping（裁决单条映射） ───
+
+export type AdjudicationDecision = 'accept' | 'reject' | 'revise';
+
+/**
+ * 裁决一条论文-概念映射。
+ *
+ * accept  → reviewed=1, decision_status='accepted'
+ * reject  → reviewed=1, decision_status='rejected'
+ * revise  → reviewed=1, decision_status='revised', 可选更新 relation/confidence
+ */
+export function adjudicateMapping(
+  db: Database.Database,
+  paperId: PaperId,
+  conceptId: ConceptId,
+  decision: AdjudicationDecision,
+  revisions?: {
+    relation?: RelationType;
+    confidence?: number;
+    note?: string;
+  },
+): number {
+  const timestamp = now();
+  const setClauses: string[] = [
+    'reviewed = 1',
+    'reviewed_at = ?',
+    'decision_status = ?',
+    'updated_at = ?',
+  ];
+
+  const decisionStatus = decision === 'accept' ? 'accepted'
+    : decision === 'reject' ? 'rejected'
+    : 'revised';
+
+  const params: unknown[] = [timestamp, decisionStatus, timestamp];
+
+  if (revisions?.note !== undefined) {
+    setClauses.push('decision_note = ?');
+    params.push(revisions.note);
+  }
+
+  if (decision === 'revise') {
+    if (revisions?.relation !== undefined) {
+      setClauses.push('relation = ?');
+      params.push(revisions.relation);
+    }
+    if (revisions?.confidence !== undefined) {
+      setClauses.push('confidence = ?');
+      params.push(revisions.confidence);
+    }
+  }
+
+  params.push(paperId, conceptId);
+
+  return db
+    .prepare(
+      `UPDATE paper_concept_map SET ${setClauses.join(', ')} WHERE paper_id = ? AND concept_id = ?`,
+    )
+    .run(...params).changes;
+}
+
+// ─── countMappingsForConceptInPapers ───
+
+/**
+ * 统计给定论文集中有多少篇论文映射了此概念（用于引用网络评分）。
+ */
+export function countMappingsForConceptInPapers(
+  db: Database.Database,
+  conceptId: ConceptId,
+  paperIds: string[],
+): number {
+  if (paperIds.length === 0) return 0;
+  const placeholders = paperIds.map(() => '?').join(',');
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS cnt FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (${placeholders})`,
+    )
+    .get(conceptId, ...paperIds) as { cnt: number };
+  return row.cnt;
+}
+
+// ─── getConceptStats ───
+
+export interface ConceptStatsResult {
+  mappingCount: number;
+  paperCount: number;
+  avgConfidence: number;
+  relationDistribution: Record<string, number>;
+  reviewedCount: number;
+  unreviewedCount: number;
+}
+
+export function getConceptStats(
+  db: Database.Database,
+  conceptId: ConceptId,
+): ConceptStatsResult {
+  const rows = db
+    .prepare('SELECT relation, confidence, reviewed FROM paper_concept_map WHERE concept_id = ?')
+    .all(conceptId) as Array<{ relation: string; confidence: number; reviewed: number }>;
+
+  const paperIds = new Set<string>();
+  const relationDist: Record<string, number> = {};
+  let totalConfidence = 0;
+  let reviewedCount = 0;
+
+  for (const r of rows) {
+    totalConfidence += r.confidence;
+    relationDist[r.relation] = (relationDist[r.relation] ?? 0) + 1;
+    if (r.reviewed) reviewedCount++;
+  }
+
+  // Get distinct paper count
+  const paperRow = db
+    .prepare('SELECT COUNT(DISTINCT paper_id) AS cnt FROM paper_concept_map WHERE concept_id = ?')
+    .get(conceptId) as { cnt: number };
+
+  return {
+    mappingCount: rows.length,
+    paperCount: paperRow.cnt,
+    avgConfidence: rows.length > 0 ? totalConfidence / rows.length : 0,
+    relationDistribution: relationDist,
+    reviewedCount,
+    unreviewedCount: rows.length - reviewedCount,
+  };
+}
+
 // ─── 概念矩阵（热力图数据） ───
 
 export interface ConceptMatrixEntry {

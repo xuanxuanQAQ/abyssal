@@ -1,55 +1,47 @@
 /**
  * IPC handler: system namespace
  *
- * Contract channels: db:tags:*, db:discoverRuns:*, db:relations:*,
- *                    fs:openPDF, fs:savePDFAnnotations, fs:exportArticle, fs:importFiles,
- *                    app:*, app:window:*, workspace:*
+ * Contract channels: db:discoverRuns:*, db:relations:*,
+ *   fs:openPDF, fs:savePDFAnnotations, fs:exportArticle, fs:selectImageFile, fs:importFiles,
+ *   app:getConfig, app:updateConfig, app:getProjectInfo, app:globalSearch
  * Plus reader:pageChanged fire-and-forget event.
+ *
+ * Tags, window, and workspace handlers are in their own files.
  */
 
-import { ipcMain, dialog, app } from 'electron';
+import { ipcMain, dialog } from 'electron';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import type { AppContext } from '../app-context';
+import type { GlobalSearchResult } from '../../shared-types/models';
 import { typedHandler } from './register';
 import { asPaperId } from '../../core/types/common';
 import type { RelationGraphFilter } from '../../core/database/dao/relations';
-import { acquireLock } from '../lock';
-import { ConfigLoader } from '../../core/infra/config';
-import { loadGlobalConfig } from '../../core/infra/global-config';
-import { createDbProxy } from '../../db-process/db-proxy';
-import { WorkspaceManager, scaffoldWorkspace, isWorkspace, getWorkspacePaths } from '../../core/workspace';
+import { exportArticle } from './export-handler';
+import { insertBibEntries } from './shared/import-bibtex';
 
 export function registerSystemHandlers(ctx: AppContext): void {
-  const { logger, dbProxy } = ctx;
-
-  // ── db:tags ──
-
-  typedHandler('db:tags:list', logger, async () => []);
-
-  typedHandler('db:tags:create', logger, async (_e, name, parentId?) => ({
-    id: crypto.randomUUID(), name, parentId: parentId ?? null, paperCount: 0, color: null,
-  }) as any);
-
-  typedHandler('db:tags:update', logger, async () => {});
-
-  typedHandler('db:tags:delete', logger, async () => {});
+  const { logger } = ctx;
 
   // ── db:discoverRuns ──
 
-  typedHandler('db:discoverRuns:list', logger, async () => []);
+  typedHandler('db:discoverRuns:list', logger, async () => {
+    return await ctx.dbProxy.listDiscoverRuns() as any;
+  });
 
   // ── db:relations ──
 
   typedHandler('db:relations:getGraph', logger, async (_e, filter?) => {
     const f = (filter as Record<string, unknown>) ?? {};
-    return await dbProxy.getRelationGraph({
+    return await ctx.dbProxy.getRelationGraph({
       centerId: f['focusNodeId'] ? asPaperId(f['focusNodeId'] as string) : undefined,
       depth: (f['hopDepth'] as number) ?? 2,
     } as RelationGraphFilter) as any;
   });
 
   typedHandler('db:relations:getNeighborhood', logger, async (_e, nodeId, depth, _layers?) => {
-    return await dbProxy.getRelationGraph({
+    return await ctx.dbProxy.getRelationGraph({
       centerId: asPaperId(nodeId),
       depth: depth ?? 2,
     } as RelationGraphFilter) as any;
@@ -57,19 +49,152 @@ export function registerSystemHandlers(ctx: AppContext): void {
 
   // ── fs ──
 
-  typedHandler('fs:openPDF', logger, async () => {
-    throw new Error('Not implemented');
+  typedHandler('fs:openPDF', logger, async (_e, paperId) => {
+    const paper = await ctx.dbProxy.getPaper(asPaperId(paperId)) as Record<string, unknown> | null;
+    if (!paper) {
+      const err = new Error('Paper not found');
+      (err as any).code = 'PAPER_NOT_FOUND';
+      (err as any).recoverable = false;
+      throw err;
+    }
+
+    const fulltextPath = paper['fulltextPath'] ?? paper['fulltext_path'];
+    if (!fulltextPath || typeof fulltextPath !== 'string') {
+      const err = new Error('Paper has no fulltext PDF — run acquire first');
+      (err as any).code = 'NO_FULLTEXT';
+      (err as any).recoverable = true;
+      throw err;
+    }
+
+    const pdfPath = path.isAbsolute(fulltextPath)
+      ? fulltextPath
+      : path.join(ctx.workspaceRoot, fulltextPath);
+
+    if (!existsSync(pdfPath)) {
+      const err = new Error(`PDF file missing on disk: ${path.basename(pdfPath)}`);
+      (err as any).code = 'FILE_NOT_FOUND';
+      (err as any).recoverable = true;
+      throw err;
+    }
+
+    const buffer = await fs.readFile(pdfPath);
+    return { path: pdfPath, buffer } as any;
   });
 
-  typedHandler('fs:savePDFAnnotations', logger, async () => {});
-
-  typedHandler('fs:exportArticle', logger, async () => {
-    throw new Error('Not implemented');
+  typedHandler('fs:savePDFAnnotations', logger, async (_e, paperId, annotations) => {
+    logger.debug('fs:savePDFAnnotations called (DB-only mode)', {
+      paperId,
+      count: Array.isArray(annotations) ? annotations.length : 0,
+    });
   });
 
-  typedHandler('fs:importFiles', logger, async () => ({
-    imported: 0, skipped: 0, errors: [],
-  }) as any);
+  typedHandler('fs:exportArticle', logger, async (_e, articleId, format, citationStyle?) => {
+    return await exportArticle(ctx, { articleId, format, citationStyle: citationStyle ?? 'APA' });
+  });
+
+  typedHandler('fs:selectImageFile', logger, async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择图片',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const filePath = result.filePaths[0]!;
+    const name = path.basename(filePath);
+    return { path: filePath, name };
+  });
+
+  typedHandler('fs:importFiles', logger, async (_e, paths) => {
+    let imported = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    const pdfDir = path.join(ctx.workspaceRoot, 'pdfs');
+
+    for (const filePath of paths) {
+      const ext = path.extname(filePath).toLowerCase();
+      try {
+        if (ext === '.bib') {
+          if (!ctx.bibliographyModule) { errors.push(`${filePath}: Bibliography service not initialized`); continue; }
+          const content = await fs.readFile(filePath, 'utf-8');
+          const entries = ctx.bibliographyModule.importBibtex(content);
+          const result = await insertBibEntries(ctx.dbProxy, entries);
+          imported += result.imported;
+          skipped += result.skipped;
+          errors.push(...result.errors);
+        } else if (ext === '.ris') {
+          if (!ctx.bibliographyModule) { errors.push(`${filePath}: Bibliography service not initialized`); continue; }
+          const content = await fs.readFile(filePath, 'utf-8');
+          const entries = ctx.bibliographyModule.importRis(content);
+          const result = await insertBibEntries(ctx.dbProxy, entries);
+          imported += result.imported;
+          skipped += result.skipped;
+          errors.push(...result.errors);
+        } else if (ext === '.pdf') {
+          const { validatePdf } = await import('../../core/acquire');
+          const { generatePaperId } = await import('../../core/search/paper-id');
+
+          const validation = await validatePdf(filePath);
+          if (!validation.valid) {
+            errors.push(`${path.basename(filePath)}: Invalid PDF (${validation.reason ?? 'unknown'})`);
+            continue;
+          }
+
+          const baseName = path.basename(filePath, ext);
+          const guessedTitle = baseName.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+          const paperId = generatePaperId(null, null, guessedTitle, filePath);
+
+          await fs.mkdir(pdfDir, { recursive: true });
+          const destPath = path.join(pdfDir, `${paperId}.pdf`);
+          if (existsSync(destPath)) {
+            skipped++;
+            continue;
+          }
+          const tmpPath = destPath + '.tmp';
+          await fs.copyFile(filePath, tmpPath);
+          await fs.rename(tmpPath, destPath);
+
+          try {
+            await ctx.dbProxy.addPaper({
+              id: paperId,
+              title: guessedTitle,
+              authors: [],
+              year: new Date().getFullYear(),
+              doi: null, arxivId: null, venue: null, journal: null,
+              volume: null, issue: null, pages: null, publisher: null,
+              isbn: null, edition: null, editors: null, bookTitle: null,
+              series: null, issn: null, pmid: null, pmcid: null,
+              url: null, abstract: null, citationCount: null,
+              paperType: 'unknown', source: 'manual',
+              bibtexKey: null, biblioComplete: false,
+            } as any);
+
+            await ctx.dbProxy.updatePaper(paperId as any, {
+              fulltextPath: destPath,
+              fulltextStatus: 'pending',
+              fulltextSource: 'manual',
+            } as any);
+
+            imported++;
+          } catch (err) {
+            const msg = (err as Error).message;
+            if (msg.includes('UNIQUE') || msg.includes('duplicate')) skipped++;
+            else errors.push(`${baseName}: ${msg}`);
+          }
+        } else {
+          errors.push(`${path.basename(filePath)}: Unsupported format ${ext}`);
+        }
+      } catch (err) {
+        errors.push(`${path.basename(filePath)}: ${(err as Error).message}`);
+      }
+    }
+
+    if (imported > 0) {
+      ctx.pushManager?.enqueueDbChange(['papers'], 'insert');
+    }
+    logger.info('File import complete', { imported, skipped, errors: errors.length });
+    return { imported, skipped, errors };
+  }, { timeoutMs: 120_000 });
 
   // fs:readNoteFile and fs:saveNoteFile are registered in notes-handler.ts
 
@@ -86,7 +211,7 @@ export function registerSystemHandlers(ctx: AppContext): void {
 
   typedHandler('app:getProjectInfo', logger, async () => {
     try {
-      const stats = (await dbProxy.getStats()) as any as {
+      const stats = (await ctx.dbProxy.getStats()) as any as {
         papers: { total: number };
         concepts: { total: number };
       };
@@ -108,210 +233,107 @@ export function registerSystemHandlers(ctx: AppContext): void {
     }
   });
 
-  typedHandler('app:switchProject', logger, async () => {
-    throw new Error('Use workspace:switch channel instead');
-  });
-
-  typedHandler('app:listProjects', logger, async () => {
-    try {
-      const mgr = new WorkspaceManager(app.getPath('userData'));
-      const recent = mgr.getRecentWorkspaces();
-      return recent.map((r: { name: string; path: string; lastOpenedAt: string }) => ({
-        name: r.name,
-        paperCount: 0,
-        conceptCount: 0,
-        lastModified: r.lastOpenedAt,
-        workspacePath: r.path,
-      })) as any;
-    } catch {
-      return [];
-    }
-  });
-
-  typedHandler('app:createProject', logger, async (_e, config) => {
-    const cfg = (config as unknown as Record<string, unknown>) ?? {};
-    const projectName = (cfg['name'] as string) ?? 'New Project';
-
-    const result = await dialog.showOpenDialog({
-      title: `Select location for "${projectName}"`,
-      properties: ['openDirectory', 'createDirectory'],
-      buttonLabel: 'Create Here',
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-      throw new Error('User cancelled directory selection');
-    }
-
-    const path = require('node:path');
-    const rootDir = path.join(result.filePaths[0], projectName);
-    const scaffoldResult = scaffoldWorkspace({
-      rootDir,
-      name: projectName,
-      description: (cfg['description'] as string) ?? '',
-    });
-
-    const mgr = new WorkspaceManager(app.getPath('userData'));
-    mgr.touchRecent(rootDir, projectName);
-
-    return {
-      name: scaffoldResult.meta.name,
-      paperCount: 0,
-      conceptCount: 0,
-      lastModified: scaffoldResult.meta.createdAt,
-      workspacePath: rootDir,
-    } as any;
-  });
-
   typedHandler('app:globalSearch', logger, async (_e, query) => {
     try {
       const q = (query ?? '').trim();
       if (!q) return [];
-      const papers = (await dbProxy.queryPapers({ searchText: q, limit: 10 })) as any as {
+      const results: GlobalSearchResult[] = [];
+      let rank = 0;
+
+      // papers
+      const papers = (await ctx.dbProxy.queryPapers({ searchText: q, limit: 10 })) as any as {
         items: Array<Record<string, unknown>>;
       };
-      return papers.items.map((p) => ({
-        type: 'paper' as const,
-        id: p['id'],
-        title: p['title'],
-        snippet: ((p['abstract'] as string) ?? '').slice(0, 200),
-      })) as any;
+      for (const p of papers.items) {
+        results.push({
+          entityId: String(p['id'] ?? ''),
+          entityType: 'paper',
+          title: String(p['title'] ?? ''),
+          content: ((p['abstract'] as string) ?? '').slice(0, 200),
+          rank: rank++,
+        });
+      }
+
+      // concepts
+      try {
+        const concepts = (await ctx.dbProxy.getAllConcepts()) as unknown as Array<Record<string, unknown>>;
+        const lq = q.toLowerCase();
+        for (const c of concepts) {
+          const nameZh = String(c['nameZh'] ?? c['name_zh'] ?? '');
+          const nameEn = String(c['nameEn'] ?? c['name_en'] ?? '');
+          const def = String(c['definition'] ?? '');
+          const keywords = (c['searchKeywords'] ?? c['search_keywords'] ?? []) as string[];
+          if (
+            nameZh.toLowerCase().includes(lq) ||
+            nameEn.toLowerCase().includes(lq) ||
+            def.toLowerCase().includes(lq) ||
+            keywords.some((k) => k.toLowerCase().includes(lq))
+          ) {
+            results.push({
+              entityId: String(c['id'] ?? ''),
+              entityType: 'concept',
+              title: nameZh || nameEn,
+              content: def.slice(0, 200),
+              rank: rank++,
+            });
+          }
+        }
+      } catch { /* concepts table may not exist yet */ }
+
+      // memos
+      try {
+        const memos = (await ctx.dbProxy.queryMemos({ searchText: q, limit: 10 })) as unknown as Array<Record<string, unknown>>;
+        for (const m of memos) {
+          results.push({
+            entityId: String(m['id'] ?? ''),
+            entityType: 'memo',
+            title: (String(m['text'] ?? '')).slice(0, 60),
+            content: (String(m['text'] ?? '')).slice(0, 200),
+            rank: rank++,
+          });
+        }
+      } catch { /* memos table may not exist yet */ }
+
+      // notes
+      try {
+        const notes = (await ctx.dbProxy.queryNotes({ searchText: q })) as unknown as Array<Record<string, unknown>>;
+        for (const n of notes.slice(0, 10)) {
+          results.push({
+            entityId: String(n['id'] ?? ''),
+            entityType: 'note',
+            title: String(n['title'] ?? ''),
+            content: String(n['filePath'] ?? n['file_path'] ?? ''),
+            rank: rank++,
+          });
+        }
+      } catch { /* notes table may not exist yet */ }
+
+      return results;
     } catch {
       return [];
     }
-  });
-
-  // ── app:window ──
-
-  typedHandler('app:window:minimize', logger, async () => {
-    ctx.mainWindow?.minimize();
-  });
-
-  typedHandler('app:window:toggleMaximize', logger, async () => {
-    const win = ctx.mainWindow;
-    if (!win) return false;
-    if (win.isMaximized()) {
-      win.unmaximize();
-      return false;
-    }
-    win.maximize();
-    return true;
-  });
-
-  typedHandler('app:window:close', logger, async () => {
-    ctx.mainWindow?.close();
-  });
-
-  typedHandler('app:window:popOut', logger, async () => {
-    throw new Error('Multi-window not supported');
-  });
-
-  typedHandler('app:window:list', logger, async () => []);
-
-  // ── workspace ──
-
-  typedHandler('workspace:create', logger, async (_e, opts) => {
-    const result = scaffoldWorkspace({
-      rootDir: opts.rootDir,
-      name: opts.name ?? 'Untitled',
-      description: opts.description ?? '',
-    });
-    const mgr = new WorkspaceManager(app.getPath('userData'));
-    mgr.touchRecent(opts.rootDir, opts.name ?? 'Untitled');
-    return result as any;
-  });
-
-  typedHandler('workspace:openDialog', logger, async () => {
-    const result = await dialog.showOpenDialog({
-      title: 'Abyssal — Select Workspace Folder',
-      properties: ['openDirectory', 'createDirectory'],
-      buttonLabel: 'Open Workspace',
-    });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    const wsPath = result.filePaths[0]!;
-    if (!isWorkspace(wsPath)) scaffoldWorkspace({ rootDir: wsPath });
-    const mgr = new WorkspaceManager(app.getPath('userData'));
-    mgr.touchRecent(wsPath);
-    return wsPath;
-  });
-
-  typedHandler('workspace:listRecent', logger, async () => {
-    try {
-      const mgr = new WorkspaceManager(app.getPath('userData'));
-      return mgr.getRecentWorkspaces() as any;
-    } catch {
-      return [];
-    }
-  });
-
-  typedHandler('workspace:getCurrent', logger, async () => {
-    if (!ctx.workspaceRoot) return null;
-    const wsPaths = getWorkspacePaths(ctx.workspaceRoot);
-    return {
-      rootDir: ctx.workspaceRoot,
-      name: ctx.config.project.name,
-      paths: wsPaths,
-    } as any;
-  });
-
-  typedHandler('workspace:switch', logger, async (_e, workspacePath) => {
-    // Graceful shutdown of current DB proxy and lock
-    try { await ctx.dbProxy.close(); } catch { /* ignore */ }
-    ctx.lockHandle?.release();
-
-    // Scaffold new workspace if needed
-    if (!isWorkspace(workspacePath)) {
-      scaffoldWorkspace({ rootDir: workspacePath });
-    }
-
-    // Acquire lock + load config for new workspace
-    ctx.workspaceRoot = workspacePath;
-    ctx.lockHandle = acquireLock(workspacePath);
-
-    const globalConfig = loadGlobalConfig(app.getPath('userData'));
-    ctx.config = ConfigLoader.loadFromWorkspace(workspacePath, globalConfig);
-
-    // Create and start new DB proxy
-    const dbProcessPath = path.resolve(__dirname, '..', '..', 'db-process', 'main.js');
-    const newProxy = createDbProxy({ dbProcessPath });
-    await newProxy.start({
-      workspaceRoot: workspacePath,
-      userDataPath: app.getPath('userData'),
-      skipVecExtension: true,
-    });
-    ctx.dbProxy = newProxy;
-
-    // Refresh framework state
-    await ctx.refreshFrameworkState();
-
-    // Touch recent list
-    const mgr = new WorkspaceManager(app.getPath('userData'));
-    mgr.touchRecent(workspacePath, ctx.config.project.name);
-
-    // Notify renderer
-    ctx.mainWindow?.webContents.send('workspace:switched$event', {
-      rootDir: workspacePath,
-      name: ctx.config.project.name,
-    });
-
-    logger.info('Workspace switched', { workspacePath });
-  });
-
-  typedHandler('workspace:removeRecent', logger, async (_e, workspacePath) => {
-    const mgr = new WorkspaceManager(app.getPath('userData'));
-    mgr.removeRecent(workspacePath);
-  });
-
-  typedHandler('workspace:togglePin', logger, async (_e, workspacePath) => {
-    const mgr = new WorkspaceManager(app.getPath('userData'));
-    return mgr.togglePin(workspacePath);
-  });
+  }, { timeoutMs: 60_000 });
 
   // ── Reader page changed event (fire-and-forget) ──
 
   ipcMain.on(
     'reader:pageChanged',
-    (_event: Electron.IpcMainEvent, _paperId: unknown, _page: unknown) => {
-      // TODO: connect to analysis engine for concept mapping evidence on current page
+    (_event: Electron.IpcMainEvent, paperId: unknown, page: unknown) => {
+      if (typeof paperId !== 'string' || typeof page !== 'number') return;
+      logger.debug('Reader page changed', { paperId, page });
+      ctx.dbProxy.getMappingsByPaper(asPaperId(paperId))
+        .then((mappings: unknown) => {
+          const arr = mappings as Array<Record<string, unknown>>;
+          const pageEvidence = arr.filter((m) => m['evidence_page'] === page || m['evidencePage'] === page);
+          if (pageEvidence.length > 0 && ctx.pushManager) {
+            ctx.pushManager.pushNotification({
+              type: 'reader_evidence',
+              title: `${pageEvidence.length} concept evidence on this page`,
+              message: pageEvidence.map((m) => m['concept_name'] ?? m['conceptName'] ?? m['concept_id']).join(', '),
+            });
+          }
+        })
+        .catch(() => { /* non-critical */ });
     },
   );
 }

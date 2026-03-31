@@ -1,0 +1,130 @@
+// ═══ EmbedFunction 工厂 ═══
+// 根据配置构建嵌入后端实现（OpenAI embeddings API）。
+// 支持 ConfigProvider 热更新：当 rag 或 apiKeys 变化时自动重建内部 client。
+
+import OpenAI from 'openai';
+import type { EmbedFunction } from '../../core/types/common';
+import type { ConfigProvider } from '../../core/infra/config-provider';
+import type { Logger } from '../../core/infra/logger';
+
+// ─── API 嵌入后端（OpenAI / compatible） ───
+
+function createApiEmbedClient(
+  apiKey: string,
+  model: string,
+  baseURL?: string,
+): { client: OpenAI; model: string } {
+  return {
+    client: new OpenAI({
+      apiKey,
+      ...(baseURL && { baseURL }),
+    }),
+    model,
+  };
+}
+
+// ─── ReactiveEmbedFunction ───
+
+/**
+ * EmbedFunction wrapper that rebuilds its internal OpenAI client
+ * when ConfigProvider emits changes to 'rag' or 'apiKeys'.
+ */
+export class ReactiveEmbedFunction implements EmbedFunction {
+  private inner: { client: OpenAI; model: string } | null = null;
+  private readonly logger: Logger;
+  private readonly unsubscribe: () => void;
+
+  constructor(configProvider: ConfigProvider, logger: Logger) {
+    this.logger = logger;
+    this.rebuild(configProvider);
+
+    this.unsubscribe = configProvider.onChange((event) => {
+      if (event.changedSections.includes('rag') || event.changedSections.includes('apiKeys')) {
+        this.logger.info('Embedding config changed — rebuilding embed client');
+        this.rebuild(configProvider);
+      }
+    });
+  }
+
+  private rebuild(configProvider: ConfigProvider): void {
+    const config = configProvider.config;
+    const { embeddingModel, embeddingProvider } = config.rag;
+
+    if (embeddingProvider === 'siliconflow') {
+      const apiKey = config.apiKeys.siliconflowApiKey;
+      if (!apiKey) {
+        this.inner = null;
+        return;
+      }
+      this.inner = createApiEmbedClient(apiKey, embeddingModel, 'https://api.siliconflow.cn/v1');
+      return;
+    }
+
+    // Default: OpenAI
+    const apiKey = config.apiKeys.openaiApiKey;
+    if (!apiKey) {
+      this.inner = null;
+      return;
+    }
+    this.inner = createApiEmbedClient(apiKey, embeddingModel);
+  }
+
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    if (!this.inner) {
+      throw new Error('Embed function not configured — no API key for embedding provider');
+    }
+    if (texts.length === 0) return [];
+
+    // Batch to avoid API limits (most providers cap at ~2048 inputs per call)
+    const BATCH_SIZE = 100;
+    const results: Float32Array[] = [];
+
+    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+      const batch = texts.slice(i, i + BATCH_SIZE);
+      const response = await this.inner.client.embeddings.create({
+        model: this.inner.model,
+        input: batch,
+      });
+      const sorted = response.data.sort((a, b) => a.index - b.index);
+      for (const item of sorted) {
+        results.push(new Float32Array(item.embedding));
+      }
+    }
+
+    return results;
+  }
+
+  /** Returns true if the embed function has a valid backend configured. */
+  get isAvailable(): boolean {
+    return this.inner !== null;
+  }
+
+  dispose(): void {
+    this.unsubscribe();
+  }
+}
+
+// ─── 工厂 ───
+
+/**
+ * 根据 ConfigProvider 创建响应式 EmbedFunction 实例。
+ *
+ * 返回 null 表示当前无法创建（缺少 API key）。
+ * 即使初始时 null，后续 config 变更后可能变为可用——
+ * 因此调用方应始终保留 ReactiveEmbedFunction 引用。
+ */
+export function createEmbedFunction(opts: {
+  configProvider: ConfigProvider;
+  logger: Logger;
+}): ReactiveEmbedFunction {
+  const fn = new ReactiveEmbedFunction(opts.configProvider, opts.logger);
+  if (fn.isAvailable) {
+    opts.logger.info('Embedding function initialized', {
+      model: opts.configProvider.config.rag.embeddingModel,
+      provider: opts.configProvider.config.rag.embeddingProvider,
+    });
+  } else {
+    opts.logger.warn('No embedding API key configured — embedding disabled (will auto-enable on config change)');
+  }
+  return fn;
+}

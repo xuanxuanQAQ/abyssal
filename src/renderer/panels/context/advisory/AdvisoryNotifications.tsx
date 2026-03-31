@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Lightbulb,
@@ -34,8 +35,25 @@ function getTypeIcon(type: RecommendationType) {
   }
 }
 
+const DISMISSED_STORAGE_KEY = 'abyssal:advisory-dismissed';
+
+function loadDismissed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_STORAGE_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch { /* corrupt data — start fresh */ }
+  return new Set();
+}
+
+function saveDismissed(ids: Set<string>): void {
+  try {
+    localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch { /* storage full — silent */ }
+}
+
 export function AdvisoryNotifications() {
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const { t } = useTranslation();
+  const [dismissed, setDismissed] = useState<Set<string>>(loadDismissed);
   const queryClient = useQueryClient();
 
   const { data: recommendations } = useQuery({
@@ -53,7 +71,11 @@ export function AdvisoryNotifications() {
   });
 
   const dismiss = useCallback((id: string) => {
-    setDismissed((prev) => new Set(prev).add(id));
+    setDismissed((prev) => {
+      const next = new Set(prev).add(id);
+      saveDismissed(next);
+      return next;
+    });
   }, []);
 
   const { data: notifications } = useAdvisoryNotifications();
@@ -75,7 +97,7 @@ export function AdvisoryNotifications() {
           letterSpacing: '0.05em',
         }}
       >
-        AI 建议
+        {t('context.advisory.title')}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {visibleRecs.slice(0, 3).map((rec) => (
@@ -106,6 +128,7 @@ function AdvisoryCard({
   onExecute: (id: string) => void;
   executing: boolean;
 }) {
+  const { t } = useTranslation();
   const [showEvidence, setShowEvidence] = useState(false);
 
   return (
@@ -178,7 +201,7 @@ function AdvisoryCard({
             }}
           >
             {showEvidence ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            依据
+            {t('context.advisory.evidence')}
           </button>
         )}
       </div>

@@ -4,14 +4,18 @@
  * Five core methods: complete, completeStream, embed, describeImage, rerank.
  * Internal routing: ModelRouter → adapter → retry → normalize → CostTracker.
  *
+ * Supports config hot-reload: when ConfigProvider emits changes to 'apiKeys'
+ * or 'llm', adapters are rebuilt and routing updates automatically.
+ *
  * Implements VisionCapable (for ProcessModule injection)
  * and EmbedFunction (for RAG injection).
  *
  * See spec: section 1 — LlmClient Unified Interface
  */
 
-import type { AbyssalConfig } from '../../core/types/config';
+import type { ApiKeysConfig } from '../../core/types/config';
 import type { Logger } from '../../core/infra/logger';
+import type { ConfigProvider } from '../../core/infra/config-provider';
 import type { VisionCapable, EmbedFunction } from '../../core/types/common';
 import type { RankedChunk } from '../../core/types/chunk';
 
@@ -80,33 +84,29 @@ export type StreamChunk =
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_use_delta'; delta: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'message_end'; text: string; usage: TokenUsage; finishReason: FinishReason }
+  | { type: 'message_end'; text: string; usage: TokenUsage; finishReason: FinishReason; reasoning?: string | null }
   | { type: 'error'; code: string; message: string };
 
 // ─── Adapter interface (implemented by Claude and OpenAI adapters) ───
 
-export interface LlmAdapter {
-  complete(params: {
-    model: string;
-    systemPrompt: string;
-    messages: Message[];
-    tools?: ToolDefinition[];
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    workflowId?: string;
-  }): Promise<CompletionResult>;
+export interface AdapterCallParams {
+  model: string;
+  systemPrompt: string;
+  messages: Message[];
+  tools?: ToolDefinition[];
+  maxTokens?: number;
+  temperature?: number;
+  signal?: AbortSignal;
+  workflowId?: string;
+  responseFormat?: ResponseFormat;
+  /** Extended thinking budget (Claude). Ignored by non-supporting adapters. */
+  thinkingBudget?: number;
+}
 
-  completeStream(params: {
-    model: string;
-    systemPrompt: string;
-    messages: Message[];
-    tools?: ToolDefinition[];
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    workflowId?: string;
-  }): AsyncIterable<StreamChunk>;
+export interface LlmAdapter {
+  complete(params: AdapterCallParams): Promise<CompletionResult>;
+
+  completeStream(params: AdapterCallParams): AsyncIterable<StreamChunk>;
 
   describeImage(
     imageBase64: string,
@@ -116,6 +116,23 @@ export interface LlmAdapter {
     model?: string,
   ): Promise<string>;
 }
+
+// ─── Structured output ───
+
+export interface JsonSchemaResponseFormat {
+  type: 'json_schema';
+  /** Schema name (required by OpenAI) */
+  name: string;
+  /** JSON Schema definition */
+  schema: Record<string, unknown>;
+  /** If true, model must strictly adhere to schema (OpenAI strict mode) */
+  strict?: boolean;
+}
+
+export type ResponseFormat =
+  | { type: 'text' }
+  | { type: 'json_object' }
+  | JsonSchemaResponseFormat;
 
 // ─── Complete request params ───
 
@@ -127,42 +144,66 @@ export interface CompleteParams {
   temperature?: number;
   workflowId?: string;
   signal?: AbortSignal;
+  /** Request structured output (JSON schema or json_object mode) */
+  responseFormat?: ResponseFormat;
+  /** Extended thinking token budget (Claude only; ignored by other providers). */
+  thinkingBudget?: number;
 }
 
 // ─── LlmClient ───
 
 export class LlmClient implements VisionCapable {
   private readonly router: ModelRouter;
-  private readonly adapters: Map<string, LlmAdapter> = new Map();
+  private adapters: Map<string, LlmAdapter> = new Map();
   private readonly costTracker: CostTracker;
   private readonly reranker: RerankerScheduler;
   private readonly embedFn: EmbedFunction | null;
   private readonly logger: Logger;
+  private readonly configProvider: ConfigProvider;
+  private readonly unsubscribe: () => void;
+  private localAdapterConfigs = new Map<string, { apiKey: string; baseURL: string; provider: string }>();
 
   constructor(params: {
-    config: AbyssalConfig;
+    configProvider: ConfigProvider;
     logger: Logger;
     reranker: RerankerScheduler;
     embedFn?: EmbedFunction | null;
   }) {
     this.logger = params.logger;
-    this.router = new ModelRouter(params.config.llm, params.config.apiKeys);
+    this.configProvider = params.configProvider;
     this.costTracker = new CostTracker();
     this.reranker = params.reranker;
     this.embedFn = params.embedFn ?? null;
 
-    this.initAdapters(params.config);
+    // ModelRouter reads config lazily via getters — always up-to-date
+    this.router = new ModelRouter({
+      getLlmConfig: () => this.configProvider.config.llm,
+      getApiKeys: () => this.configProvider.config.apiKeys,
+    });
+
+    this.buildAdapters(params.configProvider.config.apiKeys);
+
+    // React to config changes: rebuild adapters when API keys change
+    this.unsubscribe = params.configProvider.onChange((event) => {
+      if (event.changedSections.includes('apiKeys')) {
+        this.logger.info('API keys changed — rebuilding LLM adapters');
+        this.buildAdapters(event.current.apiKeys);
+      }
+    });
   }
 
-  private initAdapters(config: AbyssalConfig): void {
-    const keys = config.apiKeys;
+  /**
+   * Build (or rebuild) provider adapters from current API keys.
+   * Clears existing cloud adapters; local adapter configs are always re-added.
+   */
+  private buildAdapters(keys: ApiKeysConfig): void {
+    this.adapters = new Map();
+    this.localAdapterConfigs = new Map();
 
-    // Claude adapter
     if (keys.anthropicApiKey) {
       this.adapters.set('anthropic', new ClaudeAdapter(keys.anthropicApiKey));
     }
 
-    // OpenAI adapter
     if (keys.openaiApiKey) {
       this.adapters.set('openai', new OpenAIAdapter({
         apiKey: keys.openaiApiKey,
@@ -170,7 +211,6 @@ export class LlmClient implements VisionCapable {
       }));
     }
 
-    // DeepSeek adapter (OpenAI-compatible)
     if (keys.deepseekApiKey) {
       this.adapters.set('deepseek', new OpenAIAdapter({
         apiKey: keys.deepseekApiKey,
@@ -179,40 +219,38 @@ export class LlmClient implements VisionCapable {
       }));
     }
 
-    // Ollama adapter (OpenAI-compatible, local)
-    this.adapters.set('ollama', new OpenAIAdapter({
+    if (keys.siliconflowApiKey) {
+      this.adapters.set('siliconflow', new OpenAIAdapter({
+        apiKey: keys.siliconflowApiKey,
+        baseURL: 'https://api.siliconflow.cn/v1',
+        provider: 'siliconflow',
+      }));
+    }
+
+    // Local adapters: only create on first use via lazy getter
+    this.localAdapterConfigs.set('ollama', {
       apiKey: '',
       baseURL: 'http://localhost:11434/v1',
       provider: 'ollama',
-    }));
-
-    // vLLM adapter (OpenAI-compatible, local)
-    // TODO: read vllm endpoint from config.llm.vllmEndpoint when added
-    this.adapters.set('vllm', new OpenAIAdapter({
+    });
+    this.localAdapterConfigs.set('vllm', {
       apiKey: '',
       baseURL: 'http://localhost:8000/v1',
       provider: 'vllm',
-    }));
+    });
   }
 
   // ─── complete (§1.1) ───
 
   async complete(params: CompleteParams): Promise<CompletionResult> {
-    const route = this.router.resolveWithFallback(params.workflowId);
+    const route = this.router.resolveAndValidate(params.workflowId);
     const adapter = this.getAdapter(route);
     const startTime = Date.now();
 
+    const adapterParams = this.buildAdapterParams(route, params);
+
     const result = await retryableCall(
-      () => adapter.complete({
-        model: route.model,
-        systemPrompt: params.systemPrompt,
-        messages: params.messages,
-        ...(params.tools != null && { tools: params.tools }),
-        ...(params.maxTokens != null && { maxTokens: params.maxTokens }),
-        ...(params.temperature != null && { temperature: params.temperature }),
-        ...(params.signal != null && { signal: params.signal }),
-        ...(params.workflowId != null && { workflowId: params.workflowId }),
-      }),
+      () => adapter.complete(adapterParams),
       {
         maxRetries: 3,
         ...(params.signal != null && { signal: params.signal }),
@@ -228,76 +266,65 @@ export class LlmClient implements VisionCapable {
       },
     );
 
-    // Record cost
-    this.costTracker.record({
-      model: route.model,
-      provider: route.provider,
-      inputTokens: result.usage.inputTokens,
-      outputTokens: result.usage.outputTokens,
-      durationMs: Date.now() - startTime,
-      ...(params.workflowId != null && { workflowId: params.workflowId }),
-    });
-
+    this.recordCost(route, result.usage, Date.now() - startTime, params.workflowId);
     return result;
   }
 
   // ─── completeStream (§1.1) ───
 
   async *completeStream(params: CompleteParams): AsyncIterable<StreamChunk> {
-    const route = this.router.resolveWithFallback(params.workflowId);
+    const route = this.router.resolveAndValidate(params.workflowId);
     const adapter = this.getAdapter(route);
     const startTime = Date.now();
 
-    // Streaming does not use retry-engine (§5.5 — use timeout instead)
-    const stream = adapter.completeStream({
-      model: route.model,
-      systemPrompt: params.systemPrompt,
-      messages: params.messages,
-      ...(params.tools != null && { tools: params.tools }),
-      ...(params.maxTokens != null && { maxTokens: params.maxTokens }),
-      ...(params.temperature != null && { temperature: params.temperature }),
-      ...(params.signal != null && { signal: params.signal }),
-      ...(params.workflowId != null && { workflowId: params.workflowId }),
-    });
+    const adapterParams = this.buildAdapterParams(route, params);
+    const stream = adapter.completeStream(adapterParams);
 
-    let firstTokenReceived = false;
-    let lastChunkTime = Date.now();
-
-    // First-token timeout: 30s; inter-token timeout: 10s (§5.5)
+    // Proactive timeouts via Promise.race (§5.5)
     const FIRST_TOKEN_TIMEOUT = 30_000;
     const INTER_TOKEN_TIMEOUT = 10_000;
 
-    for await (const chunk of stream) {
-      const now = Date.now();
+    const iterator = (stream as AsyncIterable<StreamChunk>)[Symbol.asyncIterator]();
+    let firstTokenReceived = false;
 
-      if (!firstTokenReceived && chunk.type === 'text_delta') {
-        if (now - startTime > FIRST_TOKEN_TIMEOUT) {
-          yield { type: 'error', code: 'FIRST_TOKEN_TIMEOUT', message: 'No response within 30s' };
+    try {
+      while (true) {
+        const timeoutMs = firstTokenReceived ? INTER_TOKEN_TIMEOUT : FIRST_TOKEN_TIMEOUT;
+
+        let timerId!: ReturnType<typeof setTimeout>;
+        const timeoutP = new Promise<null>(r => { timerId = setTimeout(() => r(null), timeoutMs); });
+
+        const result = await Promise.race([
+          iterator.next().finally(() => clearTimeout(timerId)),
+          timeoutP,
+        ]);
+
+        if (result === null) {
+          yield {
+            type: 'error',
+            code: firstTokenReceived ? 'INTER_TOKEN_TIMEOUT' : 'FIRST_TOKEN_TIMEOUT',
+            message: firstTokenReceived
+              ? `No output for ${INTER_TOKEN_TIMEOUT / 1000}s`
+              : `No response within ${FIRST_TOKEN_TIMEOUT / 1000}s`,
+          };
           return;
         }
-        firstTokenReceived = true;
+
+        if (result.done) break;
+        const chunk = result.value;
+
+        if (!firstTokenReceived && (chunk.type === 'text_delta' || chunk.type === 'tool_use_start')) {
+          firstTokenReceived = true;
+        }
+
+        if (chunk.type === 'message_end') {
+          this.recordCost(route, chunk.usage, Date.now() - startTime, params.workflowId);
+        }
+
+        yield chunk;
       }
-
-      if (firstTokenReceived && now - lastChunkTime > INTER_TOKEN_TIMEOUT) {
-        yield { type: 'error', code: 'INTER_TOKEN_TIMEOUT', message: 'No output for 10s' };
-        return;
-      }
-
-      lastChunkTime = now;
-
-      // Record cost on message_end
-      if (chunk.type === 'message_end') {
-        this.costTracker.record({
-          model: route.model,
-          provider: route.provider,
-          inputTokens: chunk.usage.inputTokens,
-          outputTokens: chunk.usage.outputTokens,
-          durationMs: Date.now() - startTime,
-          ...(params.workflowId != null && { workflowId: params.workflowId }),
-        });
-      }
-
-      yield chunk;
+    } finally {
+      if (iterator.return) await iterator.return();
     }
   }
 
@@ -318,11 +345,11 @@ export class LlmClient implements VisionCapable {
     prompt: string,
     maxTokens: number,
   ): Promise<string> {
-    // Route to vision model (default: claude-sonnet-4)
-    const route = this.router.resolveWithFallback('vision');
+    // Route via workflowOverrides['vision']; falls back to global default.
+    // Configure vision model via llm.workflowOverrides.vision in settings.
+    const route = this.router.resolveAndValidate('vision');
     const adapter = this.getAdapter(route);
 
-    // TODO: use config.llm.visionModel when added to config
     return retryableCall(
       () => adapter.describeImage(imageBase64, mimeType, prompt, maxTokens, route.model),
       { maxRetries: 2 },
@@ -345,17 +372,25 @@ export class LlmClient implements VisionCapable {
     return this.costTracker.getCostStats();
   }
 
-  // ─── Token counting ───
+  // ──��� Token counting ───
 
-  countTokens(text: string): number {
-    return countTokens(text);
+  countTokens(text: string, workflowId?: string): number {
+    const model = workflowId
+      ? this.router.resolveAndValidate(workflowId).model
+      : undefined;
+    return countTokens(text, model);
   }
 
   // ─── Model context window ───
 
   getContextWindow(workflowId?: string): number {
-    const route = this.router.resolveWithFallback(workflowId);
+    const route = this.router.resolveAndValidate(workflowId);
     return getModelContextWindow(route.model);
+  }
+
+  /** Resolve model name for a workflow (for external token counting). */
+  resolveModel(workflowId?: string): string {
+    return this.router.resolveAndValidate(workflowId).model;
   }
 
   // ─── Convenience: create EmbedFunction adapter ───
@@ -376,17 +411,59 @@ export class LlmClient implements VisionCapable {
   // ─── Lifecycle ───
 
   async terminate(): Promise<void> {
+    this.unsubscribe();
     await this.reranker.terminate();
   }
 
   // ─── Internal ───
 
+  /** Build unified adapter call params from route + CompleteParams. */
+  private buildAdapterParams(route: ModelRoute, params: CompleteParams): AdapterCallParams {
+    const p: AdapterCallParams = {
+      model: route.model,
+      systemPrompt: params.systemPrompt,
+      messages: params.messages,
+    };
+    if (params.tools != null) p.tools = params.tools;
+    if (params.maxTokens != null) p.maxTokens = params.maxTokens;
+    if (params.temperature != null) p.temperature = params.temperature;
+    if (params.signal != null) p.signal = params.signal;
+    if (params.workflowId != null) p.workflowId = params.workflowId;
+    if (params.responseFormat != null) p.responseFormat = params.responseFormat;
+    if (params.thinkingBudget != null) p.thinkingBudget = params.thinkingBudget;
+    return p;
+  }
+
+  /** Record LLM cost to the cost tracker. */
+  private recordCost(
+    route: ModelRoute,
+    usage: TokenUsage,
+    durationMs: number,
+    workflowId?: string,
+  ): void {
+    this.costTracker.record({
+      model: route.model,
+      provider: route.provider,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      durationMs,
+      ...(workflowId != null && { workflowId }),
+    });
+  }
+
   private getAdapter(route: ModelRoute): LlmAdapter {
-    const adapter = this.adapters.get(route.provider);
+    let adapter = this.adapters.get(route.provider);
     if (!adapter) {
-      throw new Error(
-        `No adapter for provider "${route.provider}". Available: ${Array.from(this.adapters.keys()).join(', ')}`,
-      );
+      // Lazy-instantiate local adapters on first use
+      const localConfig = this.localAdapterConfigs.get(route.provider);
+      if (localConfig) {
+        adapter = new OpenAIAdapter(localConfig);
+        this.adapters.set(route.provider, adapter);
+      } else {
+        throw new Error(
+          `No adapter for provider "${route.provider}". Available: ${Array.from(this.adapters.keys()).join(', ')}`,
+        );
+      }
     }
     return adapter;
   }
@@ -395,7 +472,7 @@ export class LlmClient implements VisionCapable {
 // ─── Factory ───
 
 export interface CreateLlmClientOpts {
-  config: AbyssalConfig;
+  configProvider: ConfigProvider;
   logger: Logger;
   reranker: RerankerScheduler;
   embedFn?: EmbedFunction | null;

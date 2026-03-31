@@ -60,6 +60,7 @@ function runInsertChunkText(
       position_ratio, parent_chunk_id, chunk_index,
       context_before, context_after, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id) DO UPDATE SET created_at = created_at
     RETURNING rowid
   `).get(
     chunk.chunkId,
@@ -291,6 +292,22 @@ export function getChunkByChunkId(
     .get(chunkId) as Record<string, unknown> | undefined;
   if (!row) return null;
   return fromRow<TextChunk>(row);
+}
+
+/**
+ * 批量查询已存在的 chunk_id 集合（Fix #13: 替代逐条 SELECT）。
+ * BATCH_SIZE=500 时占位符数在 SQLite 默认 SQLITE_MAX_VARIABLE_NUMBER=999 以内。
+ */
+export function getExistingChunkIds(
+  db: Database.Database,
+  chunkIds: string[],
+): Set<string> {
+  if (chunkIds.length === 0) return new Set();
+  const placeholders = chunkIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(`SELECT chunk_id FROM chunks WHERE chunk_id IN (${placeholders})`)
+    .all(...chunkIds) as { chunk_id: string }[];
+  return new Set(rows.map((r) => r.chunk_id));
 }
 
 export function getChunkRowid(

@@ -5,13 +5,14 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Folder, Star, AlertTriangle, Clock, Paperclip } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
 import type { PaperCounts } from '../../../../shared-types/models';
 
 interface SmartGroupItem {
   id: string;
-  label: string;
+  labelKey: string;
   icon: React.ReactNode;
   getCount: (counts: PaperCounts | null) => number | null;
 }
@@ -19,55 +20,55 @@ interface SmartGroupItem {
 const SMART_GROUPS: SmartGroupItem[] = [
   {
     id: 'all',
-    label: 'All Papers',
+    labelKey: 'library.smartGroups.all',
     icon: <Folder size={14} />,
     getCount: (c) => c?.total ?? null,
   },
   {
     id: 'seeds',
-    label: 'Seeds',
+    labelKey: 'library.smartGroups.seeds',
     icon: <Star size={14} style={{ color: '#3B82F6' }} />,
     getCount: (c) => c?.byRelevance.seed ?? null,
   },
   {
     id: 'high',
-    label: 'High',
+    labelKey: 'library.smartGroups.high',
     icon: <Folder size={14} style={{ color: '#22C55E' }} />,
     getCount: (c) => c?.byRelevance.high ?? null,
   },
   {
     id: 'medium',
-    label: 'Medium',
+    labelKey: 'library.smartGroups.medium',
     icon: <Folder size={14} style={{ color: '#F59E0B' }} />,
     getCount: (c) => c?.byRelevance.medium ?? null,
   },
   {
     id: 'low',
-    label: 'Low',
+    labelKey: 'library.smartGroups.low',
     icon: <Folder size={14} style={{ color: '#9CA3AF' }} />,
     getCount: (c) => c?.byRelevance.low ?? null,
   },
   {
     id: 'excluded',
-    label: 'Excluded',
+    labelKey: 'library.smartGroups.excluded',
     icon: <Folder size={14} style={{ color: '#EF4444' }} />,
     getCount: (c) => c?.byRelevance.excluded ?? null,
   },
   {
     id: 'pending_analysis',
-    label: 'Pending Analysis',
+    labelKey: 'library.smartGroups.pendingAnalysis',
     icon: <Clock size={14} style={{ color: '#F59E0B' }} />,
     getCount: (c) => c?.byAnalysisStatus.not_started ?? null,
   },
   {
     id: 'needs_review',
-    label: 'Needs Review',
+    labelKey: 'library.smartGroups.needsReview',
     icon: <AlertTriangle size={14} style={{ color: '#F59E0B' }} />,
     getCount: (c) => c?.byAnalysisStatus.needs_review ?? null,
   },
   {
     id: 'no_fulltext',
-    label: 'No Fulltext',
+    labelKey: 'library.smartGroups.noFulltext',
     icon: <Paperclip size={14} style={{ color: '#9CA3AF' }} />,
     getCount: (c) =>
       c ? (c.byFulltextStatus.failed + c.byFulltextStatus.not_attempted) : null,
@@ -79,6 +80,7 @@ interface SmartGroupsProps {
 }
 
 export function SmartGroups({ counts }: SmartGroupsProps) {
+  const { t } = useTranslation();
   const activeGroupId = useAppStore((s) => s.activeGroupId);
   const activeGroupType = useAppStore((s) => s.activeGroupType);
   const setActiveGroup = useAppStore((s) => s.setActiveGroup);
@@ -90,7 +92,7 @@ export function SmartGroups({ counts }: SmartGroupsProps) {
   };
 
   return (
-    <div role="listbox" aria-label="智能分组">
+    <div role="listbox" aria-label={t('library.sidebar.smartGroups')}>
       {SMART_GROUPS.map((group) => {
         const isActive = activeGroupType === 'smart' && activeGroupId === group.id;
         const count = group.getCount(counts);
@@ -117,7 +119,7 @@ export function SmartGroups({ counts }: SmartGroupsProps) {
             }}
           >
             {group.icon}
-            <span style={{ flex: 1 }}>{group.label}</span>
+            <span style={{ flex: 1 }}>{t(group.labelKey)}</span>
             {count !== null && (
               <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                 {count}

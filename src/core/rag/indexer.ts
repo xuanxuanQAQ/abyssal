@@ -1,5 +1,9 @@
 // ═══ 事务化索引 ═══
 // §2: indexChunks — 批量写入 chunks + chunks_vec，每 500 chunk 拆分事务
+//
+// 改进：
+//   - Fix #13: 批量 IN 查询替代逐条 SELECT 幂等检查
+//   - Fix #14: chunks.length !== embeddings.length 前置断言
 
 import type { TextChunk } from '../types/chunk';
 import type { DatabaseService } from '../database';
@@ -24,7 +28,7 @@ const PRICE_PER_TOKEN = 0.00002 / 1000;
  * 将 TextChunk 数组及其嵌入向量事务化写入数据库。
  *
  * - 每 500 chunk 一个事务（避免长事务阻塞 UI）
- * - 幂等性：已存在的 chunk_id 自动跳过
+ * - 幂等性：已存在的 chunk_id 自动跳过（批量 IN 查询）
  * - 事务间 setImmediate 释放事件循环
  */
 export async function indexChunks(
@@ -34,6 +38,13 @@ export async function indexChunks(
   logger: Logger,
   isApiBackend: boolean = false,
 ): Promise<IndexResult> {
+  // Fix #14: 前置长度校验
+  if (chunks.length !== embeddings.length) {
+    throw new Error(
+      `chunks.length (${chunks.length}) !== embeddings.length (${embeddings.length})`,
+    );
+  }
+
   let indexed = 0;
   let skipped = 0;
   let totalTokens = 0;
@@ -43,14 +54,16 @@ export async function indexChunks(
     const batchChunks = chunks.slice(batchStart, batchEnd);
     const batchEmbeddings = embeddings.slice(batchStart, batchEnd);
 
-    // 过滤已存在的 chunk（幂等性）
+    // Fix #13: 批量查询已存在的 chunk_id（替代逐条 SELECT）
+    const chunkIds = batchChunks.map((c) => c.chunkId as string);
+    const existingSet = dbService.getExistingChunkIds(chunkIds);
+
     const newChunks: TextChunk[] = [];
     const newEmbeddings: Float32Array[] = [];
 
     for (let i = 0; i < batchChunks.length; i++) {
       const chunk = batchChunks[i]!;
-      const existing = dbService.getChunkByChunkId(chunk.chunkId);
-      if (existing) {
+      if (existingSet.has(chunk.chunkId as string)) {
         skipped++;
       } else {
         newChunks.push(chunk);

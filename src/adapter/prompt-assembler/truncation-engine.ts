@@ -232,11 +232,19 @@ export function iterativeTrim(
     const target = candidates[0]!;
     const currentTokens = tokenCounter.count(target.content);
 
+    // Guard: if block is too small to trim meaningfully, exclude it entirely
+    if (currentTokens <= 50) {
+      remaining -= currentTokens;
+      target.content = '';
+      target.included = false;
+      continue;
+    }
+
     // Fix #5: Trim proportional to overflow, not fixed 20%.
     // Only cut what's needed (+ 100 token safety buffer), capped at 20% max.
     const precisionCut = remaining + 100;
     const maxCut = Math.floor(currentTokens * 0.2);
-    const actualCut = Math.min(precisionCut, maxCut);
+    const actualCut = Math.max(1, Math.min(precisionCut, maxCut));
     const newTarget = Math.max(0, currentTokens - actualCut);
 
     target.content = truncateContent(

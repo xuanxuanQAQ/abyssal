@@ -1,6 +1,6 @@
 /**
  * useCoverageData -- Derives coverage statistics from heatmap, paper counts,
- * and concept framework data.
+ * concept framework data, and writing citation data.
  *
  * Concept score per section 11.3:
  *   synthesized >= 3  -> 1.0
@@ -11,20 +11,21 @@
  *
  * completeness = avg(concept_scores) * 100
  *
- * TODO: "synthesized" status needs writing citation data (Sub-Doc 7 citedPaperIds).
- * For now, all 'accepted'/'revised' mappings are treated as "analyzed".
+ * "Synthesized" = paper is analyzed + adjudicated (accepted/revised) + cited in writing.
  */
 
 import { useMemo } from 'react';
 import { useHeatmapData } from '../../../../core/ipc/hooks/useMappings';
+import { useMappingsForConcept } from '../../../../core/ipc/hooks/useMappings';
 import { usePaperList } from '../../../../core/ipc/hooks/usePapers';
 import { useConceptFramework } from '../../../../core/ipc/hooks/useConcepts';
-import type { Paper, HeatmapMatrix, ConceptFramework } from '../../../../../shared-types/models';
-import type { AnalysisStatus, AdjudicationStatus } from '../../../../../shared-types/enums';
+import { useAllCitedPaperIds } from '../../../../core/ipc/hooks/useArticles';
+import type { Paper, HeatmapMatrix, ConceptMapping } from '../../../../../shared-types/models';
 
 export interface ConceptCoverage {
   conceptId: string;
   conceptName: string;
+  parentId: string | null;
   synthesized: number;
   analyzed: number;
   acquired: number;
@@ -48,28 +49,90 @@ function computeConceptScore(coverage: ConceptCoverage): number {
   return 0.0;
 }
 
+/**
+ * Aggregate child concept scores into parents (immutable).
+ * Uses: parent score = max(own score, avg(children scores)).
+ * Includes cycle detection to prevent infinite recursion.
+ */
+function aggregateTreeScores(concepts: ConceptCoverage[]): ConceptCoverage[] {
+  const byId = new Map(concepts.map((c) => [c.conceptId, c]));
+  const childrenOf = new Map<string, ConceptCoverage[]>();
+
+  for (const c of concepts) {
+    if (c.parentId && byId.has(c.parentId)) {
+      const siblings = childrenOf.get(c.parentId);
+      if (siblings) {
+        siblings.push(c);
+      } else {
+        childrenOf.set(c.parentId, [c]);
+      }
+    }
+  }
+
+  // Immutable score map — never mutate ConceptCoverage during recursion
+  const resolvedScores = new Map<string, number>();
+  const visiting = new Set<string>(); // cycle detection
+
+  function resolveScore(c: ConceptCoverage): number {
+    const cached = resolvedScores.get(c.conceptId);
+    if (cached !== undefined) return cached;
+
+    // Cycle detection: if we're already visiting this node, return own score
+    if (visiting.has(c.conceptId)) return c.score;
+    visiting.add(c.conceptId);
+
+    const children = childrenOf.get(c.conceptId);
+    let finalScore = c.score;
+    if (children && children.length > 0) {
+      const childScores = children.map(resolveScore);
+      const avgChildScore = childScores.reduce((a, b) => a + b, 0) / childScores.length;
+      finalScore = Math.max(c.score, avgChildScore);
+    }
+
+    visiting.delete(c.conceptId);
+    resolvedScores.set(c.conceptId, finalScore);
+    return finalScore;
+  }
+
+  // Process roots first, then apply resolved scores back
+  const roots = concepts.filter((c) => !c.parentId || !byId.has(c.parentId));
+  for (const root of roots) {
+    resolveScore(root);
+  }
+
+  // Apply resolved scores back immutably
+  return concepts.map((c) => ({
+    ...c,
+    score: resolvedScores.get(c.conceptId) ?? c.score,
+  }));
+}
+
 export function useCoverageData(): CoverageData {
   const { data: heatmap, isLoading: heatmapLoading } = useHeatmapData();
   const { data: papers, isLoading: papersLoading } = usePaperList();
   const { data: framework, isLoading: frameworkLoading } = useConceptFramework();
+  const { data: citedPaperIds, isLoading: citedLoading } = useAllCitedPaperIds();
 
-  const isLoading = heatmapLoading || papersLoading || frameworkLoading;
+  const isLoading = heatmapLoading || papersLoading || frameworkLoading || citedLoading;
 
   const result = useMemo((): Omit<CoverageData, 'isLoading'> => {
     if (!heatmap || !papers || !framework) {
       return { completeness: 0, concepts: [] };
     }
 
-    // Build paper lookup for analysis status
+    // Build paper lookup
     const paperMap = new Map<string, Paper>();
     for (const p of papers) {
       paperMap.set(p.id, p);
     }
 
-    // Build concept name lookup
-    const conceptNameMap = new Map<string, string>();
+    // Build cited paper set from writing sections
+    const citedSet = new Set(citedPaperIds ?? []);
+
+    // Build concept name + parentId lookup
+    const conceptInfo = new Map<string, { name: string; parentId: string | null }>();
     for (const c of framework.concepts) {
-      conceptNameMap.set(c.id, c.name);
+      conceptInfo.set(c.id, { name: c.name, parentId: c.parentId });
     }
 
     // For each concept, count papers by their effective status bucket
@@ -81,7 +144,6 @@ export function useCoverageData(): CoverageData {
         let pending = 0;
         let excluded = 0;
 
-        // Find all cells for this concept
         const cellsForConcept = heatmap.cells.filter(
           (cell) => cell.conceptIndex === conceptIndex,
         );
@@ -92,14 +154,20 @@ export function useCoverageData(): CoverageData {
           const paper = paperMap.get(paperId);
           if (!paper) continue;
 
-          // Classify based on paper analysis status and relevance
           if (paper.relevance === 'excluded') {
             excluded++;
           } else if (paper.analysisStatus === 'completed') {
-            // TODO: distinguish synthesized vs analyzed once citation
-            // data is available. For now, treat all completed-analysis
-            // mappings as "analyzed".
-            analyzed++;
+            // Synthesized = analyzed + adjudicated (accepted/revised) + cited in writing
+            const isAdjudicated =
+              cell.adjudicationStatus === 'accepted' ||
+              cell.adjudicationStatus === 'revised';
+            const isCited = citedSet.has(paperId);
+
+            if (isAdjudicated && isCited) {
+              synthesized++;
+            } else {
+              analyzed++;
+            }
           } else if (paper.fulltextStatus === 'available') {
             acquired++;
           } else {
@@ -108,9 +176,11 @@ export function useCoverageData(): CoverageData {
         }
 
         const total = synthesized + analyzed + acquired + pending + excluded;
+        const info = conceptInfo.get(conceptId);
         const coverage: ConceptCoverage = {
           conceptId,
-          conceptName: conceptNameMap.get(conceptId) ?? conceptId,
+          conceptName: info?.name ?? conceptId,
+          parentId: info?.parentId ?? null,
           synthesized,
           analyzed,
           acquired,
@@ -124,6 +194,9 @@ export function useCoverageData(): CoverageData {
       },
     );
 
+    // Aggregate tree scores (children contribute to parent)
+    aggregateTreeScores(concepts);
+
     // completeness = average of all concept scores * 100
     const completeness =
       concepts.length > 0
@@ -131,7 +204,7 @@ export function useCoverageData(): CoverageData {
         : 0;
 
     return { completeness, concepts };
-  }, [heatmap, papers, framework]);
+  }, [heatmap, papers, framework, citedPaperIds]);
 
   return {
     ...result,

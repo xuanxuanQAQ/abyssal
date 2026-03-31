@@ -6,6 +6,7 @@ import type { HttpClient } from '../../infra/http-client';
 import type { RateLimiter } from '../../infra/rate-limiter';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
+import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
 
 const UNPAYWALL_API = 'https://api.unpaywall.org/v2';
 
@@ -34,13 +35,10 @@ export async function tryUnpaywall(
 
     const pdfUrl = data.best_oa_location?.url_for_pdf;
     if (!pdfUrl) {
-      return {
-        source: 'unpaywall',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('unpaywall', 'failed', Date.now() - start, {
         failureReason: 'No PDF URL in Unpaywall response',
-        httpStatus: null,
-      };
+        failureCategory: 'no_pdf_url',
+      });
     }
 
     await downloadPdf(http, pdfUrl, tempPath, timeoutMs);
@@ -48,30 +46,15 @@ export async function tryUnpaywall(
 
     if (!validation.valid) {
       deleteFileIfExists(tempPath);
-      return {
-        source: 'unpaywall',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('unpaywall', 'failed', Date.now() - start, {
         failureReason: validation.reason ?? 'PDF validation failed',
-        httpStatus: null,
-      };
+        failureCategory: 'invalid_pdf',
+      });
     }
 
-    return {
-      source: 'unpaywall',
-      status: 'success',
-      durationMs: Date.now() - start,
-      failureReason: null,
-      httpStatus: 200,
-    };
+    return makeAttempt('unpaywall', 'success', Date.now() - start, { httpStatus: 200 });
   } catch (err) {
     deleteFileIfExists(tempPath);
-    return {
-      source: 'unpaywall',
-      status: 'failed',
-      durationMs: Date.now() - start,
-      failureReason: (err as Error).message,
-      httpStatus: (err as { statusCode?: number }).statusCode ?? null,
-    };
+    return makeFailedAttempt('unpaywall', start, err);
   }
 }

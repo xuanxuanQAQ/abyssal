@@ -10,8 +10,15 @@ import {
 export class PDFDocumentManager {
   private document: PDFDocumentProxy | null = null;
   private loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null;
+  /** §5.4: Track in-flight page render tasks for cancellation on destroy. */
+  private activeRenderTasks: Set<{ cancel(): void }> = new Set();
 
-  async loadDocument(buffer: ArrayBuffer): Promise<PDFDocumentProxy> {
+  async loadDocument(buffer: ArrayBuffer | Uint8Array): Promise<PDFDocumentProxy> {
+    // Cancel previous document if switching PDFs without explicit destroy
+    if (this.document) {
+      await this.destroy();
+    }
+
     ensureWorkerInitialized();
 
     this.loadingTask = pdfjsLib.getDocument({
@@ -27,6 +34,16 @@ export class PDFDocumentManager {
     return doc;
   }
 
+  /** Register an in-flight render task so it can be cancelled on destroy. */
+  trackRenderTask(task: { cancel(): void }): void {
+    this.activeRenderTasks.add(task);
+  }
+
+  /** Unregister a completed render task. */
+  untrackRenderTask(task: { cancel(): void }): void {
+    this.activeRenderTasks.delete(task);
+  }
+
   getDocument(): PDFDocumentProxy | null {
     return this.document;
   }
@@ -39,6 +56,12 @@ export class PDFDocumentManager {
   }
 
   async destroy(): Promise<void> {
+    // §5.4: Cancel all in-flight page render tasks before destroying the document
+    for (const task of this.activeRenderTasks) {
+      try { task.cancel(); } catch { /* already finished */ }
+    }
+    this.activeRenderTasks.clear();
+
     if (this.loadingTask != null) {
       await this.loadingTask.destroy();
       this.loadingTask = null;

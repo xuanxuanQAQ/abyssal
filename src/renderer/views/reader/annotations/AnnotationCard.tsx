@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import type { Annotation } from '../../../../shared-types/models';
 import type { HighlightColor } from '../../../../shared-types/enums';
@@ -37,18 +38,20 @@ export function AnnotationCard({
   onDelete: () => void;
   onUpdateColor: (color: HighlightColor) => void;
 }) {
+  const { t } = useTranslation();
   const highlightColor = (annotation.color as HighlightColor) ?? 'yellow';
   const displayColor = COLOR_MAP[highlightColor] ?? COLOR_MAP.yellow;
 
   const menuItemStyle: React.CSSProperties = {
     padding: '6px 12px',
-    fontSize: 'var(--text-sm)',
+    fontSize: 13,
     cursor: 'pointer',
     outline: 'none',
-    borderRadius: 'var(--radius-sm)',
+    borderRadius: 4,
     display: 'flex',
     alignItems: 'center',
     gap: 8,
+    color: '#e0e0e0',
   };
 
   return (
@@ -133,7 +136,7 @@ export function AnnotationCard({
                   lineHeight: 1.3,
                 }}
               >
-                Note: {annotation.text}
+                {t('reader.annotations.notePrefix')}{annotation.text}
               </div>
             )}
 
@@ -146,7 +149,7 @@ export function AnnotationCard({
                   lineHeight: 1.3,
                 }}
               >
-                Concept: {annotation.conceptId}
+                {t('reader.annotations.conceptPrefix')}{annotation.conceptId}
               </div>
             )}
           </div>
@@ -156,28 +159,28 @@ export function AnnotationCard({
       <ContextMenu.Portal>
         <ContextMenu.Content
           style={{
-            backgroundColor: 'var(--bg-elevated)',
-            border: '1px solid var(--border-default)',
-            borderRadius: 'var(--radius-md)',
+            backgroundColor: '#1e1e1e',
+            border: '1px solid #3a3a3a',
+            borderRadius: 8,
             padding: 4,
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
             minWidth: 140,
             zIndex: 50,
           }}
         >
           <ContextMenu.Sub>
             <ContextMenu.SubTrigger style={menuItemStyle}>
-              更改颜色
-              <span style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}>▸</span>
+              {t('reader.annotations.changeColor')}
+              <span style={{ marginLeft: 'auto', color: '#888' }}>▸</span>
             </ContextMenu.SubTrigger>
             <ContextMenu.Portal>
               <ContextMenu.SubContent
                 style={{
-                  backgroundColor: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-default)',
-                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: '#1e1e1e',
+                  border: '1px solid #3a3a3a',
+                  borderRadius: 8,
                   padding: 4,
-                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
                   minWidth: 100,
                   zIndex: 51,
                 }}
@@ -208,7 +211,7 @@ export function AnnotationCard({
           <ContextMenu.Separator
             style={{
               height: 1,
-              backgroundColor: 'var(--border-subtle)',
+              backgroundColor: '#3a3a3a',
               margin: '4px 0',
             }}
           />
@@ -217,10 +220,10 @@ export function AnnotationCard({
             onSelect={onDelete}
             style={{
               ...menuItemStyle,
-              color: 'rgb(220, 80, 80)',
+              color: '#f87171',
             }}
           >
-            删除
+            {t('common.delete')}
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>

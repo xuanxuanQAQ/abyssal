@@ -9,6 +9,7 @@
 
 import { useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 import { useChatStore } from '../../../../core/store/useChatStore';
 import { getAPI } from '../../../../core/ipc/bridge';
 import { contextSourceKey } from '../../engine/contextSourceKey';
@@ -56,6 +57,7 @@ export function persistMessage(msg: ChatMessage, contextKey: string): void {
   const record = messageToRecord(msg, contextKey);
   getAPI().db.chat.saveMessage(record).catch((err: unknown) => {
     console.error('[ChatSession] Failed to persist message:', err);
+    toast.error('消息保存失败，聊天记录可能丢失', { id: 'chat-persist-error', duration: 3000 });
   });
 }
 
@@ -85,28 +87,23 @@ export function useChatSession() {
     enabled: !sessions[key],
   });
 
-  // ContextSource 变化时切换会话
+  // ContextSource 变化时切换会话 + dbHistory 就绪时填充热缓存（合并为单一 effect 防止竞态）
   useEffect(() => {
-    if (key === activeSessionKey) return;
-
-    setActiveSessionKey(key);
+    // Always ensure session exists (fixes first-load when key === activeSessionKey)
     ensureSession(key);
 
-    // 如果热缓存中没有消息且数据库有数据，加载到热缓存
-    const cached = useChatStore.getState().sessions[key];
-    if (cached && cached.messages.length === 0 && dbHistory && dbHistory.length > 0) {
-      loadSessionMessages(key, dbHistory, dbHistory.length < 50);
+    if (key !== activeSessionKey) {
+      setActiveSessionKey(key);
+    }
+
+    // 如果热缓存为空且数据库有数据，加载到热缓存
+    if (dbHistory && dbHistory.length > 0) {
+      const cached = useChatStore.getState().sessions[key];
+      if (cached && cached.messages.length === 0) {
+        loadSessionMessages(key, dbHistory, dbHistory.length < 50);
+      }
     }
   }, [key, activeSessionKey, setActiveSessionKey, ensureSession, loadSessionMessages, dbHistory]);
-
-  // 当 dbHistory 加载完成且热缓存为空时，填充热缓存
-  useEffect(() => {
-    if (!dbHistory || dbHistory.length === 0) return;
-    const cached = useChatStore.getState().sessions[key];
-    if (cached && cached.messages.length === 0) {
-      loadSessionMessages(key, dbHistory, dbHistory.length < 50);
-    }
-  }, [dbHistory, key, loadSessionMessages]);
 
   /** 清除当前会话（UI + 数据库） */
   const clearCurrentSession = useCallback(() => {
@@ -130,16 +127,19 @@ export function useChatSession() {
         limit: 50,
         beforeTimestamp,
       });
-      const messages = records.map(recordToMessage);
-      useChatStore.getState().prependMessages(key, messages);
-      if (messages.length < 50) {
-        // 已加载全部历史
-        useChatStore.getState().loadSessionMessages(
-          key,
-          [...messages, ...session.messages],
-          true
-        );
-      }
+      const olderMessages = records.map(recordToMessage);
+      const isFullyLoaded = olderMessages.length < 50;
+
+      // Re-read session after async gap to avoid stale reference
+      const currentSession = useChatStore.getState().sessions[key];
+      const existingMessages = currentSession?.messages ?? [];
+
+      // Single atomic update: prepend older messages + set fullyLoaded
+      useChatStore.getState().loadSessionMessages(
+        key,
+        [...olderMessages, ...existingMessages],
+        isFullyLoaded,
+      );
     } catch (err) {
       console.error('[ChatSession] Failed to load more history:', err);
     }

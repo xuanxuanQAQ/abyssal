@@ -6,6 +6,7 @@
  */
 
 import React, { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useConceptList } from '../../../../core/ipc/hooks/useConcepts';
 import { useAppStore } from '../../../../core/store';
 import { ConceptTreeNode } from './ConceptTreeNode';
@@ -48,6 +49,7 @@ function buildTree(concepts: Concept[]): TreeNode[] {
 }
 
 export function ConceptTree() {
+  const { t } = useTranslation();
   const { data: concepts } = useConceptList();
   const selectedConceptId = useAppStore((s) => s.selectedConceptId);
   const selectConcept = useAppStore((s) => s.selectConcept);
@@ -55,25 +57,31 @@ export function ConceptTree() {
   const tree = useMemo(() => buildTree(concepts ?? []), [concepts]);
 
   return (
-    <div style={{ padding: '8px 0' }}>
+    <div
+      style={{ padding: '8px 0' }}
+      role="tree"
+      aria-label={t('analysis.concepts.framework')}
+    >
       <div style={{
         padding: '6px 12px', fontSize: 11, fontWeight: 600,
         color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em',
       }}>
-        概念框架
+        {t('analysis.concepts.framework')}
       </div>
-      {tree.map((node) => (
-        <ConceptTreeNode
-          key={node.concept.id}
-          node={node}
-          depth={0}
-          selectedId={selectedConceptId}
-          onSelect={selectConcept}
-        />
-      ))}
+      <ul role="group" style={{ margin: 0, padding: 0 }}>
+        {tree.map((node) => (
+          <ConceptTreeNode
+            key={node.concept.id}
+            node={node}
+            depth={0}
+            selectedId={selectedConceptId}
+            onSelect={selectConcept}
+          />
+        ))}
+      </ul>
       {tree.length === 0 && (
         <div style={{ padding: '16px 12px', color: 'var(--text-muted)', fontSize: 12 }}>
-          暂无概念，通过 AI 建议或手动创建添加
+          {t('analysis.concepts.empty')}
         </div>
       )}
     </div>

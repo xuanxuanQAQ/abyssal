@@ -15,6 +15,7 @@ import { useHeatmapData as useRawHeatmapData } from '../../../../../core/ipc/hoo
 import { useConceptFramework } from '../../../../../core/ipc/hooks/useConcepts';
 import { usePaperList } from '../../../../../core/ipc/hooks/usePapers';
 import type { HeatmapMatrix, HeatmapCell, Paper } from '../../../../../../shared-types/models';
+import { cellKey } from '../../../shared/cellKey';
 
 export type SortBy = 'relevance' | 'year' | 'coverage' | 'author';
 
@@ -208,7 +209,7 @@ export function useProcessedHeatmapData(
       );
 
       if (newPaperIdx != null && newConceptIdx != null) {
-        const key = `${newConceptIdx}:${newPaperIdx}`;
+        const key = cellKey(newConceptIdx, newPaperIdx);
         lookup.set(key, {
           ...cell,
           conceptIndex: newConceptIdx,

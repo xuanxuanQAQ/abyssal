@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { HeatmapCell } from '../../../../../../shared-types/models';
 
 interface CellContextMenuProps {
@@ -92,6 +93,7 @@ function CellContextMenu({
   onAccept,
   onReject,
 }: CellContextMenuProps) {
+  const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Click-outside and Escape handler
@@ -136,7 +138,7 @@ function CellContextMenu({
       }}
     >
       <MenuItem
-        label="查看证据详情"
+        label={t('analysis.heatmap.cellMenu.viewEvidence')}
         onClick={() => {
           onViewEvidence();
           onOpenChange(false);
@@ -144,7 +146,7 @@ function CellContextMenu({
         disabled={false}
       />
       <MenuItem
-        label="在Reader中打开"
+        label={t('analysis.heatmap.cellMenu.openInReader')}
         onClick={() => {
           onOpenInReader();
           onOpenChange(false);
@@ -153,7 +155,7 @@ function CellContextMenu({
       />
       <div style={separatorStyle} />
       <MenuItem
-        label="接受映射"
+        label={t('analysis.heatmap.cellMenu.acceptMapping')}
         onClick={() => {
           onAccept();
           onOpenChange(false);
@@ -161,7 +163,7 @@ function CellContextMenu({
         disabled={isAccepted}
       />
       <MenuItem
-        label="拒绝映射"
+        label={t('analysis.heatmap.cellMenu.rejectMapping')}
         onClick={() => {
           onReject();
           onOpenChange(false);

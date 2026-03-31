@@ -2,13 +2,14 @@
  * ChatInput — 消息输入框（§5.5）
  *
  * - 自动增高（44px → 160px）
- * - Ctrl+Enter 发送，Shift+Enter 换行
+ * - Enter 发送，Shift+Enter 换行
  * - 动态占位符文本
  * - data-chat-input 属性用于 Peek 焦点保护
  */
 
 import React, { useRef, useEffect, useCallback } from 'react';
-import { Send } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Send, Square } from 'lucide-react';
 import { useChatStore } from '../../../core/store/useChatStore';
 import type { ContextSource } from '../../../../shared-types/models';
 
@@ -18,31 +19,38 @@ const MAX_HEIGHT = 160;
 interface ChatInputProps {
   source: ContextSource;
   onSend: (text: string) => void;
+  onAbort?: () => void;
   disabled?: boolean;
+  streaming?: boolean;
 }
 
-function getPlaceholder(source: ContextSource): string {
+function getPlaceholder(source: ContextSource, t: ReturnType<typeof import('react-i18next').useTranslation>['t']): string {
   switch (source.type) {
     case 'paper':
-      return '询问关于这篇论文的问题…';
+      return t('context.chat.placeholder.paper');
+    case 'papers':
+      return t('context.chat.placeholder.papers', { count: source.paperIds.length });
     case 'concept':
-      return '询问关于这个概念的问题…';
+      return t('context.chat.placeholder.concept');
     case 'mapping':
-      return '询问关于这个映射的问题…';
+      return t('context.chat.placeholder.mapping');
     case 'section':
-      return '询问写作建议或请求 AI 协助…';
+      return t('context.chat.placeholder.section');
     case 'graphNode':
-      return '询问关于这个节点的问题…';
+      return t('context.chat.placeholder.graphNode');
     case 'memo':
-      return '询问关于这条备忘的问题…';
+      return t('context.chat.placeholder.memo');
     case 'note':
-      return '询问关于这篇笔记的问题…';
+      return t('context.chat.placeholder.note');
+    case 'allSelected':
+      return t('context.chat.placeholder.allSelected');
     case 'empty':
-      return '向 AI 助手提问…';
+      return t('context.chat.placeholder.empty');
   }
 }
 
-export function ChatInput({ source, onSend, disabled }: ChatInputProps) {
+export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort, disabled, streaming }: ChatInputProps) {
+  const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shadowRef = useRef<HTMLDivElement>(null);
   const draft = useChatStore((s) => s.chatInputDraft);
@@ -71,13 +79,25 @@ export function ChatInput({ source, onSend, disabled }: ChatInputProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && e.ctrlKey) {
+      // IME composition guard: ignore Enter that confirms character selection
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        handleSend();
+        if (streaming) {
+          // During streaming, Enter aborts generation
+          onAbort?.();
+        } else {
+          handleSend();
+        }
       }
     },
-    [handleSend]
+    [handleSend, streaming, onAbort]
   );
+
+  const handleAbort = useCallback(() => {
+    onAbort?.();
+  }, [onAbort]);
 
   const hasDraft = draft.trim().length > 0;
 
@@ -113,7 +133,7 @@ export function ChatInput({ source, onSend, disabled }: ChatInputProps) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={getPlaceholder(source)}
+          placeholder={getPlaceholder(source, t)}
           rows={1}
           disabled={disabled}
           style={{
@@ -143,32 +163,58 @@ export function ChatInput({ source, onSend, disabled }: ChatInputProps) {
           }}
         />
 
-        <button
-          onClick={handleSend}
-          disabled={!hasDraft || disabled}
-          title="发送 (Ctrl+Enter)"
-          style={{
-            position: 'absolute',
-            right: 5,
-            top: 5,
-            width: 34,
-            height: 34,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: 'none',
-            borderRadius: 10,
-            backgroundColor: hasDraft ? 'var(--accent-color)' : 'transparent',
-            color: hasDraft ? 'white' : 'var(--text-muted)',
-            cursor: hasDraft ? 'pointer' : 'default',
-            transition: 'all 150ms ease',
-            opacity: hasDraft ? 1 : 0.5,
-          }}
-        >
-          <Send size={14} />
-        </button>
+        {streaming ? (
+          <button
+            onClick={handleAbort}
+            title={t('context.chat.stopGeneration')}
+            style={{
+              position: 'absolute',
+              right: 5,
+              top: 5,
+              width: 34,
+              height: 34,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              borderRadius: 10,
+              backgroundColor: 'var(--danger, #ef4444)',
+              color: 'white',
+              cursor: 'pointer',
+              transition: 'all 150ms ease',
+              opacity: 1,
+            }}
+          >
+            <Square size={12} fill="white" />
+          </button>
+        ) : (
+          <button
+            onClick={handleSend}
+            disabled={!hasDraft || disabled}
+            title={t('context.chat.send')}
+            style={{
+              position: 'absolute',
+              right: 5,
+              top: 5,
+              width: 34,
+              height: 34,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              borderRadius: 10,
+              backgroundColor: hasDraft ? 'var(--accent-color)' : 'transparent',
+              color: hasDraft ? 'white' : 'var(--text-muted)',
+              cursor: hasDraft ? 'pointer' : 'default',
+              transition: 'all 150ms ease',
+              opacity: hasDraft ? 1 : 0.5,
+            }}
+          >
+            <Send size={14} />
+          </button>
+        )}
       </div>
 
     </div>
   );
-}
+});

@@ -5,6 +5,7 @@ import type { AcquireAttempt } from '../../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
+import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
 
 export async function tryInstitutional(
   http: HttpClient,
@@ -24,30 +25,15 @@ export async function tryInstitutional(
 
     if (!validation.valid) {
       deleteFileIfExists(tempPath);
-      return {
-        source: 'institutional',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('institutional', 'failed', Date.now() - start, {
         failureReason: validation.reason ?? 'PDF validation failed',
-        httpStatus: null,
-      };
+        failureCategory: 'invalid_pdf',
+      });
     }
 
-    return {
-      source: 'institutional',
-      status: 'success',
-      durationMs: Date.now() - start,
-      failureReason: null,
-      httpStatus: 200,
-    };
+    return makeAttempt('institutional', 'success', Date.now() - start, { httpStatus: 200 });
   } catch (err) {
     deleteFileIfExists(tempPath);
-    return {
-      source: 'institutional',
-      status: 'failed',
-      durationMs: Date.now() - start,
-      failureReason: (err as Error).message,
-      httpStatus: null,
-    };
+    return makeFailedAttempt('institutional', start, err);
   }
 }

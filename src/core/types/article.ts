@@ -26,6 +26,13 @@ export type OutlineEntryStatus = (typeof OUTLINE_ENTRY_STATUSES)[number];
 
 // ═══ Article ═══
 
+export interface ArticleAuthor {
+  name: string;
+  affiliation?: string;
+  email?: string;
+  isCorresponding?: boolean;
+}
+
 export interface Article {
   id: ArticleId;
   title: string;
@@ -33,6 +40,10 @@ export interface Article {
   cslStyleId: string; // e.g. "apa", "chicago-author-date", "gb-7714-2015-numeric"
   outputLanguage: string; // BCP 47
   status: ArticleStatus;
+  abstract: string | null;
+  keywords: string[]; // JSON array in DB
+  authors: ArticleAuthor[]; // JSON array in DB
+  targetWordCount: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +53,8 @@ export interface Article {
 export interface OutlineEntry {
   id: OutlineEntryId;
   articleId: ArticleId;
+  parentId: OutlineEntryId | null;
+  depth: number;
   sortOrder: number;
   title: string;
   coreArgument: string | null;
@@ -53,11 +66,45 @@ export interface OutlineEntry {
 
 // ═══ SectionDraft ═══
 
+export type DraftSource = 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite';
+
 export interface SectionDraft {
   outlineEntryId: OutlineEntryId;
   version: number; // 从 1 开始单调递增
   content: string; // Markdown 格式
+  documentJson: string | null; // ProseMirror JSON (primary format)
   llmBackend: string; // e.g. "claude-opus"
+  source: DraftSource;
   editedParagraphs: number[]; // 研究者手动编辑的段落索引（从 0 开始）
+  createdAt: string;
+  /** Paper IDs cited in this section (populated by citation tracking). */
+  citedPaperIds?: string[] | undefined;
+}
+
+// ═══ Article Asset ═══
+
+export interface ArticleAsset {
+  id: string;
+  articleId: ArticleId;
+  fileName: string;
+  mimeType: string;
+  filePath: string;
+  fileSize: number;
+  caption: string | null;
+  altText: string | null;
+  createdAt: string;
+}
+
+// ═══ Cross-Reference Label ═══
+
+export type CrossRefType = 'figure' | 'table' | 'equation' | 'section';
+
+export interface CrossRefLabel {
+  id: string;
+  articleId: ArticleId;
+  label: string;
+  refType: CrossRefType;
+  sectionId: string | null;
+  displayNumber: string | null;
   createdAt: string;
 }

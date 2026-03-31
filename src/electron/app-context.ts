@@ -12,6 +12,7 @@ import type { Worker } from 'node:worker_threads';
 
 import type { AbyssalConfig } from '../core/types/config';
 import type { Logger } from '../core/infra/logger';
+import type { ConfigProvider } from '../core/infra/config-provider';
 import type { DbProxyInstance } from '../db-process/db-proxy';
 import type { BibliographyService } from '../core/bibliography';
 import type { SearchService } from '../core/search';
@@ -25,14 +26,13 @@ import type { ContextBudgetManager } from '../adapter/context-budget/context-bud
 import type { WorkflowRunner } from '../adapter/orchestrator/workflow-runner';
 import type { AgentLoop } from '../adapter/agent-loop/agent-loop';
 import type { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
+import type { CookieJar } from '../core/infra/cookie-jar';
 
 // ─── FrameworkState (re-export from canonical location) ───
 
-export {
-  type FrameworkState,
-  deriveFrameworkState,
-  effectiveMode,
-} from '../core/config/framework-state';
+import type { FrameworkState } from '../core/config/framework-state';
+import { deriveFrameworkState, effectiveMode } from '../core/config/framework-state';
+export { type FrameworkState, deriveFrameworkState, effectiveMode };
 
 // ─── WorkflowState (active workflow tracking) ───
 
@@ -58,6 +58,9 @@ export interface AppStats {
 
 export interface AppContext {
   // ── Configuration ──
+  /** Reactive config provider — use configProvider.config for latest values. */
+  configProvider: ConfigProvider;
+  /** Convenience getter — equivalent to configProvider.config. */
   config: AbyssalConfig;
   logger: Logger;
 
@@ -93,6 +96,9 @@ export interface AppContext {
   /** §6.3 阶段3: 概念变更后需要重新生成的综述草稿 conceptId 集合 */
   staleDrafts: Set<string>;
 
+  /** CookieJar for institutional access (china-institutional source) */
+  cookieJar: CookieJar | null;
+
   // ── Lifecycle flags ──
   isShuttingDown: boolean;
   startedAt: number; // Date.now() at startup
@@ -108,7 +114,7 @@ export interface AppContext {
 // ─── Factory ───
 
 export interface CreateAppContextOpts {
-  config: AbyssalConfig;
+  configProvider: ConfigProvider;
   logger: Logger;
   dbProxy: DbProxyInstance;
   lockHandle: LockHandle;
@@ -121,27 +127,6 @@ export interface CreateAppContextOpts {
 }
 
 /**
- * Derive FrameworkState from concept counts.
- *
- * See spec: section 1.2 Step 9 — Framework state derivation rules.
- */
-export function deriveFrameworkState(stats: {
-  total: number;
-  tentative: number;
-  working: number;
-  established: number;
-}): FrameworkState {
-  const { total, tentative, working, established } = stats;
-
-  if (total === 0) return 'zero_concepts';
-  if (total <= 3 && tentative === total) return 'early_exploration';
-  if (total <= 15 && working > tentative) return 'framework_forming';
-  if (total > 10 && established >= total * 0.5) return 'framework_mature';
-  if (total <= 15) return 'framework_forming';
-  return 'framework_mature';
-}
-
-/**
  * Create a fresh AppContext instance.
  *
  * Upper-layer adapters (llmClient, orchestrator, agentLoop, advisoryAgent)
@@ -149,8 +134,9 @@ export function deriveFrameworkState(stats: {
  */
 export function createAppContext(opts: CreateAppContextOpts): AppContext {
   const ctx: AppContext = {
-    // Configuration
-    config: opts.config,
+    // Configuration — config getter delegates to configProvider for always-fresh reads
+    configProvider: opts.configProvider,
+    get config() { return this.configProvider.config; },
     logger: opts.logger,
 
     // Core modules
@@ -176,6 +162,7 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
     lockHandle: opts.lockHandle,
     pushManager: null,
     staleDrafts: new Set(),
+    cookieJar: null,
 
     // Lifecycle
     isShuttingDown: false,
@@ -215,12 +202,11 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
       // }
 
       // §4.3: 触发 Advisory Agent 重新评估（异步，不阻塞）
-      // TODO — advisoryAgent.generateSuggestions() 待 AdvisoryAgent 接口完善后启用
-      // if (ctx.advisoryAgent) {
-      //   ctx.advisoryAgent.generateSuggestions().catch(err =>
-      //     ctx.logger.warn('Advisory Agent failed after state change', { error: err.message })
-      //   );
-      // }
+      if (ctx.advisoryAgent) {
+        ctx.advisoryAgent.generateSuggestions().catch((err: Error) =>
+          ctx.logger.warn('Advisory Agent failed after state change', { error: err.message })
+        );
+      }
     } catch (err) {
       ctx.logger.warn('Failed to refresh framework state', {
         error: (err as Error).message,

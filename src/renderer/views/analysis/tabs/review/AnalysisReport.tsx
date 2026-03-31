@@ -3,23 +3,25 @@
  * react-markdown + remark-gfm.
  *
  * Shows a placeholder when the report is null or empty.
- * TODO: paper.analysisReport data depends on backend analysis pipeline.
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import './analysis-report.css';
 
 interface AnalysisReportProps {
   report: string | null;
 }
 
 export function AnalysisReport({ report }: AnalysisReportProps) {
+  const { t } = useTranslation();
   if (!report) {
     return (
       <div
         style={{
-          padding: '20px 16px',
+          padding: 'var(--space-5) var(--space-4)',
           backgroundColor: 'var(--bg-surface-low)',
           borderRadius: 'var(--radius-sm)',
           color: 'var(--text-muted)',
@@ -27,23 +29,13 @@ export function AnalysisReport({ report }: AnalysisReportProps) {
           textAlign: 'center',
         }}
       >
-        No analysis report available yet.
+        {t('analysis.review.noReport')}
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        padding: '16px',
-        backgroundColor: 'var(--bg-surface-low)',
-        borderRadius: 'var(--radius-sm)',
-        fontSize: 'var(--text-sm)',
-        lineHeight: 1.6,
-        color: 'var(--text-primary)',
-        overflowWrap: 'break-word',
-      }}
-    >
+    <div className="analysis-report-content">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
     </div>
   );

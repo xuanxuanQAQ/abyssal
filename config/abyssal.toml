@@ -11,6 +11,19 @@ institutional_proxy = ""
 scihub = true
 max_retries = 3
 download_timeout = 30
+# 网络代理（支持 socks5:// / http:// / https://）
+# 启用后 Sci-Hub 和出版商直链走代理，解决 GFW 封锁问题
+# proxy_url = "socks5://127.0.0.1:7890"
+# proxy_mode = "blocked-only"        # all = 全部请求走代理; blocked-only = 仅封锁源
+
+# 中国高校机构访问（CARSI 联邦认证）
+china_institutional = false
+china_institution_id = ""            # zju / pku / tsinghua / fudan / sjtu / ust
+china_custom_idp_entity_id = ""      # 非预置大学时填写 IdP entityID
+
+# 中文数据库（需先通过 CARSI 登录获取 cookie）
+enable_cnki = true
+enable_wanfang = true
 
 [discovery]
 citation_depth = 2
@@ -23,7 +36,6 @@ include_key_references = true
 auto_map_concepts = true
 
 [rag]
-embedding_backend = "api"                    # api / local-onnx
 embedding_model = "text-embedding-3-small"
 embedding_dim = 1536
 chunk_overlap = 200
@@ -53,6 +65,11 @@ model = "claude-opus-4-20250901"
 [api_keys]
 semantic_scholar = ""
 unpaywall_email = ""
+web_search_api_key = "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"
+
+[web_search]
+enabled = true
+backend = "tavily"
 
 [workspace]
 base_dir = "workspace"

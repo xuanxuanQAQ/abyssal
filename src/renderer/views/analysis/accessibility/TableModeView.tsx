@@ -2,6 +2,9 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { useAppStore } from '../../../core/store';
 import type { HeatmapMatrix, HeatmapCell } from '../../../../shared-types/models';
 import type { AdjudicationStatus, RelationType } from '../../../../shared-types/enums';
+import { cellKey } from '../shared/cellKey';
+import { RELATION_BASE_RGB } from '../shared/relationTheme';
+import { ADJUDICATION_INDICATORS } from '../shared/adjudicationIndicators';
 
 // ═══ Types ═══
 
@@ -26,13 +29,10 @@ interface SortState {
 
 // ═══ Color mapping (mirrors canvas heatmap colors for DOM cells) ═══
 
-const BASE_COLORS: Record<RelationType, string> = {
-  supports: 'rgba(34,197,94',
-  challenges: 'rgba(239,68,68',
-  extends: 'rgba(99,102,241',
-  operationalizes: 'rgba(168,85,247',
-  irrelevant: 'rgba(156,163,175',
-};
+// Derive rgba base strings from shared RGB tuples
+const BASE_COLORS: Record<RelationType, string> = Object.fromEntries(
+  Object.entries(RELATION_BASE_RGB).map(([k, [r, g, b]]) => [k, `rgba(${r},${g},${b}`])
+) as Record<RelationType, string>;
 
 const RELATION_ABBREV: Record<RelationType, string> = {
   supports: 'S',
@@ -42,12 +42,9 @@ const RELATION_ABBREV: Record<RelationType, string> = {
   irrelevant: 'U',
 };
 
-const ADJUDICATION_INDICATOR: Record<AdjudicationStatus, string> = {
-  pending: '',
-  accepted: ' \u2713',
-  rejected: ' \u2717',
-  revised: ' \u270F',
-};
+const ADJUDICATION_INDICATOR: Record<AdjudicationStatus, string> = Object.fromEntries(
+  Object.entries(ADJUDICATION_INDICATORS).map(([k, v]) => [k, v.symbol ? ` ${v.symbol}` : ''])
+) as Record<AdjudicationStatus, string>;
 
 const MIN_OPACITY = 0.15;
 
@@ -194,7 +191,7 @@ function TableModeView({
   const cellMap = useMemo(() => {
     const map = new Map<string, HeatmapCell>();
     for (const cell of cells) {
-      map.set(`${cell.conceptIndex}:${cell.paperIndex}`, cell);
+      map.set(cellKey(cell.conceptIndex, cell.paperIndex), cell);
     }
     return map;
   }, [cells]);
@@ -218,8 +215,8 @@ function TableModeView({
       // Sort by confidence in a specific paper column
       const paperIdx = column;
       indices.sort((a, b) => {
-        const cellA = cellMap.get(`${a}:${paperIdx}`);
-        const cellB = cellMap.get(`${b}:${paperIdx}`);
+        const cellA = cellMap.get(cellKey(a, paperIdx));
+        const cellB = cellMap.get(cellKey(b, paperIdx));
         const confA = cellA?.confidence ?? -1;
         const confB = cellB?.confidence ?? -1;
         return dir * (confA - confB);
@@ -244,7 +241,7 @@ function TableModeView({
 
   const handleCellClick = useCallback(
     (conceptIndex: number, paperIndex: number) => {
-      const cell = cellMap.get(`${conceptIndex}:${paperIndex}`) ?? null;
+      const cell = cellMap.get(cellKey(conceptIndex, paperIndex)) ?? null;
       if (cell !== null) {
         selectMapping(cell.mappingId);
       }
@@ -341,7 +338,7 @@ function TableModeView({
                   </th>
 
                   {Array.from({ length: numPapers }, (_, colIdx) => {
-                    const cell = cellMap.get(`${rowIdx}:${colIdx}`);
+                    const cell = cellMap.get(cellKey(rowIdx, colIdx));
 
                     if (cell === undefined) {
                       return (

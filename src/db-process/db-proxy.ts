@@ -22,6 +22,8 @@ import type {
 import { isLifecycleResponse } from './protocol';
 import type { AsyncDbService } from '../core/types/db-service';
 
+export type DbHealthStatus = 'connected' | 'degraded' | 'disconnected';
+
 export interface DbProxyOptions {
   /** DB 子进程入口脚本路径 */
   dbProcessPath?: string;
@@ -29,6 +31,8 @@ export interface DbProxyOptions {
   nodePath?: string;
   /** RPC 调用超时（毫秒），默认 30000 */
   timeoutMs?: number;
+  /** Called after each health check with the current status */
+  onHealthStatus?: (status: DbHealthStatus) => void;
 }
 
 type PendingCall = {
@@ -90,6 +94,7 @@ export class DbProxy {
   private readonly dbProcessPath: string;
   private readonly nodePath: string;
   private readonly timeoutMs: number;
+  private readonly onHealthStatus: ((status: DbHealthStatus) => void) | undefined;
   private initPayload: DbInitPayload | null = null;
   private closed = false;
 
@@ -100,6 +105,7 @@ export class DbProxy {
       ?? process.env['ABYSSAL_NODE_PATH']
       ?? 'node';
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.onHealthStatus = options.onHealthStatus;
   }
 
   // ─── 子进程管理 ───
@@ -108,7 +114,11 @@ export class DbProxy {
     this.initPayload = payload;
     this.closed = false;
     await this.spawnChild();
-    await this.sendLifecycle('init', payload);
+    const resp = await this.sendLifecycle('init', payload);
+    if (!resp.success) {
+      throw new Error(`DB init failed: ${resp.error}`);
+    }
+    this.startHealthCheck();
   }
 
   private spawnChild(): Promise<void> {
@@ -123,6 +133,14 @@ export class DbProxy {
         stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
         env: { ...process.env },
       });
+
+      // Forward subprocess stderr to main process for debugging
+      if (this.child.stderr) {
+        this.child.stderr.on('data', (data: Buffer) => {
+          const text = data.toString().trim();
+          if (text) console.error(`[db-subprocess] ${text}`);
+        });
+      }
 
       const onFirstMessage = (msg: unknown) => {
         const resp = msg as DbLifecycleResponse;
@@ -260,6 +278,7 @@ export class DbProxy {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.stopHealthCheck();
     if (!this.child) return;
 
     try {
@@ -271,6 +290,58 @@ export class DbProxy {
     if (this.child) {
       this.child.kill('SIGTERM');
       this.child = null;
+    }
+  }
+
+  // ─── Health check (ping/pong) ───
+
+  private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private consecutiveFailures = 0;
+  private static readonly HEALTH_CHECK_INTERVAL = 30_000; // 30s
+  private static readonly MAX_CONSECUTIVE_FAILURES = 3;
+
+  /** Start periodic health checks. Call after start(). */
+  private startHealthCheck(): void {
+    this.stopHealthCheck();
+    this.consecutiveFailures = 0;
+    this.healthCheckTimer = setInterval(() => {
+      void this.ping();
+    }, DbProxy.HEALTH_CHECK_INTERVAL);
+    if (this.healthCheckTimer.unref) this.healthCheckTimer.unref();
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
+  }
+
+  /** Send a lightweight ping to verify subprocess is responsive. */
+  private async ping(): Promise<void> {
+    if (this.closed || !this.child) {
+      this.onHealthStatus?.('disconnected');
+      return;
+    }
+    try {
+      // Use getStats() as a lightweight health probe
+      await this.call('getStats');
+      this.consecutiveFailures = 0;
+      this.onHealthStatus?.(this.consecutiveFailures === 0 ? 'connected' : 'degraded');
+    } catch {
+      this.consecutiveFailures++;
+      const status: DbHealthStatus =
+        this.consecutiveFailures >= DbProxy.MAX_CONSECUTIVE_FAILURES ? 'disconnected' : 'degraded';
+      this.onHealthStatus?.(status);
+      if (this.consecutiveFailures >= DbProxy.MAX_CONSECUTIVE_FAILURES) {
+        // Force restart — subprocess is unresponsive
+        this.consecutiveFailures = 0;
+        if (this.child) {
+          this.child.kill('SIGKILL');
+          this.child = null;
+          // handleChildCrash will trigger auto-restart
+        }
+      }
     }
   }
 

@@ -68,7 +68,9 @@ export const PaperRow = memo(
                 : 'transparent',
             borderLeft: isFocused
               ? '3px solid var(--accent-color)'
-              : '3px solid transparent',
+              : isSelected
+                ? '3px solid color-mix(in srgb, var(--accent-color) 45%, transparent)'
+                : '3px solid transparent',
             cursor: 'default',
             userSelect: 'none',
           }}

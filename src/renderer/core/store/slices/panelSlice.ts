@@ -30,7 +30,6 @@ export interface PanelSlice {
 
   // ── §2.4 钉住/偷看机制 ──
   pinnedSource: ContextSource | null;
-  pinnedChatSessionId: string | null;
   peekSource: ContextSource | null;
 
   // ── §3.5 AI 主动提示 ──
@@ -55,7 +54,7 @@ export interface PanelSlice {
   setContextPanelLastSize: (size: number) => void;
 
   /** §2.4 钉住/取消钉住 */
-  pinContextPanel: (source: ContextSource, chatSessionId: string | null) => void;
+  pinContextPanel: (source: ContextSource) => void;
   unpinContextPanel: () => void;
   toggleContextPanelPinned: () => void;
 
@@ -89,7 +88,6 @@ export const createPanelSlice: StateCreator<
 
   // ── 钉住/偷看 ──
   pinnedSource: null,
-  pinnedChatSessionId: null,
   peekSource: null,
 
   // ── ProactiveTips ──
@@ -135,11 +133,10 @@ export const createPanelSlice: StateCreator<
       state.contextPanelLastSize = size;
     }),
 
-  pinContextPanel: (source, chatSessionId) =>
+  pinContextPanel: (source: ContextSource) =>
     set((state) => {
       state.contextPanelPinned = true;
       state.pinnedSource = source;
-      state.pinnedChatSessionId = chatSessionId;
       state.peekSource = null;
     }),
 
@@ -147,7 +144,6 @@ export const createPanelSlice: StateCreator<
     set((state) => {
       state.contextPanelPinned = false;
       state.pinnedSource = null;
-      // pinnedChatSessionId 保留为历史记录
       state.peekSource = null;
     }),
 

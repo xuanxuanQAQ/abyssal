@@ -43,13 +43,13 @@ export interface ArticleServices {
   dbProxy: {
     getMemosByEntity: (type: string, id: string) => Promise<Array<Record<string, unknown>>>;
     getPaper: (id: unknown) => Promise<Record<string, unknown> | null>;
-    getOutlineEntry?: (id: string) => Promise<Record<string, unknown> | null>;
-    getArticle?: (id: string) => Promise<Record<string, unknown> | null>;
-    getOutline?: (articleId: string) => Promise<Array<Record<string, unknown>>>;
-    getSectionDrafts?: (outlineEntryId: string) => Promise<Array<Record<string, unknown>>>;
-    addSectionDraft?: (outlineEntryId: string, content: string, llmBackend: string) => Promise<number>;
-    markEditedParagraphs?: (outlineEntryId: string, version: number, indices: number[]) => Promise<void>;
-    updateOutlineEntry?: (id: string, updates: Record<string, unknown>) => Promise<void>;
+    getOutlineEntry: (id: string) => Promise<Record<string, unknown> | null>;
+    getArticle: (id: string) => Promise<Record<string, unknown> | null>;
+    getOutline: (articleId: string) => Promise<Array<Record<string, unknown>>>;
+    getSectionDrafts: (outlineEntryId: string) => Promise<Array<Record<string, unknown>>>;
+    addSectionDraft: (outlineEntryId: string, content: string, llmBackend: string) => Promise<number>;
+    markEditedParagraphs: (outlineEntryId: string, version: number, indices: number[]) => Promise<void>;
+    updateOutlineEntry: (id: string, updates: Record<string, unknown>) => Promise<void>;
   };
   llmClient: LlmClient;
   contextBudgetManager: ContextBudgetManager;
@@ -73,12 +73,6 @@ export function createArticleWorkflow(services: ArticleServices) {
       return;
     }
 
-    if (!dbProxy.getOutlineEntry || !dbProxy.getArticle || !dbProxy.getOutline) {
-      logger.warn('Article workflow: outline DAO methods not wired');
-      // TODO: Wire outline/section DAO methods for Electron and CLI
-      return;
-    }
-
     runner.setTotal(1);
     runner.reportProgress({ currentItem: outlineEntryId, currentStage: 'reading_outline' });
 
@@ -99,11 +93,11 @@ async function generateSection(
   const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath } = services;
 
   // ══ Step 1: Outline context read (§3.2) ══
-  const entry = await dbProxy.getOutlineEntry!(outlineEntryId);
+  const entry = await dbProxy.getOutlineEntry(outlineEntryId);
   if (!entry) throw new Error(`Outline entry not found: ${outlineEntryId}`);
 
   const articleId = entry['articleId'] as string ?? entry['article_id'] as string;
-  const article = await dbProxy.getArticle!(articleId);
+  const article = await dbProxy.getArticle(articleId);
   if (!article) throw new Error(`Article not found: ${articleId}`);
 
   const current = {
@@ -115,7 +109,7 @@ async function generateSection(
     seq: (entry['sortOrder'] as number ?? entry['sort_order'] as number) ?? 0,
   };
 
-  const allOutlineEntries = await dbProxy.getOutline!(articleId);
+  const allOutlineEntries = await dbProxy.getOutline(articleId);
 
   // Preceding sections (completed)
   const precedingSections = allOutlineEntries
@@ -131,13 +125,10 @@ async function generateSection(
   for (const ps of precedingSections) {
     const psId = (ps['id'] as string);
     let content = '';
-    if (dbProxy.getSectionDrafts) {
-      const drafts = await dbProxy.getSectionDrafts(psId);
-      if (drafts.length > 0) {
-        // Latest version
-        const latest = drafts.sort((a, b) => (b['version'] as number) - (a['version'] as number))[0]!;
-        content = (latest['content'] as string) ?? '';
-      }
+    const drafts = await dbProxy.getSectionDrafts(psId);
+    if (drafts.length > 0) {
+      const latest = drafts.sort((a, b) => (b['version'] as number) - (a['version'] as number))[0]!;
+      content = (latest['content'] as string) ?? '';
     }
     precedingWithContent.push({
       title: (ps['title'] as string) ?? '',
@@ -160,7 +151,7 @@ async function generateSection(
   // Load current draft (for rewrite/protection)
   let currentDraftContent = '';
   let editedParagraphs: number[] = [];
-  if (dbProxy.getSectionDrafts) {
+  {
     const drafts = await dbProxy.getSectionDrafts(outlineEntryId);
     if (drafts.length > 0) {
       const latest = drafts.sort((a, b) => (b['version'] as number) - (a['version'] as number))[0]!;
@@ -361,20 +352,13 @@ async function generateSection(
   // QualityReport is persisted alongside the draft for UI display
 
   // ══ Step 12: Section draft write (version + 1) ══
-  if (dbProxy.addSectionDraft) {
-    const version = await dbProxy.addSectionDraft(outlineEntryId, finalContent, result.model);
+  const version = await dbProxy.addSectionDraft(outlineEntryId, finalContent, result.model);
 
-    // Reset editedParagraphs for new AI-generated version
-    // (restored paragraphs keep their indices)
-    const newEditedParagraphs = resetForNewVersion(restoredIndices.length > 0 ? restoredIndices : undefined);
-    if (dbProxy.markEditedParagraphs && newEditedParagraphs.length > 0) {
-      await dbProxy.markEditedParagraphs(outlineEntryId, version, newEditedParagraphs);
-    }
-  } else {
-    // Fallback: write to file
-    const articlesDir = path.join(workspacePath, 'articles');
-    fs.mkdirSync(articlesDir, { recursive: true });
-    fs.writeFileSync(path.join(articlesDir, `${outlineEntryId}.md`), finalContent, 'utf-8');
+  // Reset editedParagraphs for new AI-generated version
+  // (restored paragraphs keep their indices)
+  const newEditedParagraphs = resetForNewVersion(restoredIndices.length > 0 ? restoredIndices : undefined);
+  if (newEditedParagraphs.length > 0) {
+    await dbProxy.markEditedParagraphs(outlineEntryId, version, newEditedParagraphs);
   }
 
   // Write quality report
@@ -389,9 +373,7 @@ async function generateSection(
   }
 
   // ══ Step 13: Outline status update ══
-  if (dbProxy.updateOutlineEntry) {
-    await dbProxy.updateOutlineEntry(outlineEntryId, { status: 'drafted' });
-  }
+  await dbProxy.updateOutlineEntry(outlineEntryId, { status: 'drafted' });
 
   // ══ Step 14: Preceding section summary (§3.6) ══
   // Summary is generated deterministically when needed by the next section.

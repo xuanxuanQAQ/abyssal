@@ -8,6 +8,7 @@
  */
 
 import React, { useReducer, useCallback, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, Merge, AlertTriangle, Search, Check, ChevronRight, ChevronLeft } from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
@@ -128,21 +129,17 @@ function reducer(state: MergeState, action: MergeAction): MergeState {
 
 // ── Helpers ──
 
-const MATURITY_LABELS: Record<Maturity, string> = {
-  tentative: '试探性',
-  working: '工作中',
-  established: '已确立',
+const MATURITY_I18N_KEYS: Record<Maturity, string> = {
+  tentative: 'analysis.merge.maturityLabels.tentative',
+  working: 'analysis.merge.maturityLabels.working',
+  established: 'analysis.merge.maturityLabels.established',
 };
 
-function formatMaturity(m: Maturity): string {
-  return MATURITY_LABELS[m] ?? m;
-}
-
-const STEP_LABELS: Record<Step, string> = {
-  1: '选择保留方',
-  2: '解决冲突',
-  3: '关键词合并',
-  4: '确认执行',
+const STEP_I18N_KEYS: Record<Step, string> = {
+  1: 'analysis.merge.steps.selectTarget',
+  2: 'analysis.merge.steps.resolveConflicts',
+  3: 'analysis.merge.steps.mergeKeywords',
+  4: 'analysis.merge.steps.confirm',
 };
 
 // ── Component ──
@@ -152,7 +149,11 @@ export function ConceptMergeDialog({
   onOpenChange,
   sourceConceptId,
 }: ConceptMergeDialogProps) {
+  const { t } = useTranslation();
   const [state, dispatch] = useReducer(reducer, initialState);
+  const mountedRef = React.useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const { data: conceptListData } = useConceptList();
   const concepts: Concept[] = conceptListData ?? [];
 
@@ -200,6 +201,10 @@ export function ConceptMergeDialog({
 
   const goToStep2 = useCallback(async () => {
     if (!state.retainId || !sourceConceptId) return;
+    if (state.retainId === sourceConceptId) {
+      dispatch({ type: 'SET_ERROR', error: t('analysis.merge.cannotMergeSelf', { defaultValue: 'Cannot merge a concept with itself.' }) });
+      return;
+    }
     dispatch({ type: 'SET_LOADING', loading: true });
     dispatch({ type: 'SET_ERROR', error: null });
 
@@ -264,7 +269,7 @@ export function ConceptMergeDialog({
         error: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      dispatch({ type: 'SET_LOADING', loading: false });
+      if (mountedRef.current) dispatch({ type: 'SET_LOADING', loading: false });
     }
   }, [state.retainId, sourceConceptId]);
 
@@ -329,7 +334,7 @@ export function ConceptMergeDialog({
           {/* Header */}
           <Dialog.Title style={titleStyle}>
             <Merge size={16} />
-            合并概念
+            {t('analysis.merge.title')}
           </Dialog.Title>
 
           {/* Step indicator */}
@@ -356,7 +361,7 @@ export function ConceptMergeDialog({
                 >
                   {s < state.step ? <Check size={10} /> : s}
                 </div>
-                <span style={stepLabelStyle}>{STEP_LABELS[s]}</span>
+                <span style={stepLabelStyle}>{t(STEP_I18N_KEYS[s])}</span>
               </div>
             ))}
           </div>
@@ -372,7 +377,7 @@ export function ConceptMergeDialog({
           {state.step === 1 && (
             <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                当前概念 <strong>{sourceConcept.name}</strong> 为被合并方。请选择要保留的目标概念（保留方）。
+                {t('analysis.merge.source')}: <strong>{sourceConcept.name}</strong>
               </p>
 
               {/* Search input */}
@@ -380,7 +385,7 @@ export function ConceptMergeDialog({
                 <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
                 <input
                   type="text"
-                  placeholder="搜索概念名称或关键词..."
+                  placeholder={t('analysis.merge.searchPlaceholder')}
                   value={state.searchQuery}
                   onChange={(e) =>
                     dispatch({ type: 'SET_SEARCH_QUERY', query: e.target.value })
@@ -412,30 +417,30 @@ export function ConceptMergeDialog({
                       {c.name}
                     </div>
                     <div style={conceptOptionMetaStyle}>
-                      {formatMaturity(c.maturity)} · {c.keywords.length} 关键词
+                      {t(MATURITY_I18N_KEYS[c.maturity])} · {t('analysis.merge.keywordCount', { count: c.keywords.length })}
                     </div>
                   </button>
                 ))}
                 {filteredConcepts.length === 0 && (
-                  <div style={emptyHintStyle}>无匹配概念</div>
+                  <div style={emptyHintStyle}>{t('analysis.merge.noMatch')}</div>
                 )}
               </div>
 
               {/* Comparison cards */}
               {retainConcept && (
                 <div style={comparisonContainerStyle}>
-                  <ComparisonCard label="被合并方" concept={sourceConcept} variant="danger" />
+                  <ComparisonCard label={t('analysis.merge.source')} concept={sourceConcept} variant="danger" formatMaturity={(m) => t(MATURITY_I18N_KEYS[m])} t={t} />
                   <div style={arrowStyle}>
                     <ChevronRight size={20} />
                   </div>
-                  <ComparisonCard label="保留方" concept={retainConcept} variant="accent" />
+                  <ComparisonCard label={t('analysis.merge.target')} concept={retainConcept} variant="accent" formatMaturity={(m) => t(MATURITY_I18N_KEYS[m])} t={t} />
                 </div>
               )}
 
               <div style={buttonRowStyle}>
                 <Dialog.Close asChild>
                   <button type="button" style={secondaryButtonStyle}>
-                    取消
+                    {t('common.cancel')}
                   </button>
                 </Dialog.Close>
                 <button
@@ -444,7 +449,7 @@ export function ConceptMergeDialog({
                   disabled={!state.retainId || state.loading}
                   onClick={goToStep2}
                 >
-                  {state.loading ? '检测冲突中...' : '下一步'}
+                  {state.loading ? t('analysis.merge.checkingConflicts') : t('common.next')}
                   {!state.loading && <ChevronRight size={14} />}
                 </button>
               </div>
@@ -455,7 +460,7 @@ export function ConceptMergeDialog({
           {state.step === 2 && (
             <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                以下论文同时映射到两个概念，请选择每条冲突的处理方式:
+                {t('analysis.merge.conflictInstruction')}
               </p>
 
               <div style={conflictListStyle}>
@@ -464,27 +469,25 @@ export function ConceptMergeDialog({
                     <div style={conflictTitleStyle}>{conflict.paperTitle}</div>
                     <div style={conflictComparisonStyle}>
                       <div style={conflictSideStyle}>
-                        <span style={conflictSideLabelStyle}>被合并方映射</span>
+                        <span style={conflictSideLabelStyle}>{t('analysis.merge.sourceMapping')}</span>
                         <span style={conflictDetailStyle}>
-                          {conflict.sourceMapping.relationType} · 置信度{' '}
-                          {conflict.sourceMapping.confidence.toFixed(2)}
+                          {conflict.sourceMapping.relationType} · {t('analysis.review.confidence', { value: conflict.sourceMapping.confidence.toFixed(2) })}
                         </span>
                       </div>
                       <div style={conflictSideStyle}>
-                        <span style={conflictSideLabelStyle}>保留方映射</span>
+                        <span style={conflictSideLabelStyle}>{t('analysis.merge.targetMapping')}</span>
                         <span style={conflictDetailStyle}>
-                          {conflict.targetMapping.relationType} · 置信度{' '}
-                          {conflict.targetMapping.confidence.toFixed(2)}
+                          {conflict.targetMapping.relationType} · {t('analysis.review.confidence', { value: conflict.targetMapping.confidence.toFixed(2) })}
                         </span>
                       </div>
                     </div>
                     <div style={conflictActionsStyle}>
                       {(
                         [
-                          ['keep_retain', '保留方'],
-                          ['keep_merge', '被合并方'],
-                          ['merge_confidence', '合并置信度'],
-                        ] as const
+                          ['keep_retain', t('analysis.merge.target')],
+                          ['keep_merge', t('analysis.merge.source')],
+                          ['merge_confidence', t('analysis.merge.mergeConfidence')],
+                        ] as Array<['keep_retain' | 'keep_merge' | 'merge_confidence', string]>
                       ).map(([action, label]) => (
                         <button
                           key={action}
@@ -516,10 +519,10 @@ export function ConceptMergeDialog({
                   style={secondaryButtonStyle}
                   onClick={() => dispatch({ type: 'SET_STEP', step: 1 })}
                 >
-                  <ChevronLeft size={14} /> 返回
+                  <ChevronLeft size={14} /> {t('common.back')}
                 </button>
                 <button type="button" style={primaryButtonStyle} onClick={goToStep3}>
-                  下一步 <ChevronRight size={14} />
+                  {t('common.next')} <ChevronRight size={14} />
                 </button>
               </div>
             </div>
@@ -529,7 +532,7 @@ export function ConceptMergeDialog({
           {state.step === 3 && (
             <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                以下是合并后的关键词列表（两方关键词的并集）。点击关键词可将其移除。
+                {t('analysis.merge.keywordInstruction')}
               </p>
 
               <div style={keywordsContainerStyle}>
@@ -560,12 +563,12 @@ export function ConceptMergeDialog({
                   );
                 })}
                 {state.mergedKeywords.length === 0 && (
-                  <div style={emptyHintStyle}>两个概念均无关键词</div>
+                  <div style={emptyHintStyle}>{t('analysis.merge.noKeywords')}</div>
                 )}
               </div>
 
               <div style={mergeStatStyle}>
-                保留 {finalKeywords.length} / {state.mergedKeywords.length} 个关键词
+                {t('analysis.merge.keywordKeepCount', { kept: finalKeywords.length, total: state.mergedKeywords.length })}
               </div>
 
               <div style={buttonRowStyle}>
@@ -579,10 +582,10 @@ export function ConceptMergeDialog({
                     })
                   }
                 >
-                  <ChevronLeft size={14} /> 返回
+                  <ChevronLeft size={14} /> {t('common.back')}
                 </button>
                 <button type="button" style={primaryButtonStyle} onClick={goToStep4}>
-                  下一步 <ChevronRight size={14} />
+                  {t('common.next')} <ChevronRight size={14} />
                 </button>
               </div>
             </div>
@@ -591,34 +594,34 @@ export function ConceptMergeDialog({
           {/* ── Step 4: Confirm ── */}
           {state.step === 4 && (
             <div style={stepBodyStyle}>
-              <p style={descriptionStyle}>请确认以下合并操作:</p>
+              <p style={descriptionStyle}>{t('analysis.merge.confirmInstruction')}</p>
 
               <div style={summaryContainerStyle}>
                 <div style={summaryRowStyle}>
-                  <span style={summaryLabelStyle}>被合并概念（将删除）</span>
+                  <span style={summaryLabelStyle}>{t('analysis.merge.sourceWillDelete')}</span>
                   <span style={summaryValueDangerStyle}>{sourceConcept.name}</span>
                 </div>
                 <div style={summaryRowStyle}>
-                  <span style={summaryLabelStyle}>保留概念</span>
+                  <span style={summaryLabelStyle}>{t('analysis.merge.target')}</span>
                   <span style={summaryValueStyle}>{retainConcept?.name ?? '—'}</span>
                 </div>
                 <div style={summaryRowStyle}>
-                  <span style={summaryLabelStyle}>冲突映射</span>
+                  <span style={summaryLabelStyle}>{t('analysis.merge.conflictMappings')}</span>
                   <span style={summaryValueStyle}>
                     {state.conflicts.length > 0
-                      ? `${state.conflicts.length} 条已解决`
-                      : '无冲突'}
+                      ? t('analysis.merge.conflictsResolved', { count: state.conflicts.length })
+                      : t('analysis.merge.noConflicts')}
                   </span>
                 </div>
                 <div style={summaryRowStyle}>
-                  <span style={summaryLabelStyle}>合并后关键词</span>
-                  <span style={summaryValueStyle}>{finalKeywords.length} 个</span>
+                  <span style={summaryLabelStyle}>{t('analysis.merge.mergedKeywords')}</span>
+                  <span style={summaryValueStyle}>{t('analysis.merge.keywordCount', { count: finalKeywords.length })}</span>
                 </div>
               </div>
 
               <div style={warningBannerStyle}>
                 <AlertTriangle size={14} />
-                此操作不可撤销。被合并概念的所有映射将迁移到保留概念。
+                {t('analysis.merge.irreversible')}
               </div>
 
               <div style={buttonRowStyle}>
@@ -627,7 +630,7 @@ export function ConceptMergeDialog({
                   style={secondaryButtonStyle}
                   onClick={() => dispatch({ type: 'SET_STEP', step: 3 })}
                 >
-                  <ChevronLeft size={14} /> 返回
+                  <ChevronLeft size={14} /> {t('common.back')}
                 </button>
                 <button
                   type="button"
@@ -635,7 +638,7 @@ export function ConceptMergeDialog({
                   disabled={state.loading}
                   onClick={executeMerge}
                 >
-                  {state.loading ? '合并中...' : '确认合并'}
+                  {state.loading ? t('analysis.merge.merging') : t('analysis.merge.confirmMerge')}
                 </button>
               </div>
             </div>
@@ -659,10 +662,14 @@ function ComparisonCard({
   label,
   concept,
   variant,
+  formatMaturity,
+  t,
 }: {
   label: string;
   concept: Concept;
   variant: 'accent' | 'danger';
+  formatMaturity: (m: Maturity) => string;
+  t: (key: string) => string;
 }) {
   const borderColor =
     variant === 'accent' ? 'var(--accent-color)' : 'var(--danger, #e53e3e)';
@@ -672,20 +679,20 @@ function ComparisonCard({
       <div style={comparisonCardLabelStyle}>{label}</div>
       <div style={comparisonCardNameStyle}>{concept.name}</div>
       <div style={comparisonCardRowStyle}>
-        <span style={comparisonCardFieldStyle}>定义</span>
+        <span style={comparisonCardFieldStyle}>{t('analysis.concepts.definition')}</span>
         <span style={comparisonCardValueStyle}>
           {concept.description.slice(0, 60)}
           {concept.description.length > 60 ? '...' : ''}
         </span>
       </div>
       <div style={comparisonCardRowStyle}>
-        <span style={comparisonCardFieldStyle}>关键词</span>
+        <span style={comparisonCardFieldStyle}>{t('analysis.concepts.keywords')}</span>
         <span style={comparisonCardValueStyle}>
           {concept.keywords.length > 0 ? concept.keywords.join(', ') : '—'}
         </span>
       </div>
       <div style={comparisonCardRowStyle}>
-        <span style={comparisonCardFieldStyle}>成熟度</span>
+        <span style={comparisonCardFieldStyle}>{t('analysis.concepts.maturity')}</span>
         <span style={comparisonCardValueStyle}>{formatMaturity(concept.maturity)}</span>
       </div>
     </div>

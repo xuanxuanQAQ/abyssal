@@ -82,9 +82,17 @@ function mergeAdjacentChunks(chunks: RankedChunk[]): MergedGroup[] {
   if (chunks.length === 0) return [];
 
   // 按 positionRatio 排序（论文原文顺序）
-  const sorted = [...chunks].sort(
-    (a, b) => (a.positionRatio ?? 0) - (b.positionRatio ?? 0),
-  );
+  // Fix: null positionRatio 排到末尾（非 paper 类型的 chunk），而非排到最前
+  const sorted = [...chunks].sort((a, b) => {
+    const aRatio = a.positionRatio ?? 1;
+    const bRatio = b.positionRatio ?? 1;
+    if (aRatio !== bRatio) return aRatio - bRatio;
+    // Tiebreaker: chunkIndex → chunkId 字典序
+    if (a.chunkIndex != null && b.chunkIndex != null && a.chunkIndex !== b.chunkIndex) {
+      return a.chunkIndex - b.chunkIndex;
+    }
+    return a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0;
+  });
 
   const groups: MergedGroup[] = [];
   let current: RankedChunk[] = [sorted[0]!];
@@ -202,32 +210,92 @@ export function assembleContext(
   mergedPaperGroups.sort((a, b) => b.maxScore - a.maxScore);
 
   // §5.6: Token 预算裁剪
-  // 先计算强制保留区域的 token
+  // Fix #3: 动态计算元数据头 overhead（不同 source 产出长度不同）
+  const estimateMetadataOverhead = (c: RankedChunk): number => {
+    // memo/annotation/note/private 头较短 (~20 tokens)，paper 头较长 (~50 tokens)
+    if (c.source === 'memo' || c.source === 'note') return 20;
+    if (c.source === 'annotation' || c.source === 'private') return 25;
+    // paper/figure 含 title + section + pages
+    let overhead = 30;
+    if (c.sectionTitle) overhead += 10;
+    if (c.pageStart != null) overhead += 10;
+    return overhead;
+  };
+
+  // Fix: 不从 maxTokens 中扣除 forced chunks 预算。
+  // adapter 层的 BudgetAllocation 已将 researcher_memos/annotations 作为 ABSOLUTE 源
+  // 单独预扣（sourceAllocations），传入的 maxTokens 已是非 ABSOLUTE 源（rag_passages 等）的预算。
+  // 此处仅统计 forced tokens 用于日志/诊断，不影响 remainingBudget。
   const forcedTokens = [...memoChunks, ...annotationChunks].reduce(
-    (s, c) => s + c.tokenCount,
+    (s, c) => s + c.tokenCount + estimateMetadataOverhead(c),
     0,
   );
-  let remainingBudget = maxTokens - forcedTokens;
+  let remainingBudget = maxTokens;
 
   // 按优先级填充主检索区域
   const includedChunks: RankedChunk[] = [];
 
-  // 论文分组
+  // ── 多样性保障：每篇论文至少 1 个代表 chunk（防止高分论文垄断 context window） ──
+  // Phase 1: 每个 paper group 选入最高分的 1 个 group
+  const contextOverhead = budgetMode !== 'focused' ? 30 : 0; // ~30 tokens for context labels
+
+  const computeGroupCost = (group: MergedGroup): number => {
+    const groupMetaOverhead = group.chunks.reduce((s, c) => s + estimateMetadataOverhead(c), 0);
+    return group.totalTokens
+      + groupMetaOverhead
+      + (group.contextBefore ? contextOverhead : 0)
+      + (group.contextAfter ? contextOverhead : 0);
+  };
+
+  // 允许 group 在轻微超标（≤ 20%）时保持完整性——adapter 层有 safetyMargin 缓冲
+  const COHERENCE_OVERFLOW_RATIO = 1.2;
+
+  const diversitySeeded = new Set<string>(); // 已放入代表 chunk 的 paperId
+  for (const pg of mergedPaperGroups) {
+    const bestGroup = pg.groups[0]; // groups 内已按 positionRatio 排列，取第一组最相关
+    if (!bestGroup) continue;
+    const cost = computeGroupCost(bestGroup);
+    if (cost <= remainingBudget) {
+      includedChunks.push(...bestGroup.chunks);
+      remainingBudget -= cost;
+      diversitySeeded.add(pg.paperId);
+    }
+  }
+
+  // Phase 2: 剩余预算填入各 paper group 的其余 groups
   for (const pg of mergedPaperGroups) {
     for (const group of pg.groups) {
-      if (group.totalTokens <= remainingBudget) {
+      // 已在 Phase 1 放入的 group 跳过
+      if (diversitySeeded.has(pg.paperId) && group === pg.groups[0]) continue;
+
+      const groupCost = computeGroupCost(group);
+      if (groupCost <= remainingBudget) {
         includedChunks.push(...group.chunks);
-        remainingBudget -= group.totalTokens;
+        remainingBudget -= groupCost;
+      } else if (groupCost <= remainingBudget * COHERENCE_OVERFLOW_RATIO && remainingBudget > 0) {
+        // 轻微超标但保持段落完整性
+        includedChunks.push(...group.chunks);
+        remainingBudget -= groupCost;
+      } else if (group.chunks.length > 1 && remainingBudget > 0) {
+        // 最后手段：组内按 score 降序逐个塞入
+        const sortedChunks = [...group.chunks].sort((a, b) => b.score - a.score);
+        for (const chunk of sortedChunks) {
+          const chunkCost = chunk.tokenCount + estimateMetadataOverhead(chunk);
+          if (chunkCost <= remainingBudget) {
+            includedChunks.push(chunk);
+            remainingBudget -= chunkCost;
+          }
+        }
       }
-      // 预算不足则跳过此组
     }
   }
 
   // 其他 chunk（private / note）
   for (const chunk of otherChunks.sort((a, b) => b.score - a.score)) {
-    if (chunk.tokenCount <= remainingBudget) {
+    const chunkCost = chunk.tokenCount + estimateMetadataOverhead(chunk);
+    if (chunkCost <= remainingBudget) {
       includedChunks.push(chunk);
-      remainingBudget -= chunk.tokenCount;
+      remainingBudget -= chunkCost;
     }
   }
 

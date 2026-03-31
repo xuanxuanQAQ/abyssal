@@ -10,11 +10,8 @@ import { CslFormatError } from '../types/errors';
 import { resolveLocale } from './csl-manager';
 
 // ─── §4.3.2 姓氏介词（non-dropping-particle） ───
-
-const SURNAME_PREFIXES = new Set([
-  'van', 'von', 'de', 'du', 'di', 'del', 'della', 'dos', 'das',
-  'den', 'der', 'el', 'al', 'la', 'le',
-]);
+// Fix #21: 统一使用 author-name.ts 中的 SURNAME_PREFIXES
+import { SURNAME_PREFIXES } from '../search/author-name';
 
 // ─── §4.3.3 PaperType → CSL type ───
 
@@ -96,7 +93,12 @@ function paperToCslJson(paper: PaperMetadata): CslJsonItem {
     item.issued = { 'date-parts': [[paper.year]] };
   }
 
-  const container = paper.paperType === 'chapter' ? paper.bookTitle : paper.journal;
+  // Fix #10/#11: conference 类型优先使用 venue，再 fallback 到 journal
+  const container = paper.paperType === 'chapter'
+    ? paper.bookTitle
+    : paper.paperType === 'conference'
+      ? (paper.venue ?? paper.journal)
+      : paper.journal;
   if (container) item['container-title'] = container;
   if (paper.volume) item.volume = paper.volume;
   if (paper.issue) item.issue = paper.issue;
@@ -141,6 +143,7 @@ export class CslEngine {
   private readonly styleXml: string;
   private readonly localePath: string;
   private readonly defaultLocale: string;
+  private readonly styleId: string;
 
   constructor(stylePath: string, localePath: string, defaultLocale: string = 'en-US') {
     try {
@@ -153,6 +156,8 @@ export class CslEngine {
     }
     this.localePath = localePath;
     this.defaultLocale = defaultLocale;
+    // Fix #8: 从文件名提取 styleId
+    this.styleId = path.basename(stylePath, '.csl');
   }
 
   /** 懒加载 citeproc-js 引擎 */
@@ -220,21 +225,49 @@ export class CslEngine {
         inlineCitation = `(${metadata.authors[0]?.split(',')[0] ?? 'Unknown'}, ${metadata.year})`;
       }
 
+      // Fix #9: 检查必填字段缺失
+      const requiredFields = this.getRequiredFields(metadata.paperType);
+      const missingFieldWarnings: string[] = [];
+      for (const field of requiredFields) {
+        const val = (metadata as unknown as Record<string, unknown>)[field];
+        if (val === null || val === undefined || (typeof val === 'string' && !val.trim()) ||
+            (Array.isArray(val) && val.length === 0)) {
+          missingFieldWarnings.push(field);
+        }
+      }
+
       results.push({
         paperId,
         inlineCitation,
         fullEntry: '', // 下方由 makeBibliography 填充
-        cslStyleId: '',
-        missingFieldWarnings: [],
+        cslStyleId: this.styleId, // Fix #8
+        missingFieldWarnings,
       });
     }
 
-    // 生成参考文献条目
+    // Fix #6: 生成参考文献条目，通过 paperId 匹配而非索引位置
     try {
       const bib = engine.makeBibliography();
+      // bib[0] 包含 entry_ids 数组，bib[1] 包含对应的格式化字符串
+      const bibMeta = bib[0] as { entry_ids?: string[][] } | null;
       const entries = bib[1] ?? [];
-      for (let i = 0; i < Math.min(results.length, entries.length); i++) {
-        results[i]!.fullEntry = stripHtml(entries[i]!);
+      const entryIds = bibMeta?.entry_ids;
+
+      if (entryIds && entryIds.length === entries.length) {
+        // 按 paperId 匹配
+        const entryMap = new Map<string, string>();
+        for (let i = 0; i < entryIds.length; i++) {
+          const id = entryIds[i]?.[0];
+          if (id) entryMap.set(id, stripHtml(entries[i]!));
+        }
+        for (const r of results) {
+          r.fullEntry = entryMap.get(r.paperId) ?? '';
+        }
+      } else {
+        // fallback: 按索引（兼容旧版 citeproc）
+        for (let i = 0; i < Math.min(results.length, entries.length); i++) {
+          results[i]!.fullEntry = stripHtml(entries[i]!);
+        }
       }
     } catch {
       // makeBibliography 失败不阻塞
@@ -276,7 +309,8 @@ export class CslEngine {
       case 'review':
         return [...base, 'journal'];
       case 'conference':
-        return [...base, 'venue'];
+        // Fix #10: venue 数据稀少，实际 container-title 来自 venue ?? journal
+        return [...base, 'journal'];
       case 'book':
         return [...base, 'publisher'];
       case 'chapter':

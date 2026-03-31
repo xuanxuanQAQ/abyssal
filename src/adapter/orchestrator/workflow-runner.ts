@@ -24,6 +24,13 @@ export interface WorkflowError {
   timestamp: string;
 }
 
+/** 子步骤状态（与 shared-types/ipc SubstepInfo 对齐） */
+export interface WorkflowSubstep {
+  name: string;
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+  detail?: string;
+}
+
 export interface WorkflowProgress {
   totalItems: number;
   completedItems: number;
@@ -33,6 +40,17 @@ export interface WorkflowProgress {
   currentStage: string | null;
   errors: WorkflowError[];
   estimatedRemainingMs: number | null;
+  /** Quality warnings (e.g. RAG degradation) — not failures, but reduced quality */
+  qualityWarnings: WorkflowQualityWarning[];
+  /** 当前 item 的子步骤列表（如 acquire cascade 各数据源状态） */
+  substeps: WorkflowSubstep[];
+}
+
+export interface WorkflowQualityWarning {
+  itemId: string;
+  type: 'rag_degraded' | 'concept_stale' | 'context_truncated';
+  message: string;
+  timestamp: string;
 }
 
 export interface WorkflowOptions {
@@ -87,13 +105,23 @@ export type WorkflowStepFn = (
   runner: WorkflowRunnerContext,
 ) => Promise<void>;
 
+// ─── Middleware (onion model) ───
+
+export type WorkflowMiddleware = (
+  type: WorkflowType,
+  options: WorkflowOptions,
+  ctx: WorkflowRunnerContext,
+  next: () => Promise<void>,
+) => Promise<void>;
+
 export interface WorkflowRunnerContext {
   signal: AbortSignal;
   progress: WorkflowProgress;
-  reportProgress(update: Partial<Pick<WorkflowProgress, 'currentItem' | 'currentStage'>>): void;
+  reportProgress(update: Partial<Pick<WorkflowProgress, 'currentItem' | 'currentStage' | 'substeps'>>): void;
   reportComplete(itemId: string): void;
   reportFailed(itemId: string, stage: string, error: Error): void;
   reportSkipped(itemId: string): void;
+  reportQualityWarning(itemId: string, type: WorkflowQualityWarning['type'], message: string): void;
   setTotal(total: number): void;
 }
 
@@ -102,6 +130,7 @@ export interface WorkflowRunnerContext {
 export class WorkflowRunner {
   private readonly activeWorkflows = new Map<string, WorkflowState>();
   private readonly workflowFns = new Map<WorkflowType, WorkflowStepFn>();
+  private readonly middlewares: WorkflowMiddleware[] = [];
   private readonly logger: Logger;
   private readonly pushManager: PushManager | null;
   private startTime = 0;
@@ -119,23 +148,38 @@ export class WorkflowRunner {
   }
 
   /**
+   * Add a middleware that wraps all workflow executions (onion model).
+   * Middlewares are called in registration order, innermost = actual workflow.
+   */
+  use(middleware: WorkflowMiddleware): void {
+    this.middlewares.push(middleware);
+  }
+
+  /**
    * Start a workflow. Returns the WorkflowState.
    *
    * Rejects if same-type workflow already running or conflict exists.
    */
   start(type: WorkflowType, options: WorkflowOptions = {}): WorkflowState {
+    this.logger.info(`[WorkflowRunner] start() called`, { type, options, activeCount: this.activeWorkflows.size, pushManagerAvailable: !!this.pushManager });
+
     // Same-type mutex
     for (const [, ws] of this.activeWorkflows) {
       if (ws.type === type && ws.status === 'running') {
+        this.logger.error(`[WorkflowRunner] BLOCKED — same-type workflow already running: ${ws.id}`);
         throw new AbyssalError({ message: `Workflow '${type}' is already running (id: ${ws.id})`, code: 'WORKFLOW_CONFLICT', recoverable: false });
       }
       if (ws.status === 'running' && hasConflict(ws.type, type)) {
+        this.logger.error(`[WorkflowRunner] BLOCKED — conflict with running '${ws.type}': ${ws.id}`);
         throw new AbyssalError({ message: `Cannot run '${type}' while '${ws.type}' is running (conflict)`, code: 'WORKFLOW_CONFLICT', recoverable: false });
       }
     }
 
     const fn = this.workflowFns.get(type);
-    if (!fn) throw new AbyssalError({ message: `No workflow registered for type '${type}'`, code: 'WORKFLOW_NOT_FOUND', recoverable: false });
+    if (!fn) {
+      this.logger.error(`[WorkflowRunner] No workflow registered for type '${type}'`, undefined, { registeredTypes: Array.from(this.workflowFns.keys()) });
+      throw new AbyssalError({ message: `No workflow registered for type '${type}'`, code: 'WORKFLOW_NOT_FOUND', recoverable: false });
+    }
 
     const id = crypto.randomUUID();
     const abortController = new AbortController();
@@ -147,6 +191,8 @@ export class WorkflowRunner {
       currentItem: null,
       currentStage: null,
       errors: [],
+      qualityWarnings: [],
+      substeps: [],
       estimatedRemainingMs: null,
     };
 
@@ -158,6 +204,7 @@ export class WorkflowRunner {
       reportProgress: (update) => {
         if (update.currentItem !== undefined) progress.currentItem = update.currentItem;
         if (update.currentStage !== undefined) progress.currentStage = update.currentStage;
+        if (update.substeps !== undefined) progress.substeps = update.substeps;
         this.estimateRemaining(progress);
         this.pushProgress(id, type, progress);
       },
@@ -165,6 +212,7 @@ export class WorkflowRunner {
         progress.completedItems++;
         progress.currentItem = null;
         progress.currentStage = null;
+        progress.substeps = [];
         this.estimateRemaining(progress);
         this.pushProgress(id, type, progress);
         this.logger.debug(`Workflow ${type}: completed ${itemId}`, { workflowId: id });
@@ -181,12 +229,23 @@ export class WorkflowRunner {
         });
         progress.currentItem = null;
         progress.currentStage = null;
+        progress.substeps = [];
         this.pushProgress(id, type, progress);
         this.logger.warn(`Workflow ${type}: failed ${itemId} at ${stage}`, { error: error.message });
       },
       reportSkipped: (itemId) => {
         progress.skippedItems++;
         this.logger.debug(`Workflow ${type}: skipped ${itemId}`);
+      },
+      reportQualityWarning: (itemId, warningType, message) => {
+        progress.qualityWarnings.push({
+          itemId,
+          type: warningType,
+          message,
+          timestamp: new Date().toISOString(),
+        });
+        this.pushProgress(id, type, progress);
+        this.logger.warn(`Workflow ${type}: quality warning for ${itemId}`, { warningType, message });
       },
       setTotal: (total) => {
         progress.totalItems = total;
@@ -225,11 +284,19 @@ export class WorkflowRunner {
     abortController: AbortController,
     progress: WorkflowProgress,
   ): Promise<WorkflowResult> {
+    this.logger.info(`[WorkflowRunner] execute() starting`, { id, type });
     const startMs = Date.now();
     const state = this.activeWorkflows.get(id)!;
+    let fatalError: Error | null = null;
 
     try {
-      await fn(options, ctx);
+      // Build middleware chain (onion model): middleware[0] → middleware[1] → ... → fn
+      const core = () => fn(options, ctx);
+      const chain = this.middlewares.reduceRight<() => Promise<void>>(
+        (next, mw) => () => mw(type, options, ctx, next),
+        core,
+      );
+      await chain();
 
       // Determine final status
       if (abortController.signal.aborted) {
@@ -242,6 +309,7 @@ export class WorkflowRunner {
         state.status = 'completed';
       }
     } catch (error) {
+      fatalError = error as Error;
       if (abortController.signal.aborted) {
         state.status = 'cancelled';
       } else {
@@ -261,6 +329,17 @@ export class WorkflowRunner {
       durationMs,
     });
 
+    // Build error detail from fatal error or first item-level error
+    const errorDetail = fatalError
+      ? { code: 'WORKFLOW_FATAL', message: fatalError.message }
+      : progress.errors.length > 0
+        ? { code: progress.errors[0]!.code ?? 'ITEM_FAILED', message: progress.errors[0]!.message }
+        : undefined;
+
+    // Push final status to renderer so UI shows completion/failure
+    const finalStatus = state.status === 'partial' ? 'completed' : state.status;
+    this.pushProgress(id, type, progress, finalStatus, finalStatus === 'failed' ? errorDetail : undefined);
+
     // Remove from active map to prevent unbounded memory growth.
     // Completed workflows are no longer needed for conflict checking.
     this.activeWorkflows.delete(id);
@@ -279,6 +358,9 @@ export class WorkflowRunner {
     if (!state || state.status !== 'running') return false;
     state.abortController.abort();
     state.status = 'cancelled';
+    // Push cancellation event immediately so the UI updates without waiting
+    // for the in-flight LLM call or other async work to finish.
+    this.pushProgress(workflowId, state.type, state.progress, 'cancelled');
     return true;
   }
 
@@ -304,13 +386,15 @@ export class WorkflowRunner {
     progress.estimatedRemainingMs = Math.round((elapsed / progress.completedItems) * remaining);
   }
 
-  private pushProgress(id: string, type: WorkflowType, progress: WorkflowProgress): void {
+  private pushProgress(id: string, type: WorkflowType, progress: WorkflowProgress, status: string = 'running', error?: { code: string; message: string }): void {
     this.pushManager?.pushWorkflowProgress({
-      workflowId: id,
-      type,
-      status: 'running',
+      taskId: id,
+      workflow: type,
+      status,
       currentStep: progress.currentStage ?? '',
       progress: { current: progress.completedItems, total: progress.totalItems },
+      ...(error && { error }),
+      ...(progress.substeps.length > 0 && { substeps: progress.substeps }),
     });
   }
 }

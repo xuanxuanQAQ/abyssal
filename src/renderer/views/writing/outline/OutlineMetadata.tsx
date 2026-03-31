@@ -9,6 +9,7 @@
  */
 
 import React, { useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ArticleOutline, SectionNode } from '../../../../shared-types/models';
 import type { CitationStyle } from '../../../../shared-types/enums';
 import { useUpdateArticle } from '../../../core/ipc/hooks/useArticles';
@@ -101,6 +102,7 @@ const progressBarOuterStyle: React.CSSProperties = {
 };
 
 export function OutlineMetadata({ article }: OutlineMetadataProps) {
+  const { t } = useTranslation();
   const updateArticle = useUpdateArticle();
 
   const { total, nonPending, wordCount } = useMemo(
@@ -141,7 +143,7 @@ export function OutlineMetadata({ article }: OutlineMetadataProps) {
     <div style={panelStyle}>
       {/* Writing style */}
       <div style={rowStyle}>
-        <span style={labelStyle}>写作风格</span>
+        <span style={labelStyle}>{t('writing.metadata.writingStyle')}</span>
         <select
           style={selectStyle}
           value={article.metadata.writingStyle ?? ''}
@@ -158,7 +160,7 @@ export function OutlineMetadata({ article }: OutlineMetadataProps) {
 
       {/* Citation style */}
       <div style={rowStyle}>
-        <span style={labelStyle}>引用格式</span>
+        <span style={labelStyle}>{t('writing.metadata.citationFormat')}</span>
         <select
           style={selectStyle}
           value={article.citationStyle}
@@ -174,14 +176,14 @@ export function OutlineMetadata({ article }: OutlineMetadataProps) {
 
       {/* Word count */}
       <div style={rowStyle}>
-        <span style={labelStyle}>总字数</span>
+        <span style={labelStyle}>{t('writing.metadata.totalWords')}</span>
         <span>{wordCount.toLocaleString()}</span>
       </div>
 
       {/* Progress */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={rowStyle}>
-          <span style={labelStyle}>完成进度</span>
+          <span style={labelStyle}>{t('writing.metadata.progress')}</span>
           <span>
             {nonPending}/{total} ({progressPct}%)
           </span>

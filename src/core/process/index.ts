@@ -16,6 +16,7 @@ import type {
 import type {
   TextChunk,
   SectionMap,
+  SectionMapV2,
   SectionBoundaryList,
   ChunkSource,
 } from '../types/chunk';
@@ -93,7 +94,7 @@ export class ProcessService {
   // ─── §4 结构感知分块 ───
 
   chunkText(
-    sectionMap: SectionMap,
+    sectionMap: SectionMap | SectionMapV2,
     boundaries: SectionBoundaryList,
     pageTexts: string[],
     options?: ChunkTextOptions,
@@ -117,7 +118,7 @@ export class ProcessService {
     options?: ParseFiguresOptions,
   ): Promise<FigureBlock[]> {
     if (!this.vlm) {
-      // TODO: VLM 未配置时返回空数组，由 orchestrator 处理
+      console.warn('[ProcessService] VLM not configured, skipping figure parsing');
       return [];
     }
     return parseFiguresWithVlm(pdfPath, candidates, this.vlm, options);

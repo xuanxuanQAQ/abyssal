@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createAnalyzeWorkflow, type AnalyzeServices } from './analyze';
-import type { WorkflowRunnerContext, WorkflowOptions } from '../workflow-runner';
+import type { WorkflowRunnerContext, WorkflowOptions, WorkflowProgress } from '../workflow-runner';
 
 // ─── Mock services ───
 
@@ -59,9 +59,10 @@ function makeServices(overrides: Partial<AnalyzeServices> = {}): AnalyzeServices
 }
 
 function makeRunnerContext(): WorkflowRunnerContext {
-  const progress = {
+  const progress: WorkflowProgress = {
     totalItems: 0, completedItems: 0, failedItems: 0, skippedItems: 0,
-    currentItem: null, currentStage: null, errors: [], estimatedRemainingMs: null,
+    currentItem: null, currentStage: null, errors: [], qualityWarnings: [], substeps: [],
+    estimatedRemainingMs: null,
   };
   return {
     signal: new AbortController().signal,
@@ -70,6 +71,9 @@ function makeRunnerContext(): WorkflowRunnerContext {
     reportComplete: vi.fn(),
     reportFailed: vi.fn(),
     reportSkipped: vi.fn(),
+    reportQualityWarning: vi.fn((itemId, type, message) => {
+      progress.qualityWarnings.push({ itemId, type, message, timestamp: new Date().toISOString() });
+    }),
     setTotal: vi.fn((n) => { progress.totalItems = n; }),
   };
 }
@@ -181,5 +185,92 @@ describe('analyze workflow', () => {
     await workflow({ paperIds, concurrency: 3 }, ctx);
 
     expect(peakConcurrent).toBeLessThanOrEqual(3);
+  });
+
+  it('reports quality warning when RAG retrieval fails', async () => {
+    const services = makeServices({
+      frameworkState: 'framework_forming',
+      ragService: {
+        retrieve: vi.fn().mockRejectedValue(new Error('Embedding API down')),
+      } as any,
+    });
+    // Need concepts for full analysis mode
+    (services.dbProxy.getAllConcepts as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'c1', nameEn: 'Test', definition: 'A test', maturity: 'working', searchKeywords: ['test'] },
+    ]);
+    (services.dbProxy.getPaper as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'a1b2c3d4e5f6', title: 'Test Paper', abstract: 'Test abstract',
+      fulltextStatus: 'available', analysisStatus: 'not_started', relevance: 'high',
+    });
+
+    const workflow = createAnalyzeWorkflow(services);
+    const ctx = makeRunnerContext();
+    await workflow({ paperIds: ['a1b2c3d4e5f6'] }, ctx);
+
+    expect(ctx.reportQualityWarning).toHaveBeenCalledWith(
+      'a1b2c3d4e5f6',
+      'rag_degraded',
+      expect.stringContaining('RAG retrieval failed'),
+    );
+  });
+
+  it('reports quality warning when RAG coverage is partial', async () => {
+    const services = makeServices({
+      frameworkState: 'framework_forming',
+      ragService: {
+        retrieve: vi.fn().mockResolvedValue({
+          passages: [{ text: 'some text', paperId: 'other', score: 0.5 }],
+          qualityReport: { coverage: 'partial', retryCount: 1, gaps: ['missing methods section'] },
+        }),
+      } as any,
+    });
+    (services.dbProxy.getAllConcepts as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'c1', nameEn: 'Test', definition: 'A test', maturity: 'working', searchKeywords: ['test'] },
+    ]);
+    (services.dbProxy.getPaper as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'a1b2c3d4e5f6', title: 'Test Paper', abstract: 'Test abstract',
+      fulltextStatus: 'available', analysisStatus: 'not_started', relevance: 'high',
+    });
+
+    const workflow = createAnalyzeWorkflow(services);
+    const ctx = makeRunnerContext();
+    await workflow({ paperIds: ['a1b2c3d4e5f6'] }, ctx);
+
+    expect(ctx.reportQualityWarning).toHaveBeenCalledWith(
+      'a1b2c3d4e5f6',
+      'rag_degraded',
+      expect.stringContaining('partial'),
+    );
+  });
+
+  it('uses completeAnalysis for atomic result write when available', async () => {
+    const completeAnalysis = vi.fn().mockResolvedValue(undefined);
+    const services = makeServices({
+      frameworkState: 'framework_forming',
+    });
+    (services.dbProxy as any).completeAnalysis = completeAnalysis;
+    (services.dbProxy.getAllConcepts as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'c1', nameEn: 'Test', definition: 'A test', maturity: 'working', searchKeywords: ['test'] },
+    ]);
+    (services.dbProxy.getPaper as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'a1b2c3d4e5f6', title: 'Test Paper', abstract: 'Test abstract',
+      fulltextStatus: 'available', analysisStatus: 'not_started', relevance: 'high',
+    });
+    (services.llmClient.complete as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: '---\nconcept_mappings:\n  - concept_id: c1\n    relation: related\n    confidence: 0.8\n    evidence:\n      en: "evidence"\n---\nBody.',
+      usage: { inputTokens: 100, outputTokens: 50 },
+    });
+
+    const workflow = createAnalyzeWorkflow(services);
+    const ctx = makeRunnerContext();
+    await workflow({ paperIds: ['a1b2c3d4e5f6'] }, ctx);
+
+    expect(completeAnalysis).toHaveBeenCalledWith(
+      'a1b2c3d4e5f6',
+      expect.any(Array),
+      'completed',
+    );
+    // mapPaperConcept should NOT be called separately when completeAnalysis succeeds
+    expect(services.dbProxy.mapPaperConcept).not.toHaveBeenCalled();
   });
 });

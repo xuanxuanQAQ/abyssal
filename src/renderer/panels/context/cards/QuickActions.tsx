@@ -5,34 +5,58 @@
  */
 
 import React from 'react';
-import { Microscope, Download, FileText } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Microscope, Download, FileText, Loader2 } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
+import { useAcquireFulltext } from '../../../core/ipc/hooks/useAcquire';
+import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
+import { usePaper } from '../../../core/ipc/hooks/usePapers';
 
 interface QuickActionsProps {
   paperId: string;
 }
 
-export function QuickActions({ paperId }: QuickActionsProps) {
+// ── Static styles ──
+
+const containerStyle: React.CSSProperties = {
+  padding: '8px 12px',
+  display: 'flex',
+  gap: 8,
+};
+
+export const QuickActions = React.memo(function QuickActions({ paperId }: QuickActionsProps) {
+  const { t } = useTranslation();
   const navigateTo = useAppStore((s) => s.navigateTo);
+  const acquireFulltext = useAcquireFulltext();
+  const startPipeline = useStartPipeline();
+  const { data: paper } = usePaper(paperId);
+
+  const isAcquiring = acquireFulltext.isPending;
+  const isAnalyzing = startPipeline.isPending;
+  const status = paper?.fulltextStatus;
+  const hasFulltext = status === 'available';
 
   const actions = [
     {
-      icon: <Microscope size={14} />,
-      label: '分析',
+      icon: isAnalyzing ? <Loader2 size={14} className="spin" /> : <Microscope size={14} />,
+      label: t('context.quickActions.analyze'),
+      disabled: !paper || isAnalyzing || paper.analysisStatus === 'in_progress' || !hasFulltext,
       onClick: () => {
-        // TODO: 触发 analyze pipeline
+        startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paperId] } });
       },
     },
     {
-      icon: <Download size={14} />,
-      label: '获取全文',
+      icon: isAcquiring ? <Loader2 size={14} className="spin" /> : <Download size={14} />,
+      label: t('context.quickActions.acquireFulltext'),
+      disabled: isAcquiring || status === 'available' || status === 'pending',
       onClick: () => {
-        // TODO: 触发 acquire pipeline
+        acquireFulltext.mutate(paperId);
       },
     },
     {
       icon: <FileText size={14} />,
-      label: '打开 PDF',
+      label: t('context.quickActions.openPDF'),
+      disabled: !hasFulltext,
       onClick: () => {
         navigateTo({ type: 'paper', id: paperId, view: 'reader' });
       },
@@ -40,17 +64,12 @@ export function QuickActions({ paperId }: QuickActionsProps) {
   ];
 
   return (
-    <div
-      style={{
-        padding: '8px 12px',
-        display: 'flex',
-        gap: 8,
-      }}
-    >
+    <div style={containerStyle}>
       {actions.map((action) => (
         <button
           key={action.label}
           onClick={action.onClick}
+          disabled={action.disabled}
           style={{
             flex: 1,
             display: 'flex',
@@ -61,9 +80,10 @@ export function QuickActions({ paperId }: QuickActionsProps) {
             border: '1px solid var(--border-subtle)',
             borderRadius: 'var(--radius-sm)',
             background: 'none',
-            color: 'var(--text-primary)',
+            color: action.disabled ? 'var(--text-disabled)' : 'var(--text-primary)',
             fontSize: 'var(--text-xs)',
-            cursor: 'pointer',
+            cursor: action.disabled ? 'not-allowed' : 'pointer',
+            opacity: action.disabled ? 0.5 : 1,
           }}
         >
           {action.icon}
@@ -72,4 +92,4 @@ export function QuickActions({ paperId }: QuickActionsProps) {
       ))}
     </div>
   );
-}
+});

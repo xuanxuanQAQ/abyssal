@@ -7,6 +7,8 @@
  * - 'sufficient': green subtle indicator or hidden
  */
 
+import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { AlertTriangle, AlertCircle, CheckCircle } from 'lucide-react';
 import type { RetrievalQualityReport } from '../../../../shared-types/models';
 
@@ -14,9 +16,10 @@ interface RetrievalQualityBannerProps {
   qualityReport: RetrievalQualityReport | undefined;
 }
 
-export function RetrievalQualityBanner({
+export const RetrievalQualityBanner = React.memo(function RetrievalQualityBanner({
   qualityReport,
 }: RetrievalQualityBannerProps) {
+  const { t } = useTranslation();
   if (!qualityReport) return null;
 
   const { coverage, retryCount, gaps } = qualityReport;
@@ -26,9 +29,9 @@ export function RetrievalQualityBanner({
     return (
       <div style={sufficientStyle}>
         <CheckCircle size={12} />
-        <span>检索质量良好</span>
+        <span>{t('context.retrievalQuality.sufficient')}</span>
         {retryCount > 0 && (
-          <span style={retryBadgeStyle}>重试 {retryCount} 次</span>
+          <span style={retryBadgeStyle}>{t('context.retrievalQuality.retryCount', { count: retryCount })}</span>
         )}
       </div>
     );
@@ -40,9 +43,9 @@ export function RetrievalQualityBanner({
       <div style={partialStyle}>
         <div style={bannerHeaderStyle}>
           <AlertCircle size={14} />
-          <span style={{ fontWeight: 500 }}>检索覆盖度不完全</span>
+          <span style={{ fontWeight: 500 }}>{t('context.retrievalQuality.partial')}</span>
           {retryCount > 0 && (
-            <span style={retryBadgeStyle}>重试 {retryCount} 次</span>
+            <span style={retryBadgeStyle}>{t('context.retrievalQuality.retryCount', { count: retryCount })}</span>
           )}
         </div>
         {gaps.length > 0 && (
@@ -61,9 +64,9 @@ export function RetrievalQualityBanner({
     <div style={insufficientStyle}>
       <div style={bannerHeaderStyle}>
         <AlertTriangle size={14} />
-        <span style={{ fontWeight: 500 }}>检索覆盖度不足</span>
+        <span style={{ fontWeight: 500 }}>{t('context.retrievalQuality.insufficient')}</span>
         {retryCount > 0 && (
-          <span style={retryBadgeStyle}>重试 {retryCount} 次</span>
+          <span style={retryBadgeStyle}>{t('context.retrievalQuality.retryCount', { count: retryCount })}</span>
         )}
       </div>
       {gaps.length > 0 && (
@@ -75,7 +78,7 @@ export function RetrievalQualityBanner({
       )}
     </div>
   );
-}
+});
 
 // ── Styles ──
 

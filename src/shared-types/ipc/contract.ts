@@ -14,6 +14,7 @@ import type {
   HistoryEntry, HeatmapMatrix,
   Annotation, NewAnnotation,
   ArticleOutline, SectionNode, SectionOrder, SectionContent, SectionPatch, SectionVersion,
+  FullDocumentContent, SectionSave, ArticleAsset,
   Memo, NewMemo, MemoFilter, NoteMeta, NewNote, NoteFilter, SaveNoteResult,
   SuggestedConcept,
   Tag, PaperCounts, DiscoverRun,
@@ -23,17 +24,22 @@ import type {
   AppConfig, ProjectInfo, ProjectSetupConfig, ImportResult, SnapshotInfo,
   PDFAnnotation, CleanupPolicy, GlobalSearchResult,
   ConceptStats, SuggestedConceptsStats, LayerVisibility,
+  SettingsData, DbStatsInfo, ApiKeyTestResult, SystemInfo,
+  ArticleMetadata,
 } from '../models';
 
 import type {
-  Relevance, AdjudicationDecision, ExportFormat, ViewType, WorkflowType, Maturity,
+  Relevance, AdjudicationDecision, ExportFormat, CitationStyle, ViewType, WorkflowType, Maturity,
 } from '../enums';
 
 import type {
   PaperFilter, GraphFilter, RAGFilter,
   WorkflowConfig,
   PipelineProgressEvent, StreamChunkEvent, ChatResponseEvent,
+  AgentStreamEvent,
   ChatContext, WindowMaximizedEvent, SectionSearchResult,
+  AcquireStatusInfo,
+  InstitutionalSessionStatus, InstitutionListItem, InstitutionalLoginResult,
 } from './index';
 
 import type {
@@ -51,9 +57,12 @@ export interface IpcContract {
   'db:papers:update':                 { args: [id: string, patch: Partial<Paper>];       result: void };
   'db:papers:batchUpdateRelevance':   { args: [ids: string[], rel: Relevance];           result: void };
   'db:papers:importBibtex':           { args: [content: string];                         result: ImportResult };
-  'db:papers:counts':                 { args: [];                                        result: PaperCounts };
+  'db:papers:getCounts':               { args: [];                                        result: PaperCounts };
   'db:papers:delete':                 { args: [id: string];                              result: void };
   'db:papers:batchDelete':            { args: [ids: string[]];                           result: void };
+  'db:papers:resetAnalysis':          { args: [id: string];                              result: void };
+  /** Link a local PDF file to an existing paper. If pdfPath is null, main process opens a file dialog. */
+  'db:papers:linkPdf':                { args: [paperId: string, pdfPath?: string | null]; result: void };
 
   // ── db:tags ──
   'db:tags:list':                     { args: [];                                        result: Tag[] };
@@ -79,6 +88,7 @@ export interface IpcContract {
   'db:concepts:getTimeline':          { args: [timeRange?: unknown, changeTypes?: unknown]; result: unknown[] };
   'db:concepts:getStats':             { args: [conceptId: string];                       result: ConceptStats };
   'db:concepts:getMatrix':            { args: [conceptIds?: string[], filters?: unknown]; result: HeatmapMatrix };
+  'db:concepts:updateKeywords':       { args: [conceptId: string, keywords: string[]];   result: { updated: boolean } };
 
   // ── db:memos ──
   'db:memos:list':                    { args: [filter?: MemoFilter];                     result: Memo[] };
@@ -128,8 +138,19 @@ export interface IpcContract {
   'db:articles:updateSection':        { args: [sectionId: string, patch: SectionPatch];  result: void };
   'db:articles:getSectionVersions':   { args: [sectionId: string];                       result: SectionVersion[] };
   'db:articles:search':               { args: [query: string];                           result: SectionSearchResult[] };
-  'db:sections:create':               { args: [articleId: string, parentId: string | null, sortIndex: number, title?: string]; result: SectionNode };
-  'db:sections:delete':               { args: [sectionId: string];                       result: void };
+  'db:articles:createSection':         { args: [articleId: string, parentId: string | null, sortIndex: number, title?: string]; result: SectionNode };
+  'db:articles:deleteSection':         { args: [sectionId: string];                       result: void };
+  'db:articles:getFullDocument':       { args: [articleId: string];                       result: FullDocumentContent };
+  'db:articles:saveDocumentSections':  { args: [articleId: string, sections: SectionSave[]]; result: void };
+  'db:articles:updateMetadata':        { args: [articleId: string, metadata: ArticleMetadata]; result: void };
+  'db:articles:cleanupVersions':       { args: [articleId: string, keepCount: number];     result: { deleted: number } };
+  'db:articles:getAllCitedPaperIds':   { args: [];                                        result: string[] };
+
+  // ── db:assets ──
+  'db:assets:upload':                  { args: [articleId: string, fileName: string, sourcePath: string]; result: ArticleAsset };
+  'db:assets:list':                    { args: [articleId: string];                       result: ArticleAsset[] };
+  'db:assets:get':                     { args: [assetId: string];                         result: ArticleAsset | null };
+  'db:assets:delete':                  { args: [assetId: string];                         result: void };
 
   // ── db:relations ──
   'db:relations:getGraph':            { args: [filter?: GraphFilter];                    result: GraphData };
@@ -143,7 +164,7 @@ export interface IpcContract {
 
   // ── search ──
   'search:semanticScholar':           { args: [query: string, limit?: number, yearRange?: unknown]; result: unknown[] };
-  'search:openalex':                  { args: [concepts: string[], limit?: number, yearRange?: unknown]; result: unknown[] };
+  'search:openAlex':                   { args: [concepts: string[], limit?: number, yearRange?: unknown]; result: unknown[] };
   'search:arxiv':                     { args: [query: string, limit?: number, categories?: string[]]; result: unknown[] };
   'search:paperDetails':              { args: [identifier: string];                      result: unknown };
   'search:citations':                 { args: [identifier: string, direction: 'references' | 'citations', limit?: number]; result: unknown[] };
@@ -155,17 +176,28 @@ export interface IpcContract {
   'rag:searchWithReport':             { args: [query: string, filter?: RAGFilter];       result: RetrievalResult };
   'rag:getWritingContext':            { args: [sectionId: string];                       result: WritingContext };
 
+  // ── acquire ──
+  'acquire:fulltext':                 { args: [paperId: string];                         result: string };
+  'acquire:batch':                    { args: [paperIds: string[]];                      result: string };
+  'acquire:status':                   { args: [paperId: string];                         result: AcquireStatusInfo };
+  'acquire:getInstitutions':          { args: [];                                        result: InstitutionListItem[] };
+  'acquire:institutionalLogin':       { args: [institutionId: string, publisher: string]; result: InstitutionalLoginResult };
+  'acquire:sessionStatus':            { args: [];                                        result: InstitutionalSessionStatus };
+  'acquire:verifyCookies':            { args: [publisher: string];                       result: { valid: boolean; detail: string } };
+  'acquire:clearSession':             { args: [];                                        result: void };
+
   // ── pipeline ──
   'pipeline:start':                   { args: [workflow: WorkflowType, config?: WorkflowConfig]; result: string };
   'pipeline:cancel':                  { args: [taskId: string];                          result: void };
 
   // ── chat ──
   'chat:send':                        { args: [message: string, context?: ChatContext];  result: string };
+  'chat:abort':                       { args: [conversationId?: string];                 result: void };
 
   // ── fs ──
   'fs:openPDF':                       { args: [paperId: string];                         result: { path: string; buffer: ArrayBuffer } };
   'fs:savePDFAnnotations':            { args: [paperId: string, annotations: PDFAnnotation[]]; result: void };
-  'fs:exportArticle':                 { args: [articleId: string, format: ExportFormat];  result: string };
+  'fs:exportArticle':                 { args: [articleId: string, format: ExportFormat, citationStyle?: CitationStyle];  result: string };
   'fs:importFiles':                   { args: [paths: string[]];                         result: ImportResult };
   'fs:createSnapshot':                { args: [name: string];                            result: SnapshotInfo };
   'fs:restoreSnapshot':               { args: [snapshotId: string];                      result: void };
@@ -173,11 +205,22 @@ export interface IpcContract {
   'fs:cleanupSnapshots':              { args: [policy: CleanupPolicy];                   result: void };
   'fs:readNoteFile':                  { args: [noteId: string];                          result: string };
   'fs:saveNoteFile':                  { args: [noteId: string, content: string];         result: SaveNoteResult };
+  'fs:selectImageFile':               { args: [];                                        result: { path: string; name: string } | null };
 
   // ── advisory ──
   'advisory:getRecommendations':      { args: [];                                        result: Recommendation[] };
   'advisory:execute':                 { args: [id: string];                              result: string };
   'advisory:getNotifications':        { args: [];                                        result: AdvisoryNotification[] };
+
+  // ── settings ──
+  'settings:getAll':                  { args: [];                                        result: SettingsData };
+  'settings:updateSection':           { args: [section: string, patch: Record<string, unknown>]; result: void };
+  'settings:updateApiKey':            { args: [keyName: string, value: string];          result: void };
+  'settings:testApiKey':              { args: [provider: string];                        result: ApiKeyTestResult };
+  'settings:getDbStats':              { args: [];                                        result: DbStatsInfo };
+  'settings:getSystemInfo':           { args: [];                                        result: SystemInfo };
+  'settings:openWorkspaceFolder':     { args: [];                                        result: void };
+  'settings:getIndexHealth':          { args: [];                                        result: Record<string, unknown> };
 
   // ── app ──
   'app:getConfig':                    { args: [];                                        result: AppConfig };
@@ -210,22 +253,31 @@ export interface IpcContract {
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface IpcEventContract {
-  'pipeline:progress$event':            PipelineProgressEvent;
-  'pipeline:streamChunk$event':         StreamChunkEvent;
-  'pipeline:workflow-complete$event':   { workflow: WorkflowType; taskId: string };
-  'pipeline:section-quality$event':     { sectionId: string; coverage: string; gaps: string[] };
-  'chat:response$event':               ChatResponseEvent;
-  'app:window:maximized$event':         WindowMaximizedEvent;
-  'advisory:notifications-updated$event': AdvisoryNotification[];
-  'workspace:switched$event':           { rootDir: string; name: string };
-  // Push manager channels
-  'push:workflow-progress':             PipelineProgressEvent;
-  'push:agent-stream':                  StreamChunkEvent;
-  'push:db-changed':                    { tables: string[]; operation: string };
-  'push:notification':                  { type: string; title: string; message: string };
-  'push:advisory-suggestions':          Recommendation[];
-  'push:memo-created':                  { memoId: string };
-  'push:note-indexed':                  { noteId: string; chunkCount: number };
+  'pipeline:progress$event':              PipelineProgressEvent;
+  'pipeline:streamChunk$event':           StreamChunkEvent;
+  'app:workflowComplete$event':           { workflow: WorkflowType; taskId: string };
+  'app:sectionQuality$event':             { sectionId: string; coverage: string; gaps: string[] };
+  /** @deprecated — agent streaming uses push:agentStream instead */
+  'chat:response$event':                  ChatResponseEvent;
+  'app:window:maximizedChange$event':     WindowMaximizedEvent;
+  'advisory:notificationsUpdated$event':  AdvisoryNotification[];
+  'workspace:switched$event':             { rootDir: string; name: string };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Push Contract — main → renderer global push channels (on.* namespace)
+// ═══════════════════════════════════════════════════════════════════════
+
+export interface IpcPushContract {
+  'push:workflowProgress':    PipelineProgressEvent;
+  'push:agentStream':         AgentStreamEvent;
+  'push:dbChanged':           { tables: string[]; operation: string };
+  'push:notification':        { type: string; title: string; message: string };
+  'push:advisorySuggestions': Recommendation[];
+  'push:memoCreated':         { memoId: string };
+  'push:noteIndexed':         { noteId: string; chunkCount: number };
+  'push:dbHealth':            { status: 'connected' | 'degraded' | 'disconnected' };
+  'push:exportProgress':      import('../models').ExportProgress;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -255,7 +307,11 @@ export type IpcEventChannel = keyof IpcEventContract;
 /** Extract event payload type */
 export type IpcEventPayload<C extends IpcEventChannel> = IpcEventContract[C];
 
+/** All push channel names */
+export type IpcPushChannel = keyof IpcPushContract;
+
+/** Extract push payload type */
+export type IpcPushPayload<C extends IpcPushChannel> = IpcPushContract[C];
+
 /** All fire-and-forget channel names */
 export type IpcFireAndForgetChannel = keyof IpcFireAndForgetContract;
-
-// ConceptStats, SuggestedConceptsStats 已移至 ../models/index.ts

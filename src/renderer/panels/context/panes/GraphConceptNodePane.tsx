@@ -8,15 +8,17 @@ import React from 'react';
 import { ConceptDetailCard } from '../cards/ConceptDetailCard';
 import { NeighborList } from '../cards/NeighborList';
 
+const scrollContainerStyle: React.CSSProperties = { overflowY: 'auto', height: '100%' };
+
 interface GraphConceptNodePaneProps {
   nodeId: string;
 }
 
-export function GraphConceptNodePane({ nodeId }: GraphConceptNodePaneProps) {
+export const GraphConceptNodePane = React.memo(function GraphConceptNodePane({ nodeId }: GraphConceptNodePaneProps) {
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
+    <div style={scrollContainerStyle}>
       <ConceptDetailCard conceptId={nodeId} />
       <NeighborList nodeId={nodeId} />
     </div>
   );
-}
+});

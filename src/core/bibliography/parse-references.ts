@@ -42,11 +42,12 @@ export function parseReferences(
     if (yearMatch && yearMatch.index !== undefined && yearMatch.index > 0) {
       const beforeYear = rawText.slice(0, yearMatch.index).trim().replace(/[,.\s]+$/, '');
       if (beforeYear.length > 2) {
-        // 简单拆分：按 ", " 或 " and " 或 " & " 分割
+        // Fix #22: 拆分作者——兼容 CJK（中日韩）名和西文名
+        // 中文作者常用 "、" 或 "，" 分隔；西文用 ", " / " and " / " & "
         authors = beforeYear
-          .split(/,\s+(?=[A-Z])|\s+and\s+|\s+&\s+/i)
+          .split(/[、，]\s*|,\s+(?=[A-Z\u4e00-\u9fff])|\s+and\s+|\s+&\s+/i)
           .map((a) => a.trim())
-          .filter((a) => a.length > 2);
+          .filter((a) => a.length > 0);
         if (authors.length === 0) authors = null;
       }
 

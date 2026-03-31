@@ -9,21 +9,32 @@ import type { RagConfig } from '../types/config';
 import type { DatabaseService } from '../database';
 import type { Logger } from '../infra/logger';
 import { l2DistanceToScore, l2Distance } from '../infra/vector-math';
+import { estimateMemoTokens } from '../infra/token-counter';
 
 import type { Embedder } from './embedder';
 import type { Reranker } from './reranker';
 import { expandQuery } from './query-intelligence';
 import { validateRetrieval, type LlmCallFn } from './corrective-rag';
 import { assembleContext } from './context-assembler';
+import { rowToRankedChunk, memoToRankedChunk, mergeVectorRows } from './chunk-mappers';
 
-// Fix: CJK 感知 token 估算（中文约 1.5 字符/token，英文约 4 字符/token）
-function estimateMemoTokens(text: string): number {
-  const cjkCount = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) ?? []).length;
-  const nonCjk = text.length - cjkCount;
-  return Math.ceil(cjkCount / 1.5 + nonCjk / 4);
+// ─── 稳定排序工具（score 降序 + chunkId 字典序 tiebreaker） ───
+
+function stableScoreSort(chunks: RankedChunk[]): RankedChunk[] {
+  return chunks.sort((a, b) => {
+    const scoreDiff = b.score - a.score;
+    if (scoreDiff !== 0) return scoreDiff;
+    return a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0;
+  });
 }
 
 // ─── BM25 词法检索路径（Fix #1a: FTS5） ───
+
+interface Bm25Result {
+  chunks: RankedChunk[];
+  /** Fix #6: FTS5 表是否可用 */
+  available: boolean;
+}
 
 function bm25Recall(
   db: Database.Database,
@@ -34,7 +45,7 @@ function bm25Recall(
     sources?: ChunkSource[] | null;
     paperIds?: PaperId[] | null;
   },
-): RankedChunk[] {
+): Bm25Result {
   // 构建 FTS5 MATCH 查询
   const terms: string[] = [];
 
@@ -44,16 +55,34 @@ function bm25Recall(
     if (clean.length >= 3) terms.push(`"${clean}"`);
   }
 
+  // CJK 处理：从 query 中提取连续 CJK 字符段作为 FTS5 term
+  // FTS5 的默认 tokenizer 对 CJK 按字符分割，直接引号包裹 CJK 短语可匹配
+  const cjkPhrases = queryText.match(/[\u4e00-\u9fff\u3400-\u4dbf]{2,}/g);
+  if (cjkPhrases) {
+    for (const phrase of cjkPhrases) {
+      // 对长 CJK 短语按 2-4 字符滑动窗口拆分为多个 term
+      if (phrase.length <= 4) {
+        terms.push(`"${phrase}"`);
+      } else {
+        for (let i = 0; i <= phrase.length - 2; i += 2) {
+          const gram = phrase.slice(i, i + Math.min(4, phrase.length - i));
+          if (gram.length >= 2) terms.push(`"${gram}"`);
+        }
+      }
+    }
+  }
+
   // 扩展关键词直接用于 FTS
   for (const kw of ftsKeywords) {
     const clean = kw.replace(/[^\w\s-]/g, '');
     if (clean.length >= 2) terms.push(`"${clean}"`);
   }
 
-  if (terms.length === 0) return [];
+  if (terms.length === 0) return { chunks: [], available: true };
 
-  // OR 组合
-  const matchExpr = terms.join(' OR ');
+  // OR 组合（去重）
+  const uniqueTerms = [...new Set(terms)];
+  const matchExpr = uniqueTerms.join(' OR ');
 
   const conditions: string[] = [];
   const params: unknown[] = [matchExpr];
@@ -63,8 +92,9 @@ function bm25Recall(
     params.push(...filters.sources);
   }
   if (filters.paperIds && filters.paperIds.length > 0) {
-    conditions.push(`c.paper_id IN (${filters.paperIds.map(() => '?').join(',')})`);
-    params.push(...filters.paperIds);
+    // Fix #2: 使用 json_each 防止 SQLite 参数上限（与向量路径一致）
+    conditions.push(`c.paper_id IN (SELECT value FROM json_each(?))`);
+    params.push(JSON.stringify(filters.paperIds));
   }
 
   const whereExtra = conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : '';
@@ -83,36 +113,19 @@ function bm25Recall(
 
     const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
 
-    return rows.map((row, idx) => ({
-      chunkId: row['chunk_id'] as ChunkId,
-      paperId: (row['paper_id'] as string | null) as PaperId | null,
-      text: row['text'] as string,
-      tokenCount: row['token_count'] as number,
-      sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
-      sectionTitle: row['section_title'] as string | null,
-      sectionType: row['section_type'] as RankedChunk['sectionType'],
-      pageStart: row['page_start'] as number | null,
-      pageEnd: row['page_end'] as number | null,
-      source: row['source'] as ChunkSource,
-      positionRatio: row['position_ratio'] as number | null,
-      parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
-      chunkIndex: row['chunk_index'] as number | null,
-      contextBefore: row['context_before'] as string | null,
-      contextAfter: row['context_after'] as string | null,
+    const chunks = rows.map((row) => {
       // BM25 score: FTS5 bm25() 返回负数（越小越相关）。
       // 使用 sigmoid 归一化：score = 1 / (1 + e^(bm25/5))，映射到 (0, 1]
-      score: (() => {
-        const raw = row['bm25_score'];
-        if (raw == null || typeof raw !== 'number' || Number.isNaN(raw)) return 0;
-        return 1 / (1 + Math.exp(raw / 5));
-      })(),
-      rawL2Distance: null,
-      displayTitle: '',
-      originPath: 'structured' as const, // BM25 归为 structured 路径
-    }));
+      const raw = row['bm25_score'];
+      const score = (raw == null || typeof raw !== 'number' || Number.isNaN(raw))
+        ? 0
+        : 1 / (1 + Math.exp(raw / 5));
+      return rowToRankedChunk(row, score, 'structured');
+    });
+    return { chunks, available: true };
   } catch {
-    // FTS5 表可能不存在（迁移未执行），静默降级
-    return [];
+    // Fix #6: FTS5 表可能不存在（迁移未执行），标记为不可用
+    return { chunks: [], available: false };
   }
 }
 
@@ -169,6 +182,7 @@ async function sqliteVecRecall(
   },
 ): Promise<RankedChunk[]> {
   const allResults = new Map<string, RankedChunk>();
+  const variantHitCounts = new Map<string, number>();
 
   for (const variant of queryVariants) {
     const queryVec = await embedder.embedSingle(variant);
@@ -213,7 +227,7 @@ async function sqliteVecRecall(
     `;
 
     const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
-    mergeVectorRows(rows, allResults);
+    mergeVectorRows(rows, allResults, variantHitCounts);
   }
 
   return [...allResults.values()];
@@ -294,75 +308,21 @@ async function inMemoryVectorRecall(
       const existing = allResults.get(chunkId);
       if (existing && existing.score >= score) continue;
 
-      allResults.set(chunkId, {
-        chunkId: chunkId as ChunkId,
-        paperId: (row['paper_id'] as string | null) as PaperId | null,
-        text: row['text'] as string,
-        tokenCount: row['token_count'] as number,
-        sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
-        sectionTitle: row['section_title'] as string | null,
-        sectionType: row['section_type'] as RankedChunk['sectionType'],
-        pageStart: row['page_start'] as number | null,
-        pageEnd: row['page_end'] as number | null,
-        source: row['source'] as ChunkSource,
-        positionRatio: row['position_ratio'] as number | null,
-        parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
-        chunkIndex: row['chunk_index'] as number | null,
-        contextBefore: row['context_before'] as string | null,
-        contextAfter: row['context_after'] as string | null,
-        score,
-        rawL2Distance: distance,
-        displayTitle: '',
-        originPath: 'vector',
-      });
+      allResults.set(chunkId, rowToRankedChunk(row, score, 'vector', { rawL2Distance: distance }));
     }
   }
 
   return [...allResults.values()];
 }
 
-/** 共享：将 KNN 结果行合并到去重 Map */
-function mergeVectorRows(
-  rows: Array<Record<string, unknown>>,
-  allResults: Map<string, RankedChunk>,
-): void {
-  for (const row of rows) {
-    const chunkId = row['chunk_id'] as string;
-    const distance = row['distance'] as number;
-    const score = l2DistanceToScore(distance);
-
-    const existing = allResults.get(chunkId);
-    if (existing && existing.score >= score) continue;
-
-    allResults.set(chunkId, {
-      chunkId: chunkId as ChunkId,
-      paperId: (row['paper_id'] as string | null) as PaperId | null,
-      text: row['text'] as string,
-      tokenCount: row['token_count'] as number,
-      sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
-      sectionTitle: row['section_title'] as string | null,
-      sectionType: row['section_type'] as RankedChunk['sectionType'],
-      pageStart: row['page_start'] as number | null,
-      pageEnd: row['page_end'] as number | null,
-      source: row['source'] as ChunkSource,
-      positionRatio: row['position_ratio'] as number | null,
-      parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
-      chunkIndex: row['chunk_index'] as number | null,
-      contextBefore: row['context_before'] as string | null,
-      contextAfter: row['context_after'] as string | null,
-      score,
-      rawL2Distance: distance,
-      displayTitle: '',
-      originPath: 'vector',
-    });
-  }
-}
+// mergeVectorRows — imported from ./chunk-mappers
 
 // ─── §3.4 结构化查询路径 ───
 
 function structuredRecall(
   db: Database.Database,
   request: RetrievalRequest,
+  config: RagConfig,
 ): RankedChunk[] {
   const results: RankedChunk[] = [];
 
@@ -404,8 +364,8 @@ function structuredRecall(
       `).all(conceptsJson) as Array<Record<string, unknown>>;
 
       for (const row of crossRows) {
-        // TODO: boost_factor=1.5 的配置化，当前硬编码
-        const boosted = Math.min(1.0, (row['max_confidence'] as number) * 1.5);
+        const boostFactor = config.crossConceptBoostFactor;
+        const boosted = Math.min(1.0, (row['max_confidence'] as number) * boostFactor);
         results.push(rowToRankedChunk(row, boosted, 'structured'));
       }
     }
@@ -438,130 +398,36 @@ function annotationAndMemoRecall(
   request: RetrievalRequest,
 ): RankedChunk[] {
   const results: RankedChunk[] = [];
-
-  // 子路径 B: memo 注入
   const memoSet = new Set<string>();
 
+  const pushMemo = (memo: { id: unknown; text: string }) => {
+    const key = String(memo.id);
+    if (memoSet.has(key)) return;
+    memoSet.add(key);
+    results.push(memoToRankedChunk(memo as any));
+  };
+
   for (const conceptId of request.conceptIds) {
-    const memos = dbService.getMemosByEntity('concept', conceptId);
-    for (const memo of memos) {
-      if (memoSet.has(String(memo.id))) continue;
-      memoSet.add(String(memo.id));
-      results.push({
-        chunkId: `memo__${memo.id}` as ChunkId,
-        paperId: null,
-        text: memo.text,
-        // Fix: 使用更准确的 token 估算（CJK 字符约 1 token/char）
-        tokenCount: estimateMemoTokens(memo.text),
-        sectionLabel: null,
-        sectionTitle: null,
-        sectionType: null,
-        pageStart: null,
-        pageEnd: null,
-        source: 'memo',
-        positionRatio: null,
-        parentChunkId: null,
-        chunkIndex: null,
-        contextBefore: null,
-        contextAfter: null,
-        score: 1.0,
-        rawL2Distance: null,
-        displayTitle: '研究者笔记',
-        originPath: 'memo',
-      });
+    for (const memo of dbService.getMemosByEntity('concept', conceptId)) {
+      pushMemo(memo);
     }
   }
 
   for (const paperId of request.paperIds) {
-    const memos = dbService.getMemosByEntity('paper', paperId);
-    for (const memo of memos) {
-      if (memoSet.has(String(memo.id))) continue;
-      memoSet.add(String(memo.id));
-      results.push({
-        chunkId: `memo__${memo.id}` as ChunkId,
-        paperId: null,
-        text: memo.text,
-        tokenCount: estimateMemoTokens(memo.text),
-        sectionLabel: null,
-        sectionTitle: null,
-        sectionType: null,
-        pageStart: null,
-        pageEnd: null,
-        source: 'memo',
-        positionRatio: null,
-        parentChunkId: null,
-        chunkIndex: null,
-        contextBefore: null,
-        contextAfter: null,
-        score: 1.0,
-        rawL2Distance: null,
-        displayTitle: '研究者笔记',
-        originPath: 'memo',
-      });
+    for (const memo of dbService.getMemosByEntity('paper', paperId)) {
+      pushMemo(memo);
     }
   }
 
-  // 显式指定的 memo
   for (const memoId of request.relatedMemoIds) {
     if (memoSet.has(String(memoId))) continue;
     const memo = dbService.getMemo(memoId);
     if (memo) {
-      memoSet.add(String(memoId));
-      results.push({
-        chunkId: `memo__${memo.id}` as ChunkId,
-        paperId: null,
-        text: memo.text,
-        tokenCount: estimateMemoTokens(memo.text),
-        sectionLabel: null,
-        sectionTitle: null,
-        sectionType: null,
-        pageStart: null,
-        pageEnd: null,
-        source: 'memo',
-        positionRatio: null,
-        parentChunkId: null,
-        chunkIndex: null,
-        contextBefore: null,
-        contextAfter: null,
-        score: 1.0,
-        rawL2Distance: null,
-        displayTitle: '研究者笔记',
-        originPath: 'memo',
-      });
+      pushMemo(memo);
     }
   }
 
   return results;
-}
-
-// ─── 行映射工具 ───
-
-function rowToRankedChunk(
-  row: Record<string, unknown>,
-  score: number,
-  originPath: RankedChunk['originPath'],
-): RankedChunk {
-  return {
-    chunkId: row['chunk_id'] as ChunkId,
-    paperId: (row['paper_id'] as string | null) as PaperId | null,
-    text: row['text'] as string,
-    tokenCount: row['token_count'] as number,
-    sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
-    sectionTitle: row['section_title'] as string | null,
-    sectionType: row['section_type'] as RankedChunk['sectionType'],
-    pageStart: row['page_start'] as number | null,
-    pageEnd: row['page_end'] as number | null,
-    source: row['source'] as ChunkSource,
-    positionRatio: row['position_ratio'] as number | null,
-    parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
-    chunkIndex: row['chunk_index'] as number | null,
-    contextBefore: row['context_before'] as string | null,
-    contextAfter: row['context_after'] as string | null,
-    score,
-    rawL2Distance: null,
-    displayTitle: (row['display_title'] as string) ?? '',
-    originPath,
-  };
 }
 
 // ─── §3.3 expandedK 计算 ───
@@ -572,33 +438,57 @@ function computeExpandedK(
   expandParams: { expandFactorMultiplier: number; topKMultiplier: number },
   db?: Database.Database,
 ): number {
+  // Fix #1: 优先使用 adapter 层 budget-calculator 推导的 topK
   let baseTopK: number;
-  switch (request.budgetMode) {
-    case 'focused': baseTopK = 10; break;
-    case 'broad': baseTopK = 30; break;
-    case 'full': baseTopK = 50; break;
+  if (request.topK != null && request.topK > 0) {
+    baseTopK = request.topK;
+  } else {
+    switch (request.budgetMode) {
+      case 'focused': baseTopK = 10; break;
+      case 'broad': baseTopK = 30; break;
+      case 'full': baseTopK = 50; break;
+    }
   }
 
   baseTopK = Math.ceil(baseTopK * expandParams.topKMultiplier);
   let expandFactor = config.expandFactor * expandParams.expandFactorMultiplier;
 
-  // §5.3 动态 expandFactor：当 paperIds 过滤时基于 R 估算
-  // R = |filterPaperIds| / |totalPapers|, expandFactor = ceil(1/R), 上限 10
-  if (db && request.paperIds && request.paperIds.length > 0) {
-    const totalPapers = (
-      db.prepare('SELECT COUNT(*) AS cnt FROM papers').get() as { cnt: number }
-    ).cnt;
-    if (totalPapers > 0) {
-      const R = request.paperIds.length / totalPapers;
+  // §5.3 动态 expandFactor：多条件组合 R 建模
+  // R = 各过滤条件选择率的乘积，expandFactor = ceil(1/R)，上限 10
+  if (db) {
+    let R = 1.0;
+    let hasFilters = false;
+
+    if (request.paperIds && request.paperIds.length > 0) {
+      const totalPapers = (
+        db.prepare('SELECT COUNT(*) AS cnt FROM papers').get() as { cnt: number }
+      ).cnt;
+      if (totalPapers > 0) {
+        R *= request.paperIds.length / totalPapers;
+        hasFilters = true;
+      }
+    }
+
+    if (request.sectionTypeFilter && request.sectionTypeFilter.length > 0) {
+      // sectionType 总共约 7 种，估算选择率
+      const totalTypes = 7;
+      R *= request.sectionTypeFilter.length / totalTypes;
+      hasFilters = true;
+    }
+
+    if (request.sourceFilter && request.sourceFilter.length > 0) {
+      // source 总共约 6 种
+      const totalSources = 6;
+      R *= request.sourceFilter.length / totalSources;
+      hasFilters = true;
+    }
+
+    if (hasFilters && R > 0) {
       const dynamicFactor = Math.ceil(1 / R);
-      // 取 max(静态, 动态)——动态可能比静态更大，确保足够召回
       expandFactor = Math.max(expandFactor, dynamicFactor);
-      // 上限 10——防止极端情况 K_e 过大
       expandFactor = Math.min(expandFactor, 10);
     }
   }
-
-  // TODO: 多条件组合时 R 取乘积的精确建模
 
   return Math.ceil(baseTopK * expandFactor);
 }
@@ -657,7 +547,7 @@ export async function retrieve(
   });
 
   // §3.2: 四路召回（向量 + BM25 + 结构化 + memo/annotation）
-  const [vectorResults, bm25Results, structuredResults, forcedResults] = await Promise.all([
+  const [vectorResults, bm25Result, structuredResults, forcedResults] = await Promise.all([
     vectorRecall(db, embedder, queryVariants, expandedK, {
       sources: request.sourceFilter,
       sectionTypes: request.sectionTypeFilter,
@@ -667,9 +557,17 @@ export async function retrieve(
       sources: request.sourceFilter,
       paperIds: request.paperIds.length > 0 ? request.paperIds : null,
     })),
-    Promise.resolve(structuredRecall(db, request)),
+    Promise.resolve(structuredRecall(db, request, config)),
     Promise.resolve(annotationAndMemoRecall(dbService, request)),
   ]);
+
+  const bm25Results = bm25Result.chunks;
+  const bm25Available = bm25Result.available;
+
+  // Fix #6: 标记 BM25 不可用
+  if (!bm25Available) {
+    logger.warn('[Retriever] BM25 channel unavailable (FTS5 table missing). Hybrid retrieval degraded to vector-only.');
+  }
 
   // §3.6: 合并去重
   const candidateMap = new Map<string, RankedChunk>();
@@ -692,17 +590,18 @@ export async function retrieve(
 
   // 移除 forced 中已有的 chunk
   const forcedIds = new Set(forced.map((c) => c.chunkId));
-  const candidates = [...candidateMap.values()].filter((c) => !forcedIds.has(c.chunkId));
+  let candidates = [...candidateMap.values()].filter((c) => !forcedIds.has(c.chunkId));
 
   // §4: 精排
-  let topK = Math.ceil(
-    (request.budgetMode === 'focused' ? 10 : request.budgetMode === 'broad' ? 30 : 50)
-    * expandParams.topKMultiplier,
-  );
+  // Fix #1: 优先使用 adapter 层推导的 topK
+  const baseRerankTopK = (request.topK != null && request.topK > 0)
+    ? request.topK
+    : (request.budgetMode === 'focused' ? 10 : request.budgetMode === 'broad' ? 30 : 50);
+  let topK = Math.ceil(baseRerankTopK * expandParams.topKMultiplier);
 
   let reranked: RankedChunk[];
   if (request.skipReranker || candidates.length <= topK) {
-    reranked = candidates.sort((a, b) => b.score - a.score).slice(0, topK);
+    reranked = stableScoreSort(candidates).slice(0, topK);
   } else {
     const enhancedQuery = buildEnhancedQuery(request, dbService);
     reranked = await reranker.rerank(enhancedQuery, candidates, topK);
@@ -722,8 +621,8 @@ export async function retrieve(
     llmCall &&
     request.budgetMode !== 'full'
   ) {
-    // 快速预判：仅用 Top-3 候选评估，避免全量候选拖慢验证
-    const previewCandidates = reranked.slice(0, Math.min(3, reranked.length));
+    // 快速预判：用 Top-5 候选评估（从 3 扩大到 5 以提高 gap 检测准确度）
+    const previewCandidates = reranked.slice(0, Math.min(5, reranked.length));
     const preResult = await validateRetrieval(
       previewCandidates,
       request.queryText,
@@ -750,24 +649,27 @@ export async function retrieve(
           const enhancedQuery = buildEnhancedQuery(request, dbService);
           reranked = await reranker.rerank(enhancedQuery, candidates, topK);
         } else {
-          reranked = candidates.sort((a, b) => b.score - a.score).slice(0, topK);
+          reranked = stableScoreSort(candidates).slice(0, topK);
         }
       } else if (preResult.action === 'rewrite' && preResult.rewrittenQuery) {
         // 仅补充 BM25 召回（轻量），不重跑向量召回（昂贵）
         const bm25Supplement = bm25Recall(db, preResult.rewrittenQuery, ftsKeywords, expandedK, {
           sources: request.sourceFilter,
-        });
+        }).chunks;
+        const supplementChunks: RankedChunk[] = [];
         for (const c of bm25Supplement) {
           if (!candidateMap.has(c.chunkId)) {
             candidateMap.set(c.chunkId, c);
-            candidates.push(c);
+            supplementChunks.push(c);
           }
         }
+        // 不可变扩展：创建新数组而非直接 mutate
+        candidates = [...candidates, ...supplementChunks];
         if (!request.skipReranker) {
           const enhancedQuery = buildEnhancedQuery(request, dbService);
           reranked = await reranker.rerank(enhancedQuery, candidates, topK);
         } else {
-          reranked = candidates.sort((a, b) => b.score - a.score).slice(0, topK);
+          reranked = stableScoreSort(candidates).slice(0, topK);
         }
       }
     }
@@ -784,6 +686,7 @@ export async function retrieve(
   logger.info('Retrieval complete', {
     vectorHits: vectorResults.length,
     bm25Hits: bm25Results.length,
+    bm25Available,
     structuredHits: structuredResults.length,
     forcedHits: forced.length,
     finalChunks: assembled.chunks.length,
@@ -796,5 +699,6 @@ export async function retrieve(
     qualityReport,
     totalTokenCount: assembled.totalTokenCount,
     injectedMemoCount: forced.filter((c) => c.source === 'memo').length,
+    bm25Available,
   };
 }

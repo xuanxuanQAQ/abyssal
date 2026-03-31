@@ -95,8 +95,12 @@ export function scanAndReplace(
       // Fix: 未在 paperMap 中找到的 ID 保留原始 [@id] 标记而非输出裸 ID
       let cite = mapped ?? `[@${item.id}]`;
       if (item.locator) {
-        // 附加定位符（如 p. 23）
-        cite = cite.replace(/\)$/, `, ${item.locator})`);
+        // Fix #14: 附加定位符——不假设 `)` 结尾，改为追加
+        if (cite.endsWith(')')) {
+          cite = cite.slice(0, -1) + `, ${item.locator})`;
+        } else {
+          cite = `${cite}, ${item.locator}`;
+        }
       }
       return cite;
     });
@@ -117,29 +121,44 @@ export function scanAndReplace(
   };
 }
 
-// ─── §8.2 LaTeX 导出 ───
+// ─── 共用：构建 idToKey 映射 ───
 
-export function exportForLatex(
-  markdown: string,
+function buildIdToKeyMap(
   paperMap: Map<PaperId, PaperMetadata>,
-): { tex: string; bib: string } {
+): { idToKey: Map<string, string>; existingKeys: Set<string> } {
   const existingKeys = new Set<string>();
   const idToKey = new Map<string, string>();
-
-  // 为每篇论文生成 bibtex key
   for (const [id, paper] of paperMap) {
     const key = paper.bibtexKey ?? generateBibtexKey(paper, existingKeys);
     existingKeys.add(key);
     idToKey.set(id, key);
   }
+  return { idToKey, existingKeys };
+}
 
-  // 替换 [@id] → \cite{key}
-  const tex = markdown.replace(CITE_RE, (_match, id: string) => {
-    const key = idToKey.get(id) ?? id;
-    return `\\cite{${key}}`;
+// ─── §8.2 LaTeX 导出 ───
+// Fix #12: 多引用括号 [@id1; @id2] → \cite{key1,key2}（单条 \cite 命令）
+
+export function exportForLatex(
+  markdown: string,
+  paperMap: Map<PaperId, PaperMetadata>,
+): { tex: string; bib: string } {
+  const { idToKey } = buildIdToKeyMap(paperMap);
+
+  // 先处理括号级别的多引用
+  const bracketRe = new RegExp(CITE_BRACKET_RE.source, 'g');
+  const tex = markdown.replace(bracketRe, (fullMatch, inner: string) => {
+    const itemRe = new RegExp(CITE_ITEM_RE.source, 'g');
+    const keys: string[] = [];
+    let itemMatch: RegExpExecArray | null;
+    while ((itemMatch = itemRe.exec(inner)) !== null) {
+      const id = itemMatch[1]!;
+      keys.push(idToKey.get(id) ?? id);
+    }
+    if (keys.length === 0) return fullMatch;
+    return `\\cite{${keys.join(',')}}`;
   });
 
-  // 导出 .bib
   const papers = [...paperMap.values()];
   const bib = exportBibtex(papers);
 
@@ -147,24 +166,28 @@ export function exportForLatex(
 }
 
 // ─── §8.3 Pandoc Markdown 导出 ───
+// Fix #13: 多引用括号 [@id1; @id2] → [@key1; @key2]（保留 Pandoc 语法）
 
 export function exportForPandoc(
   markdown: string,
   paperMap: Map<PaperId, PaperMetadata>,
 ): { md: string; bib: string } {
-  const existingKeys = new Set<string>();
-  const idToKey = new Map<string, string>();
+  const { idToKey } = buildIdToKeyMap(paperMap);
 
-  for (const [id, paper] of paperMap) {
-    const key = paper.bibtexKey ?? generateBibtexKey(paper, existingKeys);
-    existingKeys.add(key);
-    idToKey.set(id, key);
-  }
-
-  // 替换 [@paperId] → [@bibtexKey]
-  const md = markdown.replace(CITE_RE, (_match, id: string) => {
-    const key = idToKey.get(id) ?? id;
-    return `[@${key}]`;
+  // 处理括号级别的多引用，保留定位符
+  const bracketRe = new RegExp(CITE_BRACKET_RE.source, 'g');
+  const md = markdown.replace(bracketRe, (fullMatch, inner: string) => {
+    const itemRe = new RegExp(CITE_ITEM_RE.source, 'g');
+    const parts: string[] = [];
+    let itemMatch: RegExpExecArray | null;
+    while ((itemMatch = itemRe.exec(inner)) !== null) {
+      const id = itemMatch[1]!;
+      const locator = itemMatch[2]?.trim();
+      const key = idToKey.get(id) ?? id;
+      parts.push(locator ? `@${key}, ${locator}` : `@${key}`);
+    }
+    if (parts.length === 0) return fullMatch;
+    return `[${parts.join('; ')}]`;
   });
 
   const papers = [...paperMap.values()];

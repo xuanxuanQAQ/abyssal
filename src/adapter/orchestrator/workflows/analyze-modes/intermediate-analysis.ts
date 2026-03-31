@@ -60,6 +60,7 @@ export async function runIntermediateAnalysis(
   llmClient: LlmClient,
   logger: Logger,
   workspacePath: string,
+  signal?: AbortSignal,
 ): Promise<IntermediateResult | null> {
   // Truncate text for low-cost model (typically smaller context window)
   const truncatedText = fullText.slice(0, 15000);
@@ -71,6 +72,7 @@ export async function runIntermediateAnalysis(
       content: `Paper title: ${paperTitle}\n\n${truncatedText}`,
     }],
     workflowId: 'discover_screen', // Use screening slot (low-cost)
+    ...(signal && { signal }),
   });
 
   // Parse JSON output

@@ -6,6 +6,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -14,6 +15,7 @@ interface DOIImportTabProps {
 }
 
 export function DOIImportTab({ onClose }: DOIImportTabProps) {
+  const { t } = useTranslation();
   const [dois, setDois] = useState<string[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [importing, setImporting] = useState(false);
@@ -50,7 +52,7 @@ export function DOIImportTab({ onClose }: DOIImportTabProps) {
               addDoi();
             }
           }}
-          placeholder="输入 DOI (例: 10.1000/xyz123)"
+          placeholder={t('library.doiImport.placeholder')}
           style={{
             flex: 1,
             padding: '6px 10px',
@@ -78,7 +80,7 @@ export function DOIImportTab({ onClose }: DOIImportTabProps) {
             cursor: inputValue.trim() ? 'pointer' : 'default',
           }}
         >
-          <Plus size={14} /> 添加
+          <Plus size={14} /> {t('library.doiImport.add')}
         </button>
       </div>
 
@@ -129,7 +131,7 @@ export function DOIImportTab({ onClose }: DOIImportTabProps) {
             cursor: 'pointer',
           }}
         >
-          取消
+          {t('common.cancel')}
         </button>
         <button
           onClick={handleImport}
@@ -144,7 +146,7 @@ export function DOIImportTab({ onClose }: DOIImportTabProps) {
             cursor: dois.length > 0 ? 'pointer' : 'default',
           }}
         >
-          {importing ? '导入中…' : `导入 ${dois.length} 个 DOI`}
+          {importing ? t('common.loading') : t('library.doiImport.importCount', { count: dois.length })}
         </button>
       </div>
     </div>

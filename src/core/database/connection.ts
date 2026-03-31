@@ -30,7 +30,7 @@ const MACOS_EXTRA_PRAGMAS: [string, string | number][] = [
 // ─── §1.4 sqlite-vec 扩展路径解析 ───
 
 function resolveVecExtensionPath(): string {
-  // 优先级 2：环境变量覆盖
+  // 优先级 1：环境变量覆盖
   const envPath = process.env['ABYSSAL_SQLITE_VEC_PATH'];
   if (envPath) {
     if (fs.existsSync(envPath)) return path.resolve(envPath);
@@ -39,6 +39,18 @@ function resolveVecExtensionPath(): string {
     );
   }
 
+  // 优先级 2：使用 sqlite-vec npm 包的官方路径解析
+  // sqlite-vec 按平台拆包（sqlite-vec-windows-x64 等），通过 require.resolve 定位
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { getLoadablePath } = require('sqlite-vec') as { getLoadablePath: () => string };
+    const loadablePath = getLoadablePath();
+    if (fs.existsSync(loadablePath)) return loadablePath;
+  } catch {
+    // sqlite-vec npm 包未安装，继续手动搜索
+  }
+
+  // 优先级 3：手动搜索已知路径
   const platform = process.platform;
   const arch = process.arch;
 
@@ -49,11 +61,11 @@ function resolveVecExtensionPath(): string {
         ? 'vec0.dylib'
         : 'vec0.so';
 
-  // 优先级 1：npm 包内置路径
+  const os = platform === 'win32' ? 'windows' : platform;
   const candidates = [
+    path.join('node_modules', `sqlite-vec-${os}-${arch}`, extName),
     path.join('node_modules', 'sqlite-vec', `${platform}-${arch}`, extName),
     path.join('node_modules', 'sqlite-vec', extName),
-    path.join('node_modules', 'sqlite-vec', 'dist', `${platform}-${arch}`, extName),
   ];
 
   for (const candidate of candidates) {
@@ -61,19 +73,6 @@ function resolveVecExtensionPath(): string {
     if (fs.existsSync(abs)) {
       return abs;
     }
-  }
-
-  // 优先级 3：require.resolve 定位 sqlite-vec 包（pnpm / monorepo 兼容）
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const resolve = (require as NodeRequire).resolve;
-    const pkgDir = path.dirname(resolve('sqlite-vec/package.json'));
-    const resolved = path.join(pkgDir, `${platform}-${arch}`, extName);
-    if (fs.existsSync(resolved)) return resolved;
-    const fallback = path.join(pkgDir, extName);
-    if (fs.existsSync(fallback)) return fallback;
-  } catch {
-    // require.resolve 失败，继续
   }
 
   throw new Error(

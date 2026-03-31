@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Search,
   FileText,
@@ -39,34 +40,34 @@ interface SearchResultItem {
 
 // ═══ 命令列表（§8.4）═══
 
-function getCommands(dispatch: {
-  openImportBibtex: () => void;
-  navigateToWriting: () => void;
-  toggleDarkMode: () => void;
-  closeSearch: () => void;
-}): SearchResultItem[] {
+function getCommands(
+  t: (key: string) => string,
+  dispatch: {
+    openImportBibtex: () => void;
+    navigateToWriting: () => void;
+    toggleDarkMode: () => void;
+    closeSearch: () => void;
+  },
+): SearchResultItem[] {
   return [
     {
       id: 'cmd:import-bibtex',
       type: 'command',
-      title: '导入 BibTeX 文件',
-      subtitle: 'Import BibTeX',
+      title: t('globalSearch.commands.importBibtex'),
       icon: <Zap size={14} />,
       action: dispatch.openImportBibtex,
     },
     {
       id: 'cmd:new-article',
       type: 'command',
-      title: '新建文章',
-      subtitle: 'New Article',
+      title: t('globalSearch.commands.newArticle'),
       icon: <Zap size={14} />,
       action: dispatch.navigateToWriting,
     },
     {
       id: 'cmd:toggle-dark',
       type: 'command',
-      title: '切换深色模式',
-      subtitle: 'Toggle Dark Mode',
+      title: t('globalSearch.commands.toggleDarkMode'),
       icon: <Zap size={14} />,
       action: dispatch.toggleDarkMode,
     },
@@ -75,24 +76,25 @@ function getCommands(dispatch: {
 
 // ═══ 辅助：从 NavigationTarget 生成可读标题 ═══
 
-function getTargetDisplayTitle(target: Record<string, unknown> & { type: string }): string {
+function getTargetDisplayTitle(t: (key: string) => string, target: Record<string, unknown> & { type: string }): string {
   switch (target.type) {
     case 'paper':
-      return `论文: ${String(target.id ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.papers')}: ${String(target.id ?? '').slice(0, 8)}…`;
     case 'concept':
-      return `概念: ${String(target.id ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.concepts')}: ${String(target.id ?? '').slice(0, 8)}…`;
     case 'section':
-      return `章节: ${String(target.sectionId ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.sections')}: ${String(target.sectionId ?? '').slice(0, 8)}…`;
     case 'graph':
-      return `图谱节点: ${String(target.focusNodeId ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.graphNodes')}: ${String(target.focusNodeId ?? '').slice(0, 8)}…`;
     default:
-      return '未知';
+      return '—';
   }
 }
 
 // ═══ GlobalSearch 组件 ═══
 
 export function GlobalSearch() {
+  const { t } = useTranslation();
   const globalSearchOpen = useAppStore((s) => s.globalSearchOpen);
   const closeGlobalSearch = useAppStore((s) => s.closeGlobalSearch);
   const globalSearchQuery = useAppStore((s) => s.globalSearchQuery);
@@ -112,7 +114,7 @@ export function GlobalSearch() {
   // 命令列表
   const commands = useMemo(
     () =>
-      getCommands({
+      getCommands(t, {
         closeSearch: closeGlobalSearch,
         openImportBibtex: () => {
           closeGlobalSearch();
@@ -127,7 +129,7 @@ export function GlobalSearch() {
           // TODO: 切换 ThemeContext colorScheme
         },
       }),
-    [closeGlobalSearch]
+    [t, closeGlobalSearch]
   );
 
   // §8.6 最近访问记录 — 显示可读标题
@@ -169,7 +171,7 @@ export function GlobalSearch() {
       items.push({
         id: key,
         type: displayType,
-        title: getTargetDisplayTitle(target as unknown as Record<string, unknown> & { type: string }),
+        title: getTargetDisplayTitle(t, target as unknown as Record<string, unknown> & { type: string }),
         icon:
           displayType === 'paper' ? <FileText size={14} /> :
           displayType === 'concept' ? <Lightbulb size={14} /> :
@@ -387,7 +389,7 @@ export function GlobalSearch() {
         className="global-search-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="全局搜索"
+        aria-label={t('globalSearch.title')}
         style={{ zIndex: Z_INDEX.MODAL }}
         onKeyDown={handleKeyDown}
       >
@@ -413,7 +415,7 @@ export function GlobalSearch() {
             aria-controls="global-search-results"
             value={globalSearchQuery}
             onChange={(e) => setGlobalSearchQuery(e.target.value)}
-            placeholder={isCommandMode ? '输入命令…' : '搜索论文、概念、文章、笔记…'}
+            placeholder={isCommandMode ? t('globalSearch.commandPlaceholder') : t('globalSearch.placeholder')}
             style={{
               flex: 1,
               background: 'none',
@@ -426,7 +428,7 @@ export function GlobalSearch() {
           {globalSearchQuery && (
             <button
               onClick={() => setGlobalSearchQuery('')}
-              aria-label="清空搜索"
+              aria-label={t('globalSearch.clearSearch')}
               style={{
                 background: 'none',
                 border: 'none',
@@ -453,7 +455,7 @@ export function GlobalSearch() {
           {/* 分组标题 */}
           {!globalSearchQuery && recentItems.length > 0 && (
             <div style={{ padding: '6px 16px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
-              最近访问
+              {t('globalSearch.recent')}
             </div>
           )}
 
@@ -512,14 +514,14 @@ export function GlobalSearch() {
 
           {globalSearchQuery && !isCommandMode && results.length === 0 && !isSearching && (
             <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-              无搜索结果
+              {t('globalSearch.noResults')}
             </div>
           )}
         </div>
 
         {/* 搜索结果数量通知（屏幕阅读器） */}
         <div aria-live="polite" className="sr-only">
-          {globalSearchQuery && !isSearching && `找到 ${results.length} 个结果`}
+          {globalSearchQuery && !isSearching && t('globalSearch.resultCount', { count: results.length })}
         </div>
 
         {/* 底部快捷键提示 */}
@@ -533,10 +535,10 @@ export function GlobalSearch() {
             color: 'var(--text-muted)',
           }}
         >
-          <span>↑↓ 导航</span>
-          <span>↵ 打开</span>
-          <span>Esc 关闭</span>
-          <span style={{ marginLeft: 'auto' }}>{`> 命令模式`}</span>
+          <span>{t('globalSearch.hints.navigate')}</span>
+          <span>{t('globalSearch.hints.open')}</span>
+          <span>{t('globalSearch.hints.close')}</span>
+          <span style={{ marginLeft: 'auto' }}>{t('globalSearch.hints.commandMode')}</span>
         </div>
       </div>
     </>

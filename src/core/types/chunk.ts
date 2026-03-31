@@ -51,6 +51,18 @@ export type ChunkOriginPath = (typeof CHUNK_ORIGIN_PATHS)[number];
 /** SectionLabel → 该节全文文本的映射（由 process 模块 extractSections 生成） */
 export type SectionMap = Map<SectionLabel, string>;
 
+/** 带偏移量的节条目（V2） */
+export interface SectionEntry {
+  text: string;
+  /** 该节在 fullText 中的起始字符偏移 */
+  charStart: number;
+  /** 该节在 fullText 中的结束字符偏移 */
+  charEnd: number;
+}
+
+/** SectionLabel → 带偏移量的节条目映射 */
+export type SectionMapV2 = Map<SectionLabel, SectionEntry>;
+
 // ═══ SectionBoundary ═══
 
 /** 节标题的原始信息（行号、标签、标题文本） */
@@ -59,6 +71,12 @@ export interface SectionBoundary {
   label: SectionLabel;
   title: string;
   type: SectionType | null;
+  /** 该节内容在 fullText 中的起始字符偏移 */
+  charStart?: number;
+  /** 该节内容在 fullText 中的结束字符偏移 */
+  charEnd?: number;
+  /** 标题层级深度：1=顶层，2=子节，3=子子节 */
+  depth?: number;
 }
 
 export type SectionBoundaryList = SectionBoundary[];

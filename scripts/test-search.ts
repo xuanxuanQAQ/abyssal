@@ -25,6 +25,7 @@ const minimalConfig = {
     unpaywallEmail: null,
     cohereApiKey: null,
     jinaApiKey: null,
+    siliconflowApiKey: null,
   },
 } as AbyssalConfig;
 

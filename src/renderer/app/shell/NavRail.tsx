@@ -11,6 +11,7 @@
 
 import React, { useCallback, useTransition } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { useTranslation } from 'react-i18next';
 import {
   BookOpen,
   BookText,
@@ -28,28 +29,29 @@ import { Z_INDEX } from '../../styles/zIndex';
 
 interface NavItem {
   icon: React.ReactNode;
-  label: string;
+  labelKey: string;
   viewType: ViewType;
   shortcut: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: <BookOpen size={20} />,    label: 'Library',  viewType: 'library',  shortcut: 'Ctrl+1' },
-  { icon: <BookText size={20} />,    label: 'Reader',   viewType: 'reader',   shortcut: 'Ctrl+2' },
-  { icon: <Microscope size={20} />,  label: 'Analysis', viewType: 'analysis', shortcut: 'Ctrl+3' },
-  { icon: <Network size={20} />,     label: 'Graph',    viewType: 'graph',    shortcut: 'Ctrl+4' },
-  { icon: <PenTool size={20} />,     label: 'Writing',  viewType: 'writing',  shortcut: 'Ctrl+5' },
-  { icon: <StickyNote size={20} />,  label: 'Notes',    viewType: 'notes',    shortcut: 'Ctrl+6' },
+  { icon: <BookOpen size={20} />,    labelKey: 'nav.library',  viewType: 'library',  shortcut: 'Ctrl+1' },
+  { icon: <BookText size={20} />,    labelKey: 'nav.reader',   viewType: 'reader',   shortcut: 'Ctrl+2' },
+  { icon: <Microscope size={20} />,  labelKey: 'nav.analysis', viewType: 'analysis', shortcut: 'Ctrl+3' },
+  { icon: <Network size={20} />,     labelKey: 'nav.graph',    viewType: 'graph',    shortcut: 'Ctrl+4' },
+  { icon: <PenTool size={20} />,     labelKey: 'nav.writing',  viewType: 'writing',  shortcut: 'Ctrl+5' },
+  { icon: <StickyNote size={20} />,  labelKey: 'nav.notes',    viewType: 'notes',    shortcut: 'Ctrl+6' },
 ];
 
 const SETTINGS_ITEM: NavItem = {
   icon: <Settings size={20} />,
-  label: 'Settings',
+  labelKey: 'nav.settings',
   viewType: 'settings',
   shortcut: 'Ctrl+,',
 };
 
 export function NavRail() {
+  const { t } = useTranslation();
   const activeView = useAppStore((s) => s.activeView);
   const navigateTo = useAppStore((s) => s.navigateTo);
 
@@ -58,6 +60,8 @@ export function NavRail() {
 
   const switchView = useAppStore((s) => s.switchView);
   const [isPending, startTransition] = useTransition();
+
+  const previousView = useAppStore((s) => s.previousView);
 
   const handleNavClick = useCallback((viewType: ViewType) => {
     startTransition(() => {
@@ -94,7 +98,7 @@ export function NavRail() {
               <NavIcon
                 id={`nav-${item.viewType}`}
                 icon={item.icon}
-                label={item.label}
+                label={t(item.labelKey)}
                 shortcut={item.shortcut}
                 isActive={activeView === item.viewType}
                 onClick={() => handleNavClick(item.viewType)}
@@ -110,10 +114,16 @@ export function NavRail() {
         <NavIcon
           id={`nav-${SETTINGS_ITEM.viewType}`}
           icon={SETTINGS_ITEM.icon}
-          label={SETTINGS_ITEM.label}
+          label={t(SETTINGS_ITEM.labelKey)}
           shortcut={SETTINGS_ITEM.shortcut}
           isActive={activeView === SETTINGS_ITEM.viewType}
-          onClick={() => handleNavClick(SETTINGS_ITEM.viewType)}
+          onClick={() => {
+            if (activeView === 'settings' && previousView) {
+              handleNavClick(previousView);
+            } else {
+              handleNavClick(SETTINGS_ITEM.viewType);
+            }
+          }}
         />
       </nav>
     </Tooltip.Provider>

@@ -1,13 +1,85 @@
 // ═══ 嵌入模型迁移引擎 ═══
 // §7: 切换嵌入模型时重建全部向量索引。
-// 这是一个破坏性操作——迁移期间向量检索不可用。
+//
+// 蓝绿部署：迁移期间写入影子表 chunks_vec_new，旧表保持可用，
+// 完成后原子交换表名，向量检索几乎零停机。
 
 import type Database from 'better-sqlite3';
 import type { Logger } from '../infra/logger';
 import type { AbyssalConfig } from '../types/config';
+import type { EmbedFunction } from '../types/common';
 
-// TODO: embedder.embed(texts) 调用——依赖嵌入器服务实例注入
-// TODO: computeRelationsForPaper 的 semanticSearchFn 参数需由 RAG 模块提供
+// ─── §7.0 一致性检查 ───
+
+export interface EmbeddingConsistencyResult {
+  consistent: boolean;
+  existingDim?: number;
+  configDim?: number;
+  existingModel?: string;
+  configModel?: string;
+  action?: 'embedding_migration_required' | 'embedding_migration_recommended';
+  message?: string;
+}
+
+/**
+ * 检查数据库中已有向量与配置的嵌入维度/模型一致性。
+ * 返回结构化结果供 config-validator 使用。
+ */
+export function checkEmbeddingConsistency(
+  db: Database.Database,
+  config: AbyssalConfig,
+): EmbeddingConsistencyResult {
+  try {
+    const dimRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_dimension'",
+    ).get() as { value: string } | undefined;
+
+    if (!dimRow) {
+      return { consistent: true }; // 新项目或无 _meta 记录
+    }
+
+    const existingDim = parseInt(dimRow.value, 10);
+    const configDim = config.rag.embeddingDimension;
+
+    if (Number.isNaN(existingDim)) {
+      return { consistent: true }; // 损坏的元数据，跳过
+    }
+
+    if (existingDim !== configDim) {
+      return {
+        consistent: false,
+        existingDim,
+        configDim,
+        action: 'embedding_migration_required',
+        message: `Embedding dimension mismatch: database has ${existingDim}D vectors, ` +
+          `config specifies ${configDim}D. Migration required.`,
+      };
+    }
+
+    // 维度一致——检查模型
+    const modelRow = db.prepare(
+      "SELECT value FROM _meta WHERE key = 'embedding_model'",
+    ).get() as { value: string } | undefined;
+
+    if (modelRow && modelRow.value !== config.rag.embeddingModel) {
+      return {
+        consistent: false,
+        existingDim,
+        configDim,
+        existingModel: modelRow.value,
+        configModel: config.rag.embeddingModel,
+        action: 'embedding_migration_recommended',
+        message: `Embedding model changed from "${modelRow.value}" to "${config.rag.embeddingModel}". ` +
+          `Dimensions match but vector semantics may differ. Migration recommended.`,
+      };
+    }
+
+    return { consistent: true };
+  } catch {
+    // _meta 表不存在——旧版数据库
+    return { consistent: true };
+  }
+}
 
 // ─── §7.1 预估 ───
 
@@ -57,8 +129,8 @@ export function estimateEmbeddingMigration(
     // _meta 不存在
   }
 
-  // 粗略估算时间（API ~500 embeddings/s，本地 ONNX ~100 embeddings/s）
-  const rate = config.rag.embeddingBackend === 'api' ? 500 : 100;
+  // 粗略估算时间（API ~500 embeddings/s）
+  const rate = 500;
   const seconds = Math.ceil(totalChunks / rate);
   const minutes = Math.ceil(seconds / 60);
   const estimatedTimeDescription =
@@ -81,12 +153,8 @@ export interface EmbeddingMigrationOptions {
   db: Database.Database;
   config: AbyssalConfig;
   logger: Logger;
-  snapshotsDir: string;
-  /**
-   * 嵌入函数——由调用方注入。
-   * 接受文本数组，返回对应的嵌入向量数组。
-   */
-  embedFn: (texts: string[]) => Promise<Float32Array[]>;
+  /** 嵌入函数——由 LlmClient.asEmbedFunction() 提供 */
+  embedFn: EmbedFunction;
   /** 进度回调（可选） */
   onProgress?: (processed: number, total: number) => void;
 }
@@ -94,13 +162,13 @@ export interface EmbeddingMigrationOptions {
 /**
  * 执行嵌入模型迁移。
  *
- * §7.2 步骤：
- * 1. 预估（调用方已确认）
- * 2. 创建快照
- * 3. 重建 chunks_vec 虚拟表
- * 4. 批量重新嵌入（500/事务，支持中断恢复）
+ * 步骤：
+ * 1. 检查中断恢复点
+ * 2. 创建影子虚拟表 (chunks_vec_new)
+ * 3. 批量重新嵌入（2048/事务，与 API batch 上限对齐，支持中断恢复）
+ * 4. 原子交换表名（蓝绿切换）
  * 5. 更新 _meta
- * 6. 重算 semantic_neighbor 关系
+ * 6. 清除过期 semantic_neighbor 关系
  */
 export async function runEmbeddingMigration(
   options: EmbeddingMigrationOptions,
@@ -108,19 +176,15 @@ export async function runEmbeddingMigration(
   const { db, config, logger, embedFn, onProgress } = options;
   const newDimension = config.rag.embeddingDimension;
   const newModel = config.rag.embeddingModel;
-  const batchSize = 500;
+  // Fix #11: 增大批次以减少事务开销（embedder API batch 上限 2048，对齐之）
+  const batchSize = 2048;
 
-  // ── 步骤 2：创建快照（由调用方在调用前执行，此处仅记录日志） ──
   logger.info('Starting embedding migration', {
     targetDimension: newDimension,
     targetModel: newModel,
   });
 
-  // ── 步骤 3：蓝绿部署——创建 chunks_vec_new 而非直接 DROP 旧表 ──
-  // Fix #4: 在 chunks_vec_new 后台写入期间，旧 chunks_vec 保持可用，
-  // 向量搜索零停机。写入完成后原子交换表名。
-
-  // 检查是否有中断恢复点
+  // ── 步骤 1：检查中断恢复点 ──
   let lastProcessedRowid = 0;
   try {
     const resumeRow = db.prepare(
@@ -137,11 +201,10 @@ export async function runEmbeddingMigration(
     // _meta 不存在或无记录——从头开始
   }
 
-  // 影子表名：写入期间使用 chunks_vec_new
+  // ── 步骤 2：蓝绿部署——创建影子虚拟表 ──
   const shadowTable = 'chunks_vec_new';
 
   if (lastProcessedRowid === 0) {
-    // 首次执行——创建影子虚拟表（旧表保持不动）
     db.exec(`DROP TABLE IF EXISTS ${shadowTable}`);
     db.exec(
       `CREATE VIRTUAL TABLE ${shadowTable} USING vec0(embedding float[${newDimension}])`,
@@ -152,7 +215,7 @@ export async function runEmbeddingMigration(
     });
   }
 
-  // ── 步骤 4：批量重新嵌入（写入影子表） ──
+  // ── 步骤 3：批量重新嵌入（写入影子表） ──
   const totalChunks = (
     db.prepare('SELECT COUNT(*) AS cnt FROM chunks').get() as { cnt: number }
   ).cnt;
@@ -184,12 +247,13 @@ export async function runEmbeddingMigration(
     if (batch.length === 0) break;
 
     const texts = batch.map((r) => r.text);
-    const embeddings = await embedFn(texts);
+    const embeddings = await embedFn.embed(texts);
 
-    // 事务内批量写入影子表
+    // 事务内批量写入影子表 + 更新检查点
     const writeBatch = db.transaction(() => {
       for (let i = 0; i < batch.length; i++) {
-        insertVec.run(batch[i]!.rowid, embeddings[i]!);
+        const vec = embeddings[i]!;
+        insertVec.run(batch[i]!.rowid, Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength));
       }
       const lastRowid = batch[batch.length - 1]!.rowid;
       upsertMeta.run(String(lastRowid));
@@ -210,12 +274,9 @@ export async function runEmbeddingMigration(
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  // ── 步骤 4.5：原子交换——蓝绿切换 ──
-  // 在单个 EXCLUSIVE 事务中极速交换表名，
-  // 系统不可用时间从数十分钟压缩到毫秒级。
+  // ── 步骤 4：原子交换——蓝绿切换 ──
   logger.info('Performing atomic blue-green swap');
 
-  // 需要先删除引用 chunks_vec 的触发器
   db.exec(`DROP TRIGGER IF EXISTS trg_chunks_before_delete`);
 
   db.exec('BEGIN EXCLUSIVE');
@@ -228,7 +289,7 @@ export async function runEmbeddingMigration(
     throw err;
   }
 
-  // 重建触发器（引用新的 chunks_vec）
+  // 重建触发器
   db.exec(`
     CREATE TRIGGER trg_chunks_before_delete BEFORE DELETE ON chunks
     FOR EACH ROW
@@ -259,15 +320,12 @@ export async function runEmbeddingMigration(
     model: newModel,
   });
 
-  // ── 步骤 6：重算 semantic_neighbor 关系 ──
-  // TODO: computeRelationsForPaper 的 semanticSearchFn 参数需由 RAG 模块提供
+  // ── 步骤 6：清除过期 semantic_neighbor 关系 ──
   logger.info('Clearing stale semantic_neighbor relations');
   db.prepare(
     "DELETE FROM paper_relations WHERE edge_type = 'semantic_neighbor'",
   ).run();
-  logger.info(
-    'semantic_neighbor relations cleared. Recomputation requires RAG module (TODO).',
-  );
+  logger.info('semantic_neighbor relations cleared — will be rebuilt on next RAG query');
 }
 
 // ─── §7.3 中断恢复检测 ───

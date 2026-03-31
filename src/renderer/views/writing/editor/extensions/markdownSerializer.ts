@@ -141,6 +141,28 @@ function serializeNode(node: ProseMirrorNode, lines: string[]): void {
       break;
     }
 
+    case 'section': {
+      // Unified editor section wrapper — serialize children directly
+      serializeFragment(node, lines);
+      break;
+    }
+
+    case 'figure': {
+      const src = (node.attrs.src as string) ?? '';
+      const alt = (node.attrs.alt as string) ?? '';
+      const caption = (node.attrs.caption as string) ?? '';
+      const label = (node.attrs.label as string) ?? '';
+      lines.push(`![${alt}](${src})`);
+      if (caption) {
+        lines.push(`*${caption}*`);
+      }
+      if (label) {
+        lines.push(`{#${label}}`);
+      }
+      lines.push('');
+      break;
+    }
+
     case 'table': {
       serializeTable(node, lines);
       lines.push('');
@@ -184,6 +206,19 @@ function serializeInlineContent(node: ProseMirrorNode): string {
     if (child.type.name === 'mathInline') {
       const latex = (child.attrs.latex as string) ?? '';
       parts.push(`$${latex}$`);
+      return;
+    }
+
+    if (child.type.name === 'footnote') {
+      const content = (child.attrs.content as string) ?? '';
+      parts.push(`[^${content}]`);
+      return;
+    }
+
+    if (child.type.name === 'crossRef') {
+      const label = (child.attrs.label as string) ?? '';
+      const displayText = (child.attrs.displayText as string) ?? '';
+      parts.push(displayText || `{@${label}}`);
       return;
     }
 

@@ -12,6 +12,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Clock, Check, AlertCircle } from 'lucide-react';
@@ -20,9 +21,11 @@ import type { ChatMessage } from '../../../../shared-types/models';
 
 interface ChatBubbleProps {
   message: ChatMessage;
+  onRetry?: ((messageId: string) => void) | undefined;
 }
 
-function ChatBubbleInner({ message }: ChatBubbleProps) {
+function ChatBubbleInner({ message, onRetry }: ChatBubbleProps) {
+  const { t } = useTranslation();
   const isUser = message.role === 'user';
   const displayContent = message.status === 'streaming'
     ? (message.streamBuffer ?? message.content)
@@ -47,21 +50,24 @@ function ChatBubbleInner({ message }: ChatBubbleProps) {
       style={{
         display: 'flex',
         justifyContent: isUser ? 'flex-end' : 'flex-start',
-        padding: '4px 12px',
+        padding: '3px 12px',
       }}
     >
       <div
         style={{
-          maxWidth: isUser ? '85%' : '92%',
-          padding: '8px 12px',
-          borderRadius: 'var(--radius-md)',
+          maxWidth: isUser ? '82%' : '92%',
+          padding: isUser ? '8px 14px' : '10px 14px',
+          borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
           backgroundColor: isUser
-            ? 'rgba(var(--accent-color-rgb, 59, 130, 246), 0.15)'
+            ? 'rgba(var(--accent-color-rgb, 59, 130, 246), 0.13)'
             : 'var(--bg-surface)',
           border:
             message.status === 'error'
               ? '1px solid var(--danger)'
-              : '1px solid var(--border-subtle)',
+              : isUser
+                ? '1px solid rgba(var(--accent-color-rgb, 59, 130, 246), 0.2)'
+                : '1px solid var(--border-subtle)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
           fontSize: 'var(--text-sm)',
           lineHeight: 1.6,
           color: 'var(--text-primary)',
@@ -83,21 +89,6 @@ function ChatBubbleInner({ message }: ChatBubbleProps) {
           </div>
         )}
 
-        {/* 流式光标 */}
-        {message.status === 'streaming' && (
-          <span
-            style={{
-              display: 'inline-block',
-              width: 2,
-              height: '1em',
-              backgroundColor: 'var(--accent-color)',
-              marginLeft: 2,
-              animation: 'blink 1s step-end infinite',
-              verticalAlign: 'text-bottom',
-            }}
-          />
-        )}
-
         {/* 用户消息状态图标 */}
         {statusIcon && (
           <div
@@ -112,8 +103,9 @@ function ChatBubbleInner({ message }: ChatBubbleProps) {
         )}
 
         {/* 错误状态重试按钮 */}
-        {message.status === 'error' && (
+        {message.status === 'error' && onRetry && (
           <button
+            onClick={() => onRetry(message.id)}
             style={{
               marginTop: 4,
               padding: '2px 8px',
@@ -125,7 +117,7 @@ function ChatBubbleInner({ message }: ChatBubbleProps) {
               cursor: 'pointer',
             }}
           >
-            重试
+            {t('context.chat.retry')}
           </button>
         )}
       </div>
@@ -138,6 +130,8 @@ export const ChatBubble = React.memo(
   (prev, next) => {
     // 流式消息需要重渲染
     if (next.message.status === 'streaming') return false;
+    // 状态变化需要重渲染（如 error → sending）
+    if (prev.message.status !== next.message.status) return false;
     // 已完成消息完全静态化
     return prev.message.id === next.message.id && prev.message.content === next.message.content;
   }

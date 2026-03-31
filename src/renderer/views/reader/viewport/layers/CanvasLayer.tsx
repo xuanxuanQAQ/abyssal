@@ -39,6 +39,7 @@ const CanvasLayer = React.memo(function CanvasLayer(props: CanvasLayerProps) {
   const activeCanvasRef = useRef<'a' | 'b'>('a');
   const previousScaleRef = useRef<number>(scale);
   const isRenderingRef = useRef(false);
+  const wasInRenderWindowRef = useRef(isInRenderWindow);
 
   const getActiveCanvas = useCallback(() => {
     return activeCanvasRef.current === 'a' ? canvasARef.current : canvasBRef.current;
@@ -113,6 +114,37 @@ const CanvasLayer = React.memo(function CanvasLayer(props: CanvasLayerProps) {
     getActiveCanvas,
     getBackgroundCanvas,
   ]);
+
+  // §5.3: Release canvas GPU backing store when page leaves render window.
+  // Setting width=0 forces the browser to deallocate the bitmap.
+  useEffect(() => {
+    const wasIn = wasInRenderWindowRef.current;
+    wasInRenderWindowRef.current = isInRenderWindow;
+
+    if (wasIn && !isInRenderWindow) {
+      // Leaving render window — release canvas memory
+      for (const ref of [canvasARef, canvasBRef]) {
+        const canvas = ref.current;
+        if (canvas) {
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+      }
+    }
+  }, [isInRenderWindow]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      for (const ref of [canvasARef, canvasBRef]) {
+        const canvas = ref.current;
+        if (canvas) {
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+      }
+    };
+  }, []);
 
   if (!isInRenderWindow) {
     return null;

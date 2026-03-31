@@ -53,21 +53,33 @@ export interface SemanticSearchAdapter {
  * Safe to call multiple times (idempotent — clears and rebuilds).
  * Non-fatal: errors are logged but don't fail the analysis workflow.
  */
-export function computeRelationsAfterAnalysis(
+/**
+ * Compute relations for a single paper after analysis completion.
+ *
+ * Safe to call multiple times (idempotent — clears and rebuilds).
+ * Non-fatal: errors are logged but don't fail the analysis workflow.
+ */
+export async function computeRelationsAfterAnalysis(
   paperId: string,
   db: RelationComputeDb,
   semanticSearch: SemanticSearchAdapter | null,
   logger: Logger,
-): void {
+): Promise<void> {
   try {
-    // Build a sync semantic search function for the DAO
-    // TODO: semanticSearchFn depends on RagService KNN search.
-    // When RagService is available, wrap its async search in a sync shim
-    // or refactor DAO to accept async function.
-    const semanticSearchFn = null; // Semantic neighbor computation deferred
+    // Build semantic search function from adapter if available
+    let semanticSearchFn: ((pid: string, topK: number) => Array<{ paperId: string; score: number }>) | null = null;
+
+    if (semanticSearch) {
+      // Pre-fetch semantic neighbors and provide as sync function
+      try {
+        const neighbors = await semanticSearch.findSimilarPapers(paperId, 20);
+        semanticSearchFn = (_pid: string, topK: number) => neighbors.slice(0, topK);
+      } catch (err) {
+        logger.debug(`Semantic search for relations failed for ${paperId}: ${(err as Error).message}`);
+      }
+    }
 
     db.computeRelationsForPaper(paperId, semanticSearchFn);
-
     logger.debug('Relations computed', { paperId });
   } catch (err) {
     // Non-fatal — relations are a derived index, not primary data

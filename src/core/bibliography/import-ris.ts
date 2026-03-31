@@ -22,6 +22,14 @@ const TY_MAP: Record<string, PaperType> = {
   MISC: 'unknown',
 };
 
+// ─── Fix #5: 已知映射标签（用于收集 unmappedFields） ───
+
+const MAPPED_TAGS = new Set([
+  'TY', 'TI', 'T1', 'AU', 'A1', 'A2', 'ED', 'PY', 'Y1', 'DO',
+  'AB', 'N2', 'JO', 'JF', 'T2', 'VL', 'IS', 'SP', 'EP', 'PB',
+  'SN', 'UR', 'ID', 'ER', 'BT',
+]);
+
 // ─── 行解析正则 ───
 
 const TAG_RE = /^([A-Z][A-Z0-9])\s{2}-\s(.*)$/;
@@ -56,7 +64,9 @@ export function importRis(input: string): ImportedEntry[] {
     const title = get(['TI', 'T1']);
     const doi = get(['DO']) ? normalizeDoi(get(['DO'])!) : null;
     const yearStr = get(['PY', 'Y1']);
-    const year = yearStr ? parseInt(yearStr.replace(/[^0-9]/g, '').slice(0, 4), 10) || 0 : 0;
+    // Fix #4: 解析失败返回 null 而非 0（与 import-bibtex 保持一致）
+    const yearRaw = yearStr ? parseInt(yearStr.replace(/[^0-9]/g, '').slice(0, 4), 10) : null;
+    const year = (yearRaw && yearRaw >= 1000 && yearRaw <= 2100) ? yearRaw : null;
 
     const rawAuthors = getAll(['AU', 'A1']);
     const authors = rawAuthors.map((a) =>
@@ -81,7 +91,7 @@ export function importRis(input: string): ImportedEntry[] {
       id: generatePaperId(doi, null, title),
       title: title ?? '',
       authors,
-      year,
+      year: year ?? 0,
       doi,
       arxivId: null,
       abstract: get(['AB', 'N2']),
@@ -97,8 +107,9 @@ export function importRis(input: string): ImportedEntry[] {
       url: get(['UR']),
       venue: null,
       edition: null,
-      editors: null,
-      bookTitle: null,
+      // Fix #23: A2/ED → editors, BT → bookTitle
+      editors: getAll(['A2', 'ED']).length > 0 ? getAll(['A2', 'ED']) : null,
+      bookTitle: get(['BT']),
       series: null,
       citationCount: null,
       pmid: null,
@@ -107,10 +118,18 @@ export function importRis(input: string): ImportedEntry[] {
       biblioComplete: false,
     };
 
+    // Fix #5: 收集未映射字段
+    const unmappedFields: Record<string, string> = {};
+    for (const ct of currentTags) {
+      if (!MAPPED_TAGS.has(ct.tag)) {
+        unmappedFields[ct.tag] = ct.value;
+      }
+    }
+
     results.push({
       originalKey: get(['ID']) ?? `ris_${results.length}`,
       metadata,
-      unmappedFields: {},
+      unmappedFields,
       sourceFormat: 'ris',
     });
   }

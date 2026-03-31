@@ -139,9 +139,10 @@ export function useUpdatePaper() {
     },
 
     onSettled: (_data, _err, { id }) => {
-      // 仅失效 counts 和当前论文 detail（不刷新列表）
       queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
       queryClient.invalidateQueries({ queryKey: ['papers', 'detail', id] });
+      // 失效列表确保乐观更新与 DB 一致（单行更新不会引发 refetch storm）
+      queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
     },
   });
 }
@@ -222,6 +223,24 @@ export function useBatchDeletePapers() {
 
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['papers'] });
+    },
+
+    onError: (err) => handleError(err),
+  });
+}
+
+/** 删除分析报告并重置分析状态 */
+export function useResetAnalysis() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => getAPI().db.papers.resetAnalysis(id),
+
+    onSettled: (_data, _err, id) => {
+      queryClient.invalidateQueries({ queryKey: ['papers', 'detail', id] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
+      queryClient.invalidateQueries({ queryKey: ['mappings'] });
     },
 
     onError: (err) => handleError(err),

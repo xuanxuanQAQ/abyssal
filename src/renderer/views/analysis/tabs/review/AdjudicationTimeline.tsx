@@ -1,20 +1,21 @@
 /**
  * AdjudicationTimeline -- Visual timeline of adjudication actions for a
- * paper's mappings.
- *
- * Shows non-pending mappings grouped by status (accepted, revised, rejected).
- * Since we don't have actual timestamps from the backend yet, entries are
- * ordered by status priority: accepted -> revised -> rejected.
- *
- * TODO: Add actual timestamp data from backend once available.
+ * paper's mappings, with real timestamps from concept history.
  */
 
 import React, { useMemo } from 'react';
 import type { ConceptMapping } from '../../../../../shared-types/models';
 import type { AdjudicationStatus, RelationType } from '../../../../../shared-types/enums';
+import { RELATION_LABELS_ZH } from '../../shared/relationTheme';
 
 interface AdjudicationTimelineProps {
   mappings: ConceptMapping[];
+  /** Optional concept timeline entries with timestamps */
+  timelineEntries?: Array<{
+    conceptId: string;
+    timestamp: string;
+    changeType: string;
+  }>;
 }
 
 interface StatusInfo {
@@ -37,30 +38,72 @@ const STATUS_SORT_ORDER: Record<AdjudicationStatus, number> = {
   pending: 3,
 };
 
-function getRelationLabel(type: RelationType): string {
-  switch (type) {
-    case 'supports':
-      return 'supports';
-    case 'challenges':
-      return 'challenges';
-    case 'extends':
-      return 'extends';
-    default:
-      return 'irrelevant';
+function formatTimestamp(isoStr: string): string {
+  try {
+    const date = new Date(isoStr);
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return isoStr;
   }
 }
 
-export function AdjudicationTimeline({ mappings }: AdjudicationTimelineProps) {
+export function AdjudicationTimeline({
+  mappings,
+  timelineEntries,
+}: AdjudicationTimelineProps) {
+  // Build a lookup from conceptId to most recent adjudication timestamp
+  const timestampMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!timelineEntries) return map;
+
+    // Sort entries by timestamp descending, so first match is most recent
+    const sorted = [...timelineEntries].sort((a, b) =>
+      b.timestamp.localeCompare(a.timestamp),
+    );
+
+    for (const entry of sorted) {
+      // Match adjudication-related change types
+      if (
+        entry.changeType === 'adjudication' ||
+        entry.changeType === 'mapping_reviewed' ||
+        entry.changeType === 'mapping_accepted' ||
+        entry.changeType === 'mapping_rejected' ||
+        entry.changeType === 'mapping_revised'
+      ) {
+        if (!map.has(entry.conceptId)) {
+          map.set(entry.conceptId, entry.timestamp);
+        }
+      }
+    }
+
+    return map;
+  }, [timelineEntries]);
+
   const adjudicatedMappings = useMemo(
     () =>
       mappings
         .filter((m) => m.adjudicationStatus !== 'pending')
-        .sort(
-          (a, b) =>
+        .sort((a, b) => {
+          // Primary sort: by timestamp (if available), most recent first
+          const tsA = timestampMap.get(a.conceptId) ?? '';
+          const tsB = timestampMap.get(b.conceptId) ?? '';
+          if (tsA && tsB) {
+            const cmp = tsB.localeCompare(tsA);
+            if (cmp !== 0) return cmp;
+          }
+          // Fallback: by status priority
+          return (
             STATUS_SORT_ORDER[a.adjudicationStatus] -
-            STATUS_SORT_ORDER[b.adjudicationStatus],
-        ),
-    [mappings],
+            STATUS_SORT_ORDER[b.adjudicationStatus]
+          );
+        }),
+    [mappings, timestampMap],
   );
 
   if (adjudicatedMappings.length === 0) {
@@ -76,7 +119,12 @@ export function AdjudicationTimeline({ mappings }: AdjudicationTimelineProps) {
         >
           Adjudication Timeline
         </h3>
-        <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
+        <div
+          style={{
+            color: 'var(--text-muted)',
+            fontSize: 'var(--text-xs)',
+          }}
+        >
           No adjudication actions recorded yet.
         </div>
       </div>
@@ -111,6 +159,7 @@ export function AdjudicationTimeline({ mappings }: AdjudicationTimelineProps) {
 
         {adjudicatedMappings.map((mapping) => {
           const status = STATUS_MAP[mapping.adjudicationStatus];
+          const timestamp = timestampMap.get(mapping.conceptId);
 
           return (
             <div
@@ -139,20 +188,45 @@ export function AdjudicationTimeline({ mappings }: AdjudicationTimelineProps) {
               <div
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  color: 'var(--text-secondary)',
+                  flexDirection: 'column',
+                  gap: 2,
                 }}
               >
-                <span style={{ color: status.color, fontWeight: 600, minWidth: 70 }}>
-                  {status.icon} {status.label}
-                </span>
-                <span style={{ color: 'var(--text-primary)' }}>
-                  {mapping.conceptId}
-                </span>
-                <span style={{ color: 'var(--text-muted)' }}>
-                  ({getRelationLabel(mapping.relationType)})
-                </span>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <span
+                    style={{
+                      color: status.color,
+                      fontWeight: 600,
+                      minWidth: 70,
+                    }}
+                  >
+                    {status.icon} {status.label}
+                  </span>
+                  <span style={{ color: 'var(--text-primary)' }}>
+                    {mapping.conceptId}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    ({RELATION_LABELS_ZH[mapping.relationType] ?? mapping.relationType})
+                  </span>
+                </div>
+                {timestamp && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      color: 'var(--text-muted)',
+                      marginLeft: 78,
+                    }}
+                  >
+                    {formatTimestamp(timestamp)}
+                  </span>
+                )}
               </div>
             </div>
           );

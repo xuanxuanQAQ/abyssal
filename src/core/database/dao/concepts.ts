@@ -121,6 +121,15 @@ export function addConcept(
       maturity, parent_id, history, deprecated, deprecated_at,
       deprecated_reason, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name_zh = excluded.name_zh,
+      name_en = excluded.name_en,
+      layer = excluded.layer,
+      definition = excluded.definition,
+      search_keywords = excluded.search_keywords,
+      maturity = excluded.maturity,
+      parent_id = excluded.parent_id,
+      updated_at = excluded.updated_at
   `).run(
     concept.id,
     concept.nameZh,
@@ -312,6 +321,46 @@ export function deprecateConcept(
     db.prepare(
       'UPDATE suggested_concepts SET closest_existing_concept_id = NULL WHERE closest_existing_concept_id = ?',
     ).run(id);
+
+    // §8.2: 清理 research_memos 中废弃概念引用
+    // 从 concept_ids JSON 数组中移除废弃概念 ID
+    db.prepare(`
+      UPDATE research_memos
+      SET concept_ids = (
+        SELECT json_group_array(val)
+        FROM (
+          SELECT je.value AS val
+          FROM json_each(concept_ids) je
+          WHERE je.value != ?
+        )
+      ),
+      updated_at = ?
+      WHERE id IN (
+        SELECT m.id FROM research_memos m, json_each(m.concept_ids) je
+        WHERE je.value = ?
+      )
+    `).run(id, timestamp, id);
+
+    // §8.3: 清理 research_notes 中废弃概念引用
+    db.prepare(`
+      UPDATE research_notes
+      SET linked_concept_ids = (
+        SELECT json_group_array(val)
+        FROM (
+          SELECT je.value AS val
+          FROM json_each(linked_concept_ids) je
+          WHERE je.value != ?
+        )
+      ),
+      updated_at = ?
+      WHERE id IN (
+        SELECT n.id FROM research_notes n, json_each(n.linked_concept_ids) je
+        WHERE je.value = ?
+      )
+    `).run(id, timestamp, id);
+
+    // §8.4: 清理 memo_concept_map 规范化表
+    db.prepare('DELETE FROM memo_concept_map WHERE concept_id = ?').run(id);
 
     return gcConceptChange(db, id, 'deprecated', false);
   });

@@ -52,7 +52,12 @@ import { countTokens } from '../../llm-client/token-counter';
 import { resolveAnalysisRoute, type PaperFeatures } from './analyze-modes/model-router';
 import { runIntermediateAnalysis } from './analyze-modes/intermediate-analysis';
 import { runGenericAnalysis } from './analyze-modes/generic-analysis';
-import { selectConceptSubsetEnhanced, type SubsetSelectorDb } from './concept-evolution/concept-subset-selector';
+import {
+  filterConceptSubsetAsync,
+  type ConceptForSubset,
+  type SubsetSelectorDb,
+} from '../../prompt-assembler/concept-subset-selector';
+import { resolveMaturityParams, buildMaturityInstructions } from './concept-evolution/maturity-evaluator';
 import { aggregateSuggestions, type SuggestionDb, type PushNotifier } from './suggested-concepts/suggestion-aggregator';
 import { computeRelationsAfterAnalysis, type RelationComputeDb } from './relations/compute-relations';
 
@@ -66,27 +71,38 @@ export interface AnalyzeServices {
     getAllConcepts: () => Promise<Array<Record<string, unknown>>>;
     getMemosByEntity: (type: string, id: string) => Promise<Array<Record<string, unknown>>>;
     getAnnotations: (paperId: unknown) => Promise<unknown[]>;
-    mapPaperConcept: (paperId: unknown, mappings: unknown) => Promise<void>;
+    mapPaperConcept: (mapping: unknown) => Promise<void>;
+    mapPaperConceptBatch: (mappings: unknown[]) => Promise<void>;
     addSuggestedConcept: (suggestion: unknown) => Promise<void>;
     getConcept: (id: unknown) => Promise<Record<string, unknown> | null>;
     getStats: () => Promise<{ concepts: { total: number; tentative: number; working: number; established: number } }>;
     // Enhanced queries for subset selection and relations
     getCitationsFrom?: (paperId: string) => Promise<string[]>;
     getCitationsTo?: (paperId: string) => Promise<string[]>;
-    countMappingsForConcept?: (conceptId: string, paperIds: string[]) => Promise<number>;
+    countMappingsForConceptInPapers?: (conceptId: string, paperIds: string[]) => Promise<number>;
+    countAnnotationsForPaperConcept?: (paperId: string, conceptId: string) => Promise<number>;
     computeRelationsForPaper?: (paperId: string, semanticSearchFn: unknown) => Promise<void>;
     getSuggestedConceptByTerm?: (termNormalized: string) => Promise<Record<string, unknown> | null>;
     insertSuggestedConcept?: (data: Record<string, unknown>) => Promise<void>;
     updateSuggestedConcept?: (id: string, updates: Record<string, unknown>) => Promise<void>;
     getSeeds?: () => Promise<Array<Record<string, unknown>>>;
+    /** Atomic: write mappings + update status in single transaction */
+    completeAnalysis: (paperId: unknown, mappings: unknown[], status: string, failureReason?: string | null) => Promise<void>;
   };
   llmClient: LlmClient;
   contextBudgetManager: ContextBudgetManager;
+  ragService?: {
+    retrieve: (query: string, options?: { paperId?: string; topK?: number }) => Promise<{
+      passages: Array<{ text: string; paperId: string; score: number; chunkId?: string }>;
+      qualityReport?: { coverage: string; retryCount: number; gaps: string[] } | null;
+    }>;
+  } | null;
   logger: Logger;
-  frameworkState: FrameworkState;
+  frameworkState: FrameworkState | (() => FrameworkState);
   workspacePath: string;
   pushNotifier?: PushNotifier | null;
   modelRouterConfig?: { frontierModel: string; lowCostModel: string };
+  outputLanguage?: string | undefined;
 }
 
 // ─── Workflow ───
@@ -94,7 +110,9 @@ export interface AnalyzeServices {
 export function createAnalyzeWorkflow(services: AnalyzeServices) {
   return async (options: WorkflowOptions, runner: WorkflowRunnerContext): Promise<void> => {
     const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath } = services;
-    const frameworkState = services.frameworkState;
+    const frameworkState = typeof services.frameworkState === 'function'
+      ? services.frameworkState()
+      : services.frameworkState;
 
     // ── §11.2: Stale in_progress detection ──
     // Only reset papers that are in_progress but have NO active in-memory task.
@@ -115,14 +133,16 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
           await dbProxy.updatePaper(p['id'] as string, { analysisStatus: 'not_started' });
         }
       }
-    } catch { /* ignore stale detection errors */ }
+    } catch (err) {
+      logger.warn('Stale in_progress detection failed', { error: (err as Error).message });
+    }
 
     // Determine papers to analyze
     let paperIds = options.paperIds;
     if (!paperIds || paperIds.length === 0) {
       const result = await dbProxy.queryPapers({
         analysisStatus: ['pending', 'failed'],
-        fulltextStatus: ['acquired'],
+        fulltextStatus: ['acquired', 'available'],
         limit: 1000,
       });
       paperIds = result.items.map((p) => p['id'] as string);
@@ -132,8 +152,9 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     if (paperIds.length === 0) return;
 
     // Load concept framework once (shared across papers)
+    // §3 Fix: Snapshot concept version at batch start for staleness detection
     const allConcepts = (await dbProxy.getAllConcepts()) as Array<Record<string, unknown>>;
-    const conceptsForPrompt: ConceptForPrompt[] = allConcepts
+    const conceptsForSubset: ConceptForSubset[] = allConcepts
       .filter((c) => !c['deprecated'])
       .map((c) => ({
         id: c['id'] as string,
@@ -142,7 +163,13 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
         definition: c['definition'] as string ?? '',
         searchKeywords: (c['searchKeywords'] as string[] ?? c['search_keywords'] as string[]) ?? [],
         maturity: c['maturity'] as 'tentative' | 'working' | 'established',
+        parentId: (c['parentId'] as string ?? c['parent_id'] as string) ?? null,
       }));
+    // ConceptForPrompt 兼容别名
+    const conceptsForPrompt = conceptsForSubset as unknown as ConceptForPrompt[];
+
+    // Concept version fingerprint: detect if concepts changed during batch
+    const conceptSnapshotHash = computeConceptHash(conceptsForSubset);
 
     // Resolve seed types for model routing
     let seedPaperIds = new Set<string>();
@@ -156,28 +183,70 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
           const stype = (s['seedType'] as string ?? s['seed_type'] as string);
           if (stype === 'axiom') axiomPaperIds.add(pid);
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        logger.debug('Seed fetch failed, routing without seed info', { error: (err as Error).message });
+      }
     }
 
-    // Build subset selector DB adapter
-    const subsetDb: SubsetSelectorDb | null = (dbProxy.getCitationsFrom && dbProxy.getCitationsTo && dbProxy.countMappingsForConcept)
-      ? {
-          getCitationNeighbors: (paperId: string): string[] => {
-            // TODO: This is async but selector expects sync. For now return empty.
-            // Full implementation requires refactoring selector to async or pre-fetching.
-            return [];
-          },
-          countMappingsForConcept: (conceptId: string, paperIds: string[]): number => {
-            // TODO: Same async issue. Return 0 for now.
-            return 0;
-          },
+    // Pre-fetch citation neighbors for all papers (avoid async/sync mismatch)
+    const citationCache = new Map<string, string[]>();
+    if (dbProxy.getCitationsFrom && dbProxy.getCitationsTo) {
+      for (const pid of paperIds) {
+        try {
+          const from = await dbProxy.getCitationsFrom(pid);
+          const to = await dbProxy.getCitationsTo(pid);
+          citationCache.set(pid, [...new Set([...from, ...to])]);
+        } catch (err) {
+          logger.debug(`Citation fetch failed for ${pid}`, { error: (err as Error).message });
         }
-      : null;
+      }
+    }
+
+    // Pre-fetch annotation counts and mapping counts for all concepts × papers
+    // so the sync SubsetSelectorDb can return real values instead of 0.
+    const annotationCountCache = new Map<string, number>(); // `${paperId}:${conceptId}` → count
+    const mappingCountCache = new Map<string, number>(); // `${conceptId}:${paperIdsHash}` → count
+
+    // Pre-populate annotation count cache for first batch of papers
+    if (dbProxy.countAnnotationsForPaperConcept && paperIds.length > 0 && conceptsForSubset.length > 0) {
+      const batchSize = Math.min(paperIds.length, 10);
+      const conceptSample = conceptsForSubset.slice(0, 20);
+      const promises: Array<Promise<void>> = [];
+      for (const pid of paperIds.slice(0, batchSize)) {
+        for (const c of conceptSample) {
+          const cacheKey = `${pid}:${c.id}`;
+          promises.push(
+            dbProxy.countAnnotationsForPaperConcept(pid, c.id)
+              .then((count: number) => { annotationCountCache.set(cacheKey, count); })
+              .catch(() => { /* ignore */ }),
+          );
+        }
+      }
+      await Promise.all(promises);
+    }
+
+    // Build sync subset selector DB adapter with pre-fetched data
+    const subsetDb: SubsetSelectorDb | null = {
+      countAnnotationsForConcept: (paperId: string, conceptId: string): number => {
+        return annotationCountCache.get(`${paperId}:${conceptId}`) ?? 0;
+      },
+      getCitationNeighbors: (paperId: string): string[] => {
+        return citationCache.get(paperId) ?? [];
+      },
+      countMappingsForConcept: (conceptId: string, paperIds: string[]): number => {
+        const cacheKey = `${conceptId}:${paperIds.sort().join(',')}`;
+        return mappingCountCache.get(cacheKey) ?? 0;
+      },
+    };
+
+    // Embedder for semantic neighbor supplement in subset selection
+    const embedder = llmClient.asEmbedFunction?.() ?? null;
 
     const isZeroConcepts = frameworkState === 'zero_concepts';
     const concurrency = options.concurrency ?? 3;
     const upgradeQueue: string[] = []; // Papers needing upgrade from intermediate → full
     const completedPaperIds: string[] = []; // Track for post-batch relation computation
+    const ragService = services.ragService ?? null;
 
     // Worker-pool pattern
     let nextIndex = 0;
@@ -198,15 +267,20 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             workspacePath,
             frameworkState,
             conceptsForPrompt,
+            conceptsForSubset,
             isZeroConcepts,
             runner,
             subsetDb,
+            embedder,
+            ragService,
             seedPaperIds,
             axiomPaperIds,
             upgradeQueue,
             pushNotifier: services.pushNotifier ?? null,
             modelRouterConfig: services.modelRouterConfig,
             force: false,
+            outputLanguage: services.outputLanguage,
+            conceptSnapshotHash,
           });
           completedPaperIds.push(paperId);
           runner.reportComplete(paperId);
@@ -240,9 +314,42 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
       }
     }
 
-    // TODO: Process upgrade queue — papers that intermediate analysis recommended for full
-    if (upgradeQueue.length > 0) {
-      logger.info(`${upgradeQueue.length} papers recommended for upgrade from intermediate to full analysis`);
+    // Process upgrade queue — re-analyze papers that intermediate analysis recommended for full
+    if (upgradeQueue.length > 0 && !runner.signal.aborted) {
+      logger.info(`Processing ${upgradeQueue.length} papers upgraded from intermediate to full analysis`);
+      for (const pid of upgradeQueue) {
+        if (runner.signal.aborted) break;
+        try {
+          // Reset status so full analysis picks them up
+          await dbProxy.updatePaper(pid, { analysisStatus: 'pending' });
+          await analyzeSinglePaper(pid, {
+            dbProxy,
+            llmClient,
+            contextBudgetManager,
+            logger,
+            workspacePath,
+            frameworkState,
+            conceptsForPrompt,
+            conceptsForSubset,
+            isZeroConcepts: false, // upgraded → always full
+            runner,
+            subsetDb,
+            embedder,
+            ragService,
+            seedPaperIds,
+            axiomPaperIds,
+            upgradeQueue: [], // prevent recursive upgrades
+            pushNotifier: services.pushNotifier ?? null,
+            modelRouterConfig: services.modelRouterConfig,
+            force: true,
+            outputLanguage: services.outputLanguage,
+            conceptSnapshotHash,
+          });
+          completedPaperIds.push(pid);
+        } catch (err) {
+          logger.warn(`Upgrade analysis failed for ${pid}: ${(err as Error).message}`);
+        }
+      }
     }
   };
 }
@@ -259,15 +366,20 @@ async function analyzeSinglePaper(
     workspacePath: string;
     frameworkState: FrameworkState;
     conceptsForPrompt: ConceptForPrompt[];
+    conceptsForSubset: ConceptForSubset[];
     isZeroConcepts: boolean;
     runner: WorkflowRunnerContext;
     subsetDb: SubsetSelectorDb | null;
+    embedder: import('../../prompt-assembler/concept-subset-selector').SubsetEmbedder | null;
+    ragService: AnalyzeServices['ragService'];
     seedPaperIds: Set<string>;
     axiomPaperIds: Set<string>;
     upgradeQueue: string[];
     pushNotifier: PushNotifier | null;
     modelRouterConfig: { frontierModel: string; lowCostModel: string } | undefined;
     force: boolean;
+    outputLanguage?: string | undefined;
+    conceptSnapshotHash: string;
   },
 ): Promise<void> {
   const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath, runner } = ctx;
@@ -328,6 +440,8 @@ async function analyzeSinglePaper(
       paperId, paperTitle, paperType, fullText,
       rawAnnotations as Array<Record<string, unknown>>,
       memos, allocation, llmClient, logger, workspacePath,
+      ctx.outputLanguage,
+      runner.signal,
     );
 
     if (!genericResult.success) {
@@ -339,8 +453,11 @@ async function analyzeSinglePaper(
     await writeSuggestions(genericResult.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger);
 
     // Write report
-    writeReport(paperId, genericResult.body, workspacePath);
-    await dbProxy.updatePaper(paperId, { analysisStatus: 'completed' });
+    const genericReportPath = writeReport(paperId, genericResult.body, workspacePath);
+    await dbProxy.updatePaper(paperId, {
+      analysisStatus: 'completed',
+      ...(genericReportPath && { analysisPath: genericReportPath }),
+    });
     return;
   }
 
@@ -369,6 +486,7 @@ async function analyzeSinglePaper(
 
     const intermediateResult = await runIntermediateAnalysis(
       paperId, fullText, paperTitle, llmClient, logger, workspacePath,
+      runner.signal,
     );
 
     if (intermediateResult) {
@@ -385,18 +503,45 @@ async function analyzeSinglePaper(
   // ══ Full analysis mode ══
   runner.reportProgress({ currentStage: 'preparing_context' });
 
-  // ── Step 2: Concept framework with enhanced 3D selection (§3) ──
+  // ── Step 2: Concept framework with async 6D selection (§3) ──
   const paperCtx = { id: paperId, title: paperTitle, abstract: (paper['abstract'] as string) ?? '' };
 
-  const subsetResult = selectConceptSubsetEnhanced(ctx.conceptsForPrompt, paperCtx, ctx.subsetDb);
-  const conceptSubset = subsetResult.concepts as ConceptForPrompt[];
+  const subsetResult = await filterConceptSubsetAsync(
+    ctx.conceptsForSubset, paperCtx, ctx.subsetDb, ctx.embedder,
+  );
+  const conceptSubset = subsetResult.concepts as unknown as ConceptForPrompt[];
 
   // ── Step 3: Memo collection ──
   const memosForPrompt = await collectMemos(dbProxy, paperId);
 
   // ── Step 4: Cross-paper context retrieval ──
-  // TODO: wire RagService.retrieve() for cross-paper context
-  const ragPassages: [] = [];
+  let ragPassages: Array<{ text: string; paperId: string; score: number; chunkId?: string }> = [];
+  let ragQualityReport: { coverage: string; retryCount: number; gaps: string[] } | null = null;
+  if (ctx.ragService) {
+    try {
+      const query = `${paperTitle} ${(paper['abstract'] as string ?? '').slice(0, 300)}`;
+      const ragResult = await ctx.ragService.retrieve(query, { paperId, topK: 10 });
+      // Filter out self-references
+      ragPassages = ragResult.passages.filter((p) => p.paperId !== paperId);
+      ragQualityReport = ragResult.qualityReport ?? null;
+
+      // Propagate RAG quality warnings to UI
+      if (ragQualityReport && ragQualityReport.coverage !== 'sufficient') {
+        runner.reportQualityWarning(
+          paperId,
+          'rag_degraded',
+          `RAG coverage: ${ragQualityReport.coverage}, gaps: ${ragQualityReport.gaps.join('; ')}, passages: ${ragPassages.length}`,
+        );
+      }
+    } catch (err) {
+      ragQualityReport = { coverage: 'insufficient', retryCount: 0, gaps: ['RAG retrieval failed entirely'] };
+      runner.reportQualityWarning(
+        paperId,
+        'rag_degraded',
+        `RAG retrieval failed: ${(err as Error).message}`,
+      );
+    }
+  }
 
   // ── Step 5: Annotations ──
   const rawAnnotations = await dbProxy.getAnnotations(paperId);
@@ -409,18 +554,35 @@ async function analyzeSinglePaper(
   const conceptFrameworkText = buildConceptFrameworkSection(conceptSubset);
   const memoText = memosForPrompt.map((m) => m.text).join('\n');
   const conceptMaturities = conceptSubset.map((c) => c.maturity);
+  const ragText = ragPassages.map((p) => p.text).join('\n');
+
+  // Resolve maturity-driven parameters (§4)
+  const maturityParams = resolveMaturityParams(conceptMaturities);
+  const maturityInstructions = buildMaturityInstructions(conceptMaturities);
+
+  const sources: Array<{ sourceType: string; estimatedTokens: number; priority: string; content: unknown }> = [
+    { sourceType: 'paper_fulltext' as const, estimatedTokens: countTokens(fullText), priority: 'HIGH' as const, content: fullText },
+    { sourceType: 'researcher_memos' as const, estimatedTokens: countTokens(memoText), priority: 'ABSOLUTE' as const, content: memoText },
+    { sourceType: 'researcher_annotations' as const, estimatedTokens: countTokens(annotationText), priority: 'ABSOLUTE' as const, content: annotationText },
+    { sourceType: 'concept_framework' as const, estimatedTokens: countTokens(conceptFrameworkText), priority: 'ABSOLUTE' as const, content: conceptFrameworkText },
+  ];
+
+  // Include RAG passages if available
+  if (ragText.length > 0) {
+    sources.push({
+      sourceType: 'rag_passages' as const,
+      estimatedTokens: countTokens(ragText),
+      priority: 'HIGH' as const,
+      content: ragText,
+    });
+  }
 
   const allocation = contextBudgetManager.allocate({
     taskType: 'analyze',
     model: route.model,
     modelContextWindow: llmClient.getContextWindow('analyze'),
     costPreference: 'balanced',
-    sources: [
-      { sourceType: 'paper_fulltext' as const, estimatedTokens: countTokens(fullText), priority: 'HIGH' as const, content: fullText },
-      { sourceType: 'researcher_memos' as const, estimatedTokens: countTokens(memoText), priority: 'ABSOLUTE' as const, content: memoText },
-      { sourceType: 'researcher_annotations' as const, estimatedTokens: countTokens(annotationText), priority: 'ABSOLUTE' as const, content: annotationText },
-      { sourceType: 'concept_framework' as const, estimatedTokens: countTokens(conceptFrameworkText), priority: 'ABSOLUTE' as const, content: conceptFrameworkText },
-    ],
+    sources: sources as any,
     conceptMaturities,
     frameworkState: ctx.frameworkState,
   });
@@ -445,8 +607,25 @@ async function analyzeSinglePaper(
     memos: memosForPrompt.map((m) => ({ text: m.text, createdAt: m.createdAt, conceptIds: m.conceptIds, paperIds: m.paperIds })),
     annotations: annotationsForFormat,
     paperContent: fullText,
-    ragPassages,
+    ragPassages: ragPassages.map((p, i) => ({
+      ...p,
+      chunkId: p.chunkId ?? `rag-${paperId}-${i}`,
+    })),
+    outputLanguage: ctx.outputLanguage,
   });
+
+  // Inject maturity-specific instructions into system prompt
+  if (maturityInstructions) {
+    assembled.systemPrompt = assembled.systemPrompt + '\n\n' + maturityInstructions;
+  }
+
+  // Inject cross-discipline instruction from subset selection
+  if (subsetResult.extraInstruction) {
+    assembled.systemPrompt = assembled.systemPrompt + '\n\n' + subsetResult.extraInstruction;
+  }
+
+  // ── Abort check before expensive LLM call ──
+  if (runner.signal.aborted) return;
 
   // ── Step 8: LLM call ──
   runner.reportProgress({ currentStage: 'analyzing' });
@@ -455,6 +634,7 @@ async function analyzeSinglePaper(
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
     workflowId: 'analyze',
+    signal: runner.signal,
   });
 
   // ── Step 9: Output parsing with validation ──
@@ -492,30 +672,69 @@ async function analyzeSinglePaper(
     });
   }
 
-  // ── Step 10: Result write ──
+  // ── Abort check before committing results ──
+  if (runner.signal.aborted) return;
+
+  // ── Step 10: Result write (transactional) ──
   runner.reportProgress({ currentStage: 'writing' });
 
-  // 10a: Concept mappings
+  // §3 Fix: Check concept staleness before writing results
   if (validated.conceptMappings.length > 0) {
-    try {
-      const mappingsForDb = validated.conceptMappings.map((m) => ({
-        concept_id: m.concept_id, relation: m.relation, confidence: m.confidence,
-        evidence: m.evidence.en || undefined,
-      }));
-      await dbProxy.mapPaperConcept(paperId, mappingsForDb);
-    } catch (err) {
-      logger.warn(`Paper ${paperId}: mapping write failed`, { error: (err as Error).message });
+    const isStale = await checkConceptStaleness(dbProxy, ctx.conceptSnapshotHash);
+    if (isStale) {
+      runner.reportQualityWarning(
+        paperId,
+        'concept_stale',
+        'Concept framework was modified during batch analysis; mappings may reference outdated concept state',
+      );
     }
   }
 
-  // 10c: Concept suggestions via aggregator (§6.8)
+  // 10a+10d: Concept mappings + status update — atomic transaction
+  // ConceptMapping requires camelCase fields + full BilingualEvidence + paperId
+  const mappingsForDb = validated.conceptMappings.map((m) => ({
+    paperId,
+    conceptId: m.concept_id,
+    relation: m.relation,
+    confidence: m.confidence,
+    evidence: {
+      en: m.evidence.en,
+      original: m.evidence.original,
+      originalLang: m.evidence.original_lang,
+      chunkId: m.evidence.chunk_id ?? null,
+      page: m.evidence.page ?? null,
+      annotationId: m.evidence.annotation_id ?? null,
+    },
+    annotationId: m.evidence.annotation_id ?? null,
+    reviewed: false,
+    reviewedAt: null,
+  }));
+
+  // Preferred: single transaction for mappings + status update
+  try {
+    await dbProxy.completeAnalysis(paperId, mappingsForDb, 'completed');
+  } catch (err) {
+    logger.warn(`Paper ${paperId}: atomic completeAnalysis failed, falling back to batch write`, { error: (err as Error).message });
+    // Fallback: batch write (still transactional) + separate status update
+    try {
+      await dbProxy.mapPaperConceptBatch(mappingsForDb);
+    } catch (batchErr) {
+      logger.warn(`Paper ${paperId}: batch write also failed, writing individually`, { error: (batchErr as Error).message });
+      for (const mapping of mappingsForDb) {
+        try { await dbProxy.mapPaperConcept(mapping); } catch (e) { logger.debug(`Fallback mapping write failed for ${mapping.conceptId}`, { error: (e as Error).message }); }
+      }
+    }
+    await dbProxy.updatePaper(paperId, { analysisStatus: 'completed' });
+  }
+
+  // 10c: Concept suggestions via aggregator (§6.8) — outside transaction (non-critical)
   await writeSuggestions(validated.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger);
 
-  // 10b: Analysis report
-  writeReport(paperId, validated.body, workspacePath);
-
-  // 10d: Status update
-  await dbProxy.updatePaper(paperId, { analysisStatus: 'completed' });
+  // 10b: Analysis report (file write — outside transaction)
+  const reportPath = writeReport(paperId, validated.body, workspacePath);
+  if (reportPath) {
+    try { await dbProxy.updatePaper(paperId, { analysisPath: reportPath }); } catch { /* non-critical */ }
+  }
 
   // Store reasoning chain if available
   if (result.reasoning) {
@@ -576,7 +795,9 @@ async function writeSuggestions(
     try {
       await aggregateSuggestions(suggestions, paperId, dbProxy as any, pushNotifier);
       return;
-    } catch { /* fall through to simple write */ }
+    } catch (err) {
+      logger.debug(`Suggestion aggregator failed for paper ${paperId}, falling back to simple write`, { error: (err as Error).message });
+    }
   }
 
   // Fallback: simple write via addSuggestedConcept
@@ -598,10 +819,56 @@ async function writeSuggestions(
   }
 }
 
-function writeReport(paperId: string, body: string, workspacePath: string): void {
+function writeReport(paperId: string, body: string, workspacePath: string): string | null {
   const reportPath = path.join(workspacePath, 'analyses', `${paperId}.md`);
   try {
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, body, 'utf-8');
-  } catch { /* ignore */ }
+    return reportPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compute a lightweight fingerprint of the concept set.
+ * Used to detect if concepts were modified during a batch analysis run.
+ */
+function computeConceptHash(concepts: ConceptForSubset[]): string {
+  // Sort by ID for determinism, then hash IDs + definitions
+  const sorted = [...concepts].sort((a, b) => a.id.localeCompare(b.id));
+  const payload = sorted.map((c) => `${c.id}:${c.maturity}:${c.definition.length}`).join('|');
+  // Simple djb2 hash — sufficient for staleness detection, not crypto
+  let hash = 5381;
+  for (let i = 0; i < payload.length; i++) {
+    hash = ((hash << 5) + hash + payload.charCodeAt(i)) | 0;
+  }
+  return hash.toString(36);
+}
+
+/**
+ * Check if concept framework has changed since the snapshot was taken.
+ * Returns true if stale (concepts were modified).
+ */
+async function checkConceptStaleness(
+  dbProxy: AnalyzeServices['dbProxy'],
+  snapshotHash: string,
+): Promise<boolean> {
+  try {
+    const current = (await dbProxy.getAllConcepts()) as Array<Record<string, unknown>>;
+    const currentSubset: ConceptForSubset[] = current
+      .filter((c) => !c['deprecated'])
+      .map((c) => ({
+        id: c['id'] as string,
+        nameEn: c['nameEn'] as string ?? c['name_en'] as string ?? '',
+        nameZh: c['nameZh'] as string ?? c['name_zh'] as string ?? '',
+        definition: c['definition'] as string ?? '',
+        searchKeywords: (c['searchKeywords'] as string[] ?? c['search_keywords'] as string[]) ?? [],
+        maturity: c['maturity'] as 'tentative' | 'working' | 'established',
+        parentId: (c['parentId'] as string ?? c['parent_id'] as string) ?? null,
+      }));
+    return computeConceptHash(currentSubset) !== snapshotHash;
+  } catch {
+    return false; // If check fails, assume not stale
+  }
 }

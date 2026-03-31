@@ -5,9 +5,13 @@
  */
 
 import React from 'react';
+import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { useAppStore } from '../../../core/store';
 import { useUpdatePaper, useDeletePaper } from '../../../core/ipc/hooks/usePapers';
+import { useAcquireFulltext, useLinkLocalPdf } from '../../../core/ipc/hooks/useAcquire';
+import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import type { Paper } from '../../../../shared-types/models';
 import type { Relevance } from '../../../../shared-types/enums';
 import { RELEVANCE_CONFIG as RELEVANCE_OPTIONS } from '../shared/relevanceConfig';
@@ -41,9 +45,13 @@ const menuItemStyle: React.CSSProperties = {
 };
 
 export function RowContextMenu({ paper, isSelected, children }: RowContextMenuProps) {
+  const { t } = useTranslation();
   const navigateTo = useAppStore((s) => s.navigateTo);
   const updatePaper = useUpdatePaper();
   const deletePaper = useDeletePaper();
+  const acquireFulltext = useAcquireFulltext();
+  const linkLocalPdf = useLinkLocalPdf();
+  const startPipeline = useStartPipeline();
 
   const handleNavigateReader = () => {
     navigateTo({ type: 'paper', id: paper.id, view: 'reader' });
@@ -78,27 +86,27 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
             onSelect={handleNavigateReader}
             disabled={paper.fulltextStatus !== 'available'}
           >
-            在 Reader 中打开
+            {t('library.contextMenu.openInReader')}
           </ContextMenu.Item>
           <ContextMenu.Item
             style={menuItemStyle}
             onSelect={handleNavigateAnalysis}
             disabled={paper.analysisStatus !== 'completed'}
           >
-            查看分析报告
+            {t('library.contextMenu.viewAnalysisReport')}
           </ContextMenu.Item>
           <ContextMenu.Item
             style={menuItemStyle}
             onSelect={handleNavigateGraph}
           >
-            在关系图中定位
+            {t('library.contextMenu.locateInGraph')}
           </ContextMenu.Item>
 
           <ContextMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
 
           <ContextMenu.Sub>
             <ContextMenu.SubTrigger style={menuItemStyle}>
-              设置相关性 ▸
+              {t('library.contextMenu.setRelevance')}
             </ContextMenu.SubTrigger>
             <ContextMenu.Portal>
               <ContextMenu.SubContent style={menuContentStyle}>
@@ -118,25 +126,61 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
 
           <ContextMenu.Item
             style={menuItemStyle}
-            disabled={paper.fulltextStatus === 'available'}
+            onSelect={() => {
+              if (paper.fulltextStatus === 'available') {
+                toast(t('library.contextMenu.alreadyAcquired'));
+                return;
+              }
+              if (paper.fulltextStatus === 'pending') {
+                toast(t('library.contextMenu.acquireInProgress'));
+                return;
+              }
+              acquireFulltext.mutate(paper.id);
+            }}
           >
-            获取全文
+            {t('library.contextMenu.acquireFulltext')}
           </ContextMenu.Item>
           <ContextMenu.Item
             style={menuItemStyle}
-            disabled={paper.fulltextStatus !== 'available'}
+            onSelect={() => {
+              if (paper.fulltextStatus === 'available') {
+                toast(t('library.contextMenu.alreadyAcquired'));
+                return;
+              }
+              linkLocalPdf.mutate({ paperId: paper.id });
+            }}
           >
-            触发 AI 分析
+            {t('library.contextMenu.linkLocalPdf')}
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            style={menuItemStyle}
+            onSelect={() => {
+              if (paper.analysisStatus === 'completed') {
+                toast(t('library.contextMenu.alreadyAnalyzed'));
+                return;
+              }
+              if (paper.analysisStatus === 'in_progress') {
+                toast(t('library.contextMenu.analysisInProgress'));
+                return;
+              }
+              if (paper.fulltextStatus !== 'available') {
+                toast(t('library.contextMenu.fulltextRequired'));
+                return;
+              }
+              startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paper.id] } });
+            }}
+          >
+            {t('library.contextMenu.triggerAnalysis')}
           </ContextMenu.Item>
 
           <ContextMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
 
           <ContextMenu.Item style={menuItemStyle}>
-            编辑标签
+            {t('library.contextMenu.editTags')}
           </ContextMenu.Item>
           <ContextMenu.Item style={menuItemStyle}>
             {/* TODO: 需要 bibliography 模块 */}
-            复制 BibTeX
+            {t('library.contextMenu.copyBibtex')}
           </ContextMenu.Item>
 
           <ContextMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
@@ -145,7 +189,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
             style={{ ...menuItemStyle, color: 'var(--danger)' }}
             onSelect={handleDelete}
           >
-            删除
+            {t('common.delete')}
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>

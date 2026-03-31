@@ -8,11 +8,13 @@
  * with an export action button.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { getAPI } from '../../../core/ipc/bridge';
 import { handleError } from '../../../core/errors/errorHandlers';
-import type { ExportFormat } from '../../../../shared-types/enums';
+import type { ExportFormat, CitationStyle } from '../../../../shared-types/enums';
+import type { ExportProgress } from '../../../../shared-types/models';
 
 interface ExportDialogProps {
   articleId: string;
@@ -23,31 +25,22 @@ interface ExportDialogProps {
 
 interface FormatOption {
   value: ExportFormat;
-  label: string;
-  description: string;
+  labelKey: string;
+  descKey: string;
 }
 
 const FORMAT_OPTIONS: FormatOption[] = [
-  {
-    value: 'markdown',
-    label: 'Markdown',
-    description: '纯文本格式，兼容性好',
-  },
-  {
-    value: 'latex',
-    label: 'LaTeX',
-    description: '学术排版格式，适合投稿',
-  },
-  {
-    value: 'docx',
-    label: 'DOCX',
-    description: 'Word 文档格式',
-  },
-  {
-    value: 'pdf',
-    label: 'PDF',
-    description: '便携文档格式，最终输出',
-  },
+  { value: 'markdown', labelKey: 'writing.export.formats.markdown', descKey: 'writing.export.formats.markdownDesc' },
+  { value: 'latex', labelKey: 'writing.export.formats.latex', descKey: 'writing.export.formats.latexDesc' },
+  { value: 'docx', labelKey: 'writing.export.formats.docx', descKey: 'writing.export.formats.docxDesc' },
+  { value: 'pdf', labelKey: 'writing.export.formats.pdf', descKey: 'writing.export.formats.pdfDesc' },
+];
+
+const CITATION_STYLES: Array<{ value: CitationStyle; label: string }> = [
+  { value: 'APA', label: 'APA' },
+  { value: 'IEEE', label: 'IEEE' },
+  { value: 'GB/T 7714', label: 'GB/T 7714' },
+  { value: 'Chicago', label: 'Chicago' },
 ];
 
 export function ExportDialog({
@@ -56,27 +49,45 @@ export function ExportDialog({
   open,
   onOpenChange,
 }: ExportDialogProps) {
+  const { t } = useTranslation();
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('markdown');
+  const [citationStyle, setCitationStyle] = useState<CitationStyle>('APA');
   const [exporting, setExporting] = useState(false);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ExportProgress | null>(null);
+
+  // Listen for export progress events via preload push channel
+  useEffect(() => {
+    const api = getAPI() as any;
+    const onExportProgress = api.on?.exportProgress;
+    if (typeof onExportProgress !== 'function') return;
+    const unsubscribe = onExportProgress((data: ExportProgress) => {
+      setProgress(data);
+    });
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
     setExportedPath(null);
     setErrorMessage(null);
+    setProgress(null);
 
     try {
-      const outputPath = await getAPI().fs.exportArticle(articleId, selectedFormat);
+      const outputPath = await getAPI().fs.exportArticle(articleId, selectedFormat, citationStyle);
       setExportedPath(outputPath);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '导出失败，请重试';
+      const msg = err instanceof Error ? err.message : t('writing.export.exportFailed');
       setErrorMessage(msg);
       handleError(err);
     } finally {
       setExporting(false);
+      setProgress(null);
     }
-  }, [articleId, selectedFormat]);
+  }, [articleId, selectedFormat, citationStyle]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -116,7 +127,7 @@ export function ExportDialog({
           }}
         >
           <Dialog.Title style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-            导出文章
+            {t('writing.export.title')}
           </Dialog.Title>
 
           <Dialog.Description
@@ -126,13 +137,13 @@ export function ExportDialog({
               color: 'var(--color-text-secondary, #6b7280)',
             }}
           >
-            将「{articleTitle}」导出为指定格式
+            {t('writing.export.description', { title: articleTitle })}
           </Dialog.Description>
 
           {/* Format selection */}
           <div
             role="radiogroup"
-            aria-label="导出格式"
+            aria-label={t('writing.export.formatLabel')}
             style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 8 }}
           >
             {FORMAT_OPTIONS.map((option) => {
@@ -163,7 +174,7 @@ export function ExportDialog({
                   />
                   <div>
                     <div style={{ fontWeight: 500, fontSize: 14 }}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </div>
                     <div
                       style={{
@@ -172,13 +183,62 @@ export function ExportDialog({
                         marginTop: 2,
                       }}
                     >
-                      {option.description}
+                      {t(option.descKey)}
                     </div>
                   </div>
                 </label>
               );
             })}
           </div>
+
+          {/* Citation style selector */}
+          <div style={{ marginTop: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 6 }}>
+              {t('writing.export.citationStyle', { defaultValue: '引文格式' })}
+            </label>
+            <select
+              value={citationStyle}
+              onChange={(e) => setCitationStyle(e.target.value as CitationStyle)}
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                fontSize: 13,
+                borderRadius: 4,
+                border: '1px solid var(--color-border, #d1d5db)',
+                backgroundColor: 'var(--color-bg-primary, #fff)',
+                color: 'inherit',
+              }}
+            >
+              {CITATION_STYLES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Export progress */}
+          {progress && exporting && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary, #6b7280)', marginBottom: 4 }}>
+                {progress.message}
+              </div>
+              <div style={{
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: 'var(--color-border, #e5e7eb)',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${progress.progress}%`,
+                  backgroundColor: 'var(--color-primary, #2563eb)',
+                  borderRadius: 2,
+                  transition: 'width 200ms ease',
+                }} />
+              </div>
+            </div>
+          )}
 
           {/* Export success message */}
           {exportedPath && (
@@ -193,7 +253,7 @@ export function ExportDialog({
                 wordBreak: 'break-all',
               }}
             >
-              已导出至: {exportedPath}
+              {t('writing.export.exportedTo', { path: exportedPath })}
             </div>
           )}
 
@@ -233,7 +293,7 @@ export function ExportDialog({
                   cursor: 'pointer',
                 }}
               >
-                取消
+                {t('common.cancel')}
               </button>
             </Dialog.Close>
             <button
@@ -250,7 +310,7 @@ export function ExportDialog({
                 opacity: exporting ? 0.7 : 1,
               }}
             >
-              {exporting ? '导出中...' : '导出'}
+              {exporting ? t('writing.export.exporting') : t('writing.export.exportBtn')}
             </button>
           </div>
         </Dialog.Content>

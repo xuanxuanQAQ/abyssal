@@ -6,19 +6,58 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Popover from '@radix-ui/react-popover';
-import { X, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, ChevronDown, ChevronRight, CheckCircle, XCircle, MinusCircle, Loader2, Circle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAppStore } from '../../core/store';
 import { getAPI } from '../../core/ipc/bridge';
 import type { TaskUIState } from '../../../shared-types/models';
 import { Z_INDEX } from '../../styles/zIndex';
 
+const WORKFLOW_KEYS: Record<string, string> = {
+  discover: 'statusBar.workflows.discover',
+  acquire: 'statusBar.workflows.acquire',
+  analyze: 'statusBar.workflows.analyze',
+  synthesize: 'statusBar.workflows.synthesize',
+  article: 'statusBar.workflows.article',
+  bibliography: 'statusBar.workflows.bibliography',
+  generate: 'statusBar.workflows.generate',
+};
+
+const STATUS_KEYS: Record<string, string> = {
+  running: 'workflowMonitor.running',
+  completed: 'workflowMonitor.completed',
+  failed: 'workflowMonitor.failed',
+  cancelled: 'workflowMonitor.cancelled',
+};
+
+const POPOVER_SUBSTEP_LABELS: Record<string, string> = {
+  unpaywall: 'Unpaywall',
+  arxiv: 'arXiv',
+  pmc: 'PMC',
+  institutional: '机构',
+  scihub: 'Sci-Hub',
+  extract: '提取',
+  hydrate: '补全',
+  chunk: '分块',
+  index: '索引',
+};
+
+const SUBSTEP_STYLE: Record<string, { Icon: typeof CheckCircle; color: string; spin?: boolean }> = {
+  pending:  { Icon: Circle,      color: 'var(--text-muted)' },
+  running:  { Icon: Loader2,     color: 'var(--accent-color)', spin: true },
+  success:  { Icon: CheckCircle, color: 'var(--success, #22c55e)' },
+  failed:   { Icon: XCircle,     color: 'var(--danger, #ef4444)' },
+  skipped:  { Icon: MinusCircle, color: 'var(--text-muted)' },
+};
+
 interface TaskDetailPopoverProps {
   children: React.ReactNode;
 }
 
 export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
+  const { t } = useTranslation();
   const activeTasks = useAppStore((s) => s.activeTasks);
   const removeTask = useAppStore((s) => s.removeTask);
   const [showHistory, setShowHistory] = useState(false);
@@ -36,7 +75,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
     try {
       await getAPI().pipeline.cancel(taskId);
     } catch (err) {
-      toast.error(`取消失败：${err instanceof Error ? err.message : '未知错误'}`);
+      toast.error(err instanceof Error ? err.message : '');
     }
   };
 
@@ -78,11 +117,11 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
             }}
           >
             <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
-              管线任务
+              {t('taskDetail.pipelineTasks')}
             </span>
             <Popover.Close asChild>
               <button
-                aria-label="关闭"
+                aria-label={t('common.close')}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -100,7 +139,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
           <div style={{ overflowY: 'auto', flex: 1, padding: '4px 0' }}>
             {runningTasks.length === 0 && completedTasks.length === 0 && (
               <div style={{ padding: '16px 12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-                暂无任务
+                {t('taskDetail.noTasks')}
               </div>
             )}
 
@@ -117,7 +156,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
               >
                 {/* 工作流名称 */}
                 <span style={{ flex: 1, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {task.workflow} — {task.currentStep}
+                  {WORKFLOW_KEYS[task.workflow] ? t(WORKFLOW_KEYS[task.workflow]!) : task.workflow} — {task.currentStep || t('taskDetail.preparing')}
                 </span>
 
                 {/* 进度条 */}
@@ -146,7 +185,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
                 {/* 取消按钮 */}
                 <button
                   onClick={() => handleCancelTask(taskId)}
-                  aria-label="取消任务"
+                  aria-label={t('common.cancel')}
                   style={{
                     background: 'none',
                     border: 'none',
@@ -160,6 +199,31 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
                 </button>
               </div>
             ))}
+
+            {/* Substeps (acquire cascade progress) */}
+            {runningTasks.map(([taskId, task]) =>
+              task.substeps && task.substeps.length > 0 ? (
+                <div key={`${taskId}-substeps`} style={{ padding: '2px 12px 6px', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {task.substeps.map((sub) => {
+                    const cfg = SUBSTEP_STYLE[sub.status] ?? SUBSTEP_STYLE.pending!;
+                    const { Icon } = cfg;
+                    return (
+                      <span
+                        key={sub.name}
+                        title={sub.detail ?? sub.name}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 3,
+                          fontSize: 'var(--text-xs)', color: cfg.color,
+                        }}
+                      >
+                        <Icon size={10} style={cfg.spin ? { animation: 'spin 1s linear infinite' } : undefined} />
+                        {POPOVER_SUBSTEP_LABELS[sub.name] ?? sub.name}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null,
+            )}
 
             {/* 最近完成（折叠区） */}
             {completedTasks.length > 0 && (
@@ -181,7 +245,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
                   }}
                 >
                   {showHistory ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  最近完成 ({completedTasks.length})
+                  {t('taskDetail.recentlyCompleted', { count: completedTasks.length })}
                 </button>
                 {showHistory &&
                   completedTasks.slice(0, 10).map(([taskId, task]) => (
@@ -195,8 +259,8 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
                         justifyContent: 'space-between',
                       }}
                     >
-                      <span>{task.workflow}</span>
-                      <span>{task.status}</span>
+                      <span>{WORKFLOW_KEYS[task.workflow] ? t(WORKFLOW_KEYS[task.workflow]!) : task.workflow}</span>
+                      <span>{STATUS_KEYS[task.status] ? t(STATUS_KEYS[task.status]!) : task.status}</span>
                     </div>
                   ))}
               </>
@@ -222,7 +286,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
                   fontSize: 'var(--text-xs)',
                 }}
               >
-                清除历史
+                {t('taskDetail.clearHistory')}
               </button>
             </div>
           )}

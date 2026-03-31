@@ -3,6 +3,9 @@
  *
  * Contract channels: fs:createSnapshot, fs:restoreSnapshot,
  *                    fs:listSnapshots, fs:cleanupSnapshots
+ *
+ * Not yet implemented — returns structured errors so the frontend
+ * can display a "feature not yet available" UI instead of crashing.
  */
 
 import type { AppContext } from '../app-context';
@@ -12,20 +15,24 @@ export function registerSnapshotsHandlers(ctx: AppContext): void {
   const { logger } = ctx;
 
   typedHandler('fs:createSnapshot', logger, async (_e, _name) => {
-    // TODO: delegate to dbProxy.createSnapshot(name)
-    throw new Error('Not implemented');
+    const err = new Error('Snapshot feature is not yet implemented');
+    (err as any).code = 'NOT_IMPLEMENTED';
+    (err as any).recoverable = true;
+    throw err;
   });
 
   typedHandler('fs:restoreSnapshot', logger, async (_e, _snapshotId) => {
-    // TODO: delegate to dbProxy.restoreSnapshot(snapshotId)
+    const err = new Error('Snapshot restore is not yet implemented');
+    (err as any).code = 'NOT_IMPLEMENTED';
+    (err as any).recoverable = true;
+    throw err;
   });
 
   typedHandler('fs:listSnapshots', logger, async () => {
-    // TODO: delegate to dbProxy.listSnapshots()
     return [];
   });
 
   typedHandler('fs:cleanupSnapshots', logger, async (_e, _policy) => {
-    // TODO: delegate to dbProxy.cleanupSnapshots(policy)
+    // No-op until snapshot creation is implemented
   });
 }

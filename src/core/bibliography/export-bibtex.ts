@@ -65,6 +65,7 @@ export function exportBibtex(papers: PaperMetadata[]): string {
     add('pages', paper.pages?.replace(/-/g, '--'));
     add('publisher', paper.publisher);
     add('isbn', paper.isbn);
+    add('issn', paper.issn); // Fix #24
     if (paper.editors && paper.editors.length > 0) {
       add('editor', formatAuthors(paper.editors));
     }

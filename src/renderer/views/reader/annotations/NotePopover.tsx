@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Popover from '@radix-ui/react-popover';
 
 export function NotePopover({
@@ -16,6 +17,7 @@ export function NotePopover({
   onSave: (text: string) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const [text, setText] = useState(initialText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -78,7 +80,7 @@ export function NotePopover({
               color: 'var(--text-primary)',
             }}
           >
-            添加笔记
+            {t('reader.annotations.addNote')}
           </div>
           <textarea
             ref={textareaRef}
@@ -119,7 +121,7 @@ export function NotePopover({
                 cursor: 'pointer',
               }}
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               type="button"
@@ -134,7 +136,7 @@ export function NotePopover({
                 cursor: 'pointer',
               }}
             >
-              保存
+              {t('common.save')}
             </button>
           </div>
         </Popover.Content>

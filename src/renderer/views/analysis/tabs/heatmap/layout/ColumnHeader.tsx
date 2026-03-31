@@ -23,7 +23,7 @@ const VIRTUAL_THRESHOLD = 500;
 const LABEL_MAX_WIDTH = 170;
 const stride = CELL_WIDTH + CELL_GAP;
 
-export function ColumnHeader({
+export const ColumnHeader = React.memo(function ColumnHeader({
   paperIds,
   paperLabels,
   scrollLeft,
@@ -118,4 +118,4 @@ export function ColumnHeader({
       </div>
     </div>
   );
-}
+});

@@ -3,26 +3,144 @@
  */
 
 import React from 'react';
-import { useMemo as useReactMemo } from 'react';
-import { StickyNote, FileText } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { StickyNote, FileText, ExternalLink } from 'lucide-react';
+import { useMemo as useMemoHook } from '../../../core/ipc/hooks/useMemos';
+import { useNote, useNoteFileContent } from '../../../core/ipc/hooks/useNotes';
 
 interface NoteContextPaneProps {
   nodeId: string;
   nodeType: 'memo' | 'note';
 }
 
-export function NoteContextPane({ nodeId, nodeType }: NoteContextPaneProps) {
-  // TODO: fetch memo/note data by nodeId
+export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nodeType }: NoteContextPaneProps) {
+  const { t } = useTranslation();
+  const { data: memo, isLoading: memoLoading } = useMemoHook(nodeType === 'memo' ? nodeId : null);
+  const { data: note, isLoading: noteLoading } = useNote(nodeType === 'note' ? nodeId : null);
+  const { data: noteContent } = useNoteFileContent(nodeType === 'note' ? nodeId : null);
+
+  const isLoading = nodeType === 'memo' ? memoLoading : noteLoading;
+
+  if (isLoading) {
+    return (
+      <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
+        {t('common.loading')}
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 16 }}>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
         {nodeType === 'memo' ? <StickyNote size={16} /> : <FileText size={16} />}
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-          {nodeType === 'memo' ? '碎片笔记' : '结构化笔记'}
+          {nodeType === 'memo' ? t('notes.memo.title') : (note?.title ?? t('notes.note.untitled'))}
         </span>
       </div>
-      <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-        TODO: 显示笔记全文和关联实体列表
+
+      {/* Memo content */}
+      {nodeType === 'memo' && memo && (
+        <div>
+          <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6, marginBottom: 12 }}>
+            {memo.text}
+          </div>
+
+          {/* Linked entities */}
+          {memo.paperIds.length > 0 && (
+            <EntitySection label={t('notes.memo.linkedPapers')} ids={memo.paperIds} color="#3B82F6" />
+          )}
+          {memo.conceptIds.length > 0 && (
+            <EntitySection label={t('notes.memo.linkedConcepts')} ids={memo.conceptIds} color="#10B981" />
+          )}
+          {memo.tags.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+                {t('notes.memo.tags')}
+              </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {memo.tags.map((tag) => (
+                  <span key={tag} style={{
+                    fontSize: 11, padding: '1px 6px', borderRadius: 8,
+                    backgroundColor: 'var(--bg-surface-low)', color: 'var(--text-secondary)',
+                    border: '1px solid var(--border-subtle)',
+                  }}>
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+            {new Date(memo.createdAt).toLocaleString()}
+          </div>
+        </div>
+      )}
+
+      {/* Note content */}
+      {nodeType === 'note' && note && (
+        <div>
+          {/* Preview of note content */}
+          {noteContent ? (
+            <div style={{
+              fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6,
+              maxHeight: 200, overflow: 'auto', marginBottom: 12,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {noteContent.replace(/^---[\s\S]*?---\n?/, '').slice(0, 1000)}
+              {noteContent.length > 1000 && '...'}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+              {t('notes.note.empty')}
+            </div>
+          )}
+
+          {/* Linked entities */}
+          {note.linkedPaperIds.length > 0 && (
+            <EntitySection label={t('notes.note.linkedPapers')} ids={note.linkedPaperIds} color="#3B82F6" />
+          )}
+          {note.linkedConceptIds.length > 0 && (
+            <EntitySection label={t('notes.note.linkedConcepts')} ids={note.linkedConceptIds} color="#10B981" />
+          )}
+
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+            {new Date(note.updatedAt).toLocaleString()}
+          </div>
+        </div>
+      )}
+
+      {/* Fallback if data not found */}
+      {!memo && nodeType === 'memo' && !isLoading && (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+          {t('notes.memo.notFound')}
+        </div>
+      )}
+      {!note && nodeType === 'note' && !isLoading && (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+          {t('notes.note.notFound')}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function EntitySection({ label, ids, color }: { label: string; ids: string[]; color: string }) {
+  return (
+    <div style={{ marginTop: 8 }}>
+      <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+        {label}
+      </span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {ids.map((id) => (
+          <span key={id} style={{
+            display: 'inline-block', padding: '1px 6px', borderRadius: 10,
+            fontSize: 10, color, backgroundColor: `${color}12`, border: `1px solid ${color}30`,
+          }}>
+            {id.slice(0, 12)}
+          </span>
+        ))}
       </div>
     </div>
   );

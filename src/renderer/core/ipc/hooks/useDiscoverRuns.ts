@@ -2,7 +2,6 @@
  * useDiscoverRuns — 搜索历史 hooks
  *
  * Query Key: ['discoverRuns', 'list']
- * TODO: 需要主进程 discover_runs 表就绪
  */
 
 import { useQuery } from '@tanstack/react-query';

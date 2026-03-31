@@ -43,7 +43,15 @@ interface RowHeaderProps {
   rowOffsets: number[];
 }
 
-export function RowHeader({
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) {
+    if (!b.has(v)) return false;
+  }
+  return true;
+}
+
+export const RowHeader = React.memo(function RowHeader({
   concepts,
   groups,
   collapsedGroups,
@@ -200,4 +208,12 @@ export function RowHeader({
       </div>
     </div>
   );
-}
+}, (prev, next) =>
+  prev.concepts === next.concepts &&
+  prev.groups === next.groups &&
+  prev.scrollTop === next.scrollTop &&
+  prev.hoveredRow === next.hoveredRow &&
+  prev.rowOffsets === next.rowOffsets &&
+  prev.onToggleGroup === next.onToggleGroup &&
+  setsEqual(prev.collapsedGroups, next.collapsedGroups),
+);

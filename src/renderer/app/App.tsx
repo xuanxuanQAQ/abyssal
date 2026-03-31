@@ -22,6 +22,8 @@
 import React, { useCallback, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
+import { I18nextProvider } from 'react-i18next';
+import i18n from '../i18n';
 import { AbyssalQueryProvider } from './QueryProvider';
 import { AppErrorBoundary } from './ErrorBoundaries';
 import { PipelineListener } from './PipelineListener';
@@ -29,11 +31,14 @@ import { ThemeProvider } from '../core/context/ThemeContext';
 import { LayoutProvider } from '../core/context/LayoutContext';
 import { KeybindingProvider } from '../core/context/KeybindingContext';
 import { MainLayout } from './shell/MainLayout';
+import { preloadAllViews } from './shell/MainStage';
 import { MemoQuickInput } from '../views/notes/memo/MemoQuickInput';
 import { useAppStore } from '../core/store';
 import { ProjectSetupWizard } from './wizard/ProjectSetupWizard';
 import { useProjectSetup } from './wizard/useProjectSetup';
 import { DbChangeListener } from '../core/ipc/useDbChangeListener';
+import { getAPI } from '../core/ipc/bridge';
+import { setAuthorDisplayThreshold } from '../core/hooks/useAuthorDisplay';
 
 /** Toast 全局样式 — 模块级常量避免每次渲染重建 */
 const TOAST_STYLE: React.CSSProperties = {
@@ -51,17 +56,19 @@ const TOAST_CONTAINER_STYLE: React.CSSProperties = {
 
 export function App() {
   return (
-    <AbyssalQueryProvider>
-      <ThemeProvider>
-        <LayoutProvider>
-          <KeybindingProvider>
-            <AppErrorBoundary>
-              <AppShell />
-            </AppErrorBoundary>
-          </KeybindingProvider>
-        </LayoutProvider>
-      </ThemeProvider>
-    </AbyssalQueryProvider>
+    <I18nextProvider i18n={i18n}>
+      <AbyssalQueryProvider>
+        <ThemeProvider>
+          <LayoutProvider>
+            <KeybindingProvider>
+              <AppErrorBoundary>
+                <AppShell />
+              </AppErrorBoundary>
+            </KeybindingProvider>
+          </LayoutProvider>
+        </ThemeProvider>
+      </AbyssalQueryProvider>
+    </I18nextProvider>
   );
 }
 
@@ -85,6 +92,21 @@ function AppShell() {
     void queryClient.invalidateQueries({ queryKey: ['projects'] });
     setProjectWizardOpen(false);
   }, [queryClient, setProjectWizardOpen]);
+
+  // 首屏渲染后空闲预加载全部视图 chunk，消除切换时的"加载中"闪烁
+  useEffect(() => {
+    const id = requestIdleCallback(() => preloadAllViews(), { timeout: 3000 });
+    return () => cancelIdleCallback(id);
+  }, []);
+
+  // 启动时从后端同步个性化设置到 localStorage
+  useEffect(() => {
+    getAPI().settings.getAll().then((data) => {
+      if (data?.personalization?.authorDisplayThreshold != null) {
+        setAuthorDisplayThreshold(data.personalization.authorDisplayThreshold);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Ctrl+Shift+N / Cmd+Shift+N 快捷键打开 MemoQuickInput
   useEffect(() => {

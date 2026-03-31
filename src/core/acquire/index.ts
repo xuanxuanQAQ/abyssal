@@ -1,5 +1,8 @@
-// ═══ Acquire Module — 级联全文获取引擎 ═══
-// §6: 五级瀑布流数据源 + 幂等性 + 审计日志
+// ═══ Acquire Module v2 — 4 层智能全文获取引擎 ═══
+// Layer 0: Fast Path（零 HTTP 确定性 OA）
+// Layer 1: Recon（并行侦察：DOI HEAD + OpenAlex + CrossRef）
+// Layer 2: Strategy（评分排序 + EZProxy 变异 + Cookie 注入）
+// Layer 3: Speculative Execution（Promise.any 投机并行 + 顺序兜底）
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -7,21 +10,56 @@ import type { AcquireResult, AcquireAttempt } from '../types';
 import type { AbyssalConfig } from '../types/config';
 import type { Logger } from '../infra/logger';
 import { HttpClient, computeSha256 } from '../infra/http-client';
-import { createRateLimiter, type RateLimiter } from '../infra/rate-limiter';
+import { createRateLimiter, RateLimiter } from '../infra/rate-limiter';
 import { validatePdf } from './pdf-validator';
-import { deleteFileIfExists } from './downloader';
+import { downloadPdf, deleteFileIfExists } from './downloader';
+import { makeAttempt, withRetry, type RetryConfig } from './attempt-utils';
+import { ContentSanityChecker, type LlmCallFn, type SanityCheckInput } from './content-sanity-checker';
+import type { CookieJar } from '../infra/cookie-jar';
+import type { FailureMemory } from './failure-memory';
+import { ReconCache } from './recon-cache';
+
+// Pipeline v2 imports
+import { tryFastPath, resolveZenodoPdfUrl } from './fast-path';
+import { runRecon, type ReconResult } from './recon';
+import { buildStrategy } from './strategy';
+import { speculativeExecute } from './speculative-executor';
+
+// Legacy source imports (Phase B fallback)
 import { tryUnpaywall } from './sources/unpaywall';
-import { tryArxivPdf } from './sources/arxiv';
 import { tryPmc } from './sources/pmc';
-import { tryInstitutional } from './sources/institutional';
 import { tryScihub } from './sources/scihub';
+import { tryCnki } from './sources/cnki';
+import { tryWanfang } from './sources/wanfang';
 
 // ─── 类型重导出 ───
 
 export { validatePdf } from './pdf-validator';
 export { downloadPdf, computeSha256, deleteFileIfExists } from './downloader';
 
+// ─── BrowserWindow 搜索回调类型 ───
+
+export interface BrowserSearchResult {
+  title: string;
+  downloadUrl: string | null;
+  detailUrl: string;
+  metadata: Record<string, string>;
+}
+
+export type BrowserSearchFn = (
+  source: 'cnki' | 'wanfang',
+  title: string,
+  options?: { authors?: string[]; year?: number | null },
+) => Promise<BrowserSearchResult[]>;
+
 // ─── 输入参数 ───
+
+/** 数据源尝试进度回调 */
+export type SourceAttemptCallback = (
+  source: string,
+  phase: 'start' | 'end',
+  result?: { status: string; failureReason?: string | null },
+) => void;
 
 export interface AcquireFulltextParams {
   doi: string | null;
@@ -30,206 +68,429 @@ export interface AcquireFulltextParams {
   url: string | null;
   savePath: string;
   enabledSources?: string[] | undefined;
+  sourceOrdering?: string[] | undefined;
   perSourceTimeoutMs?: number | undefined;
+  paperTitle?: string | undefined;
+  paperAuthors?: string[] | undefined;
+  paperYear?: number | null | undefined;
+  onSourceAttempt?: SourceAttemptCallback | undefined;
 }
-
-// ─── 默认启用的数据源优先级 ───
-
-const DEFAULT_ENABLED_SOURCES = ['unpaywall', 'arxiv', 'pmc'];
 
 // ═══ AcquireService ═══
 
 export class AcquireService {
+  /** 主 HttpClient（proxyMode='all' 时走代理，否则直连） */
   private readonly http: HttpClient;
+  /** 代理 HttpClient（用于被封锁源：Sci-Hub、DOI HEAD 等） */
+  private readonly proxyHttp: HttpClient;
   private readonly logger: Logger;
-  private readonly config: AbyssalConfig;
+  private config: AbyssalConfig;
   private readonly unpaywallLimiter: RateLimiter;
+  private readonly pmcLimiter: RateLimiter;
+  private readonly openAlexLimiter: RateLimiter;
+  private readonly crossRefLimiter: RateLimiter;
+  private readonly sanityChecker: ContentSanityChecker | null;
+  private cookieJar: CookieJar | null = null;
+  private failureMemory: FailureMemory | null = null;
+  private reconCache: ReconCache | null = null;
+  private browserSearchFn: BrowserSearchFn | null = null;
 
-  constructor(config: AbyssalConfig, logger: Logger) {
+  setCookieJar(jar: CookieJar): void {
+    this.cookieJar = jar;
+  }
+
+  setFailureMemory(fm: FailureMemory): void {
+    this.failureMemory = fm;
+  }
+
+  setReconCache(cache: ReconCache): void {
+    this.reconCache = cache;
+  }
+
+  /** Inject BrowserWindow-based search for CNKI/Wanfang (provided by electron layer). */
+  setBrowserSearch(fn: BrowserSearchFn): void {
+    this.browserSearchFn = fn;
+  }
+
+  /** Allow runtime config updates (e.g. when user toggles enableCnki in settings). */
+  updateConfig(config: AbyssalConfig): void {
+    this.config = config;
+  }
+
+  constructor(config: AbyssalConfig, logger: Logger, llmCallFn?: LlmCallFn | null) {
     this.config = config;
     this.logger = logger;
-    this.http = new HttpClient({
-      logger,
-      userAgentEmail: config.apiKeys.openalexEmail ?? undefined,
-    });
+
+    const acq = config.acquire;
+    const proxyUrl = acq.proxyEnabled ? acq.proxyUrl : null;
+
+    if (acq.proxyMode === 'all' && proxyUrl) {
+      // 全部请求走代理
+      this.http = new HttpClient({ logger, userAgentEmail: config.apiKeys.openalexEmail ?? undefined, proxyUrl });
+      this.proxyHttp = this.http;
+    } else if (proxyUrl) {
+      // blocked-only: 主 http 直连，proxyHttp 走代理
+      this.http = new HttpClient({ logger, userAgentEmail: config.apiKeys.openalexEmail ?? undefined });
+      this.proxyHttp = new HttpClient({ logger, userAgentEmail: config.apiKeys.openalexEmail ?? undefined, proxyUrl });
+    } else {
+      // 无代理
+      this.http = new HttpClient({ logger, userAgentEmail: config.apiKeys.openalexEmail ?? undefined });
+      this.proxyHttp = this.http;
+    }
     this.unpaywallLimiter = createRateLimiter('unpaywall');
+    this.pmcLimiter = new RateLimiter(3, 3 / 1000);
+    this.openAlexLimiter = new RateLimiter(10, 10 / 1000); // OpenAlex polite pool: 10 req/s
+    this.crossRefLimiter = createRateLimiter('crossRef');
+
+    this.sanityChecker = config.acquire.enableContentSanityCheck
+      ? new ContentSanityChecker(llmCallFn ?? null, logger)
+      : null;
   }
 
   /**
-   * §6.8 级联全文获取。
+   * 4 层智能全文获取。
    *
-   * 幂等性 (§11.2)：如果 savePath 已存在有效 PDF，跳过下载直接返回 success。
+   * 幂等性：savePath 已存在有效 PDF 时直接返回 success。
+   * 当 enableRecon=false && enableSpeculativeExecution=false 时退化为传统瀑布流。
    */
   async acquireFulltext(params: AcquireFulltextParams): Promise<AcquireResult> {
     const {
       doi, arxivId, pmcid, savePath,
       perSourceTimeoutMs = this.config.acquire.perSourceTimeoutMs,
     } = params;
-
-    const enabledSources = params.enabledSources ?? [
-      ...DEFAULT_ENABLED_SOURCES,
-      ...(this.config.acquire.institutionalProxyUrl ? ['institutional'] : []),
-      ...(this.config.acquire.enableScihub ? ['scihub'] : []),
-    ];
-
+    const acqConfig = this.config.acquire;
+    const notify = params.onSourceAttempt;
     const attempts: AcquireAttempt[] = [];
     const tempPath = savePath + '.tmp';
 
-    // 幂等性检查：目标路径已存在有效 PDF
+    this.logger.info('[Acquire] Pipeline v2 start', {
+      doi, arxivId, pmcid, savePath,
+      paperTitle: params.paperTitle?.slice(0, 40) ?? null,
+      fastPath: acqConfig.enableFastPath,
+      recon: acqConfig.enableRecon,
+      speculative: acqConfig.enableSpeculativeExecution,
+      enableCnki: acqConfig.enableCnki,
+      enableWanfang: acqConfig.enableWanfang,
+    });
+
+    // ═══ 标识符检查 ═══
+    const hasTitleSources = acqConfig.enableCnki || acqConfig.enableWanfang;
+    if (!doi && !arxivId && !pmcid && !params.url) {
+      if (!params.paperTitle || !hasTitleSources) {
+        this.logger.warn('[Acquire] No identifiers available (DOI/arXiv/PMCID/URL), cannot acquire');
+        return {
+          status: 'failed',
+          pdfPath: null,
+          source: null,
+          sha256: null,
+          fileSize: null,
+          attempts: [makeAttempt('pipeline', 'skipped', 0, {
+            failureReason: hasTitleSources
+              ? 'No identifiers and no paper title available'
+              : 'No identifiers available (DOI, arXiv ID, PMCID, or URL). Enable CNKI/Wanfang for title-based search.',
+            failureCategory: 'no_identifier',
+          })],
+        };
+      }
+      // 有标题 + 启用了 CNKI/Wanfang → 跳过 Layer 0-2, 直接进入 Layer 3b
+      this.logger.info('[Acquire] No DOI/arXiv/PMCID but title available, will try CNKI/Wanfang title search', {
+        title: params.paperTitle.slice(0, 60),
+        cnkiEnabled: acqConfig.enableCnki,
+        wanfangEnabled: acqConfig.enableWanfang,
+        hasCookieJar: !!this.cookieJar,
+        cnkiCookies: this.cookieJar?.hasCookiesFor(['cnki.net', 'cnki.com.cn', 'kns.cnki.net']) ?? false,
+        wanfangCookies: this.cookieJar?.hasCookiesFor(['wanfangdata.com.cn']) ?? false,
+      });
+    }
+
+    // ═══ 幂等检查 ═══
     if (fs.existsSync(savePath)) {
       try {
         const validation = await validatePdf(savePath);
         if (validation.valid) {
           const sha256 = await computeSha256(savePath);
           const fileSize = fs.statSync(savePath).size;
-          this.logger.debug('PDF already exists, skipping download', { savePath });
-          return {
-            status: 'success',
-            pdfPath: savePath,
-            source: 'cached',
-            sha256,
-            fileSize,
-            attempts: [],
-          };
+          this.logger.debug('PDF already exists, skipping', { savePath });
+          return { status: 'success', pdfPath: savePath, source: 'cached', sha256, fileSize, attempts: [] };
         }
-      } catch {
-        // 校验失败，继续下载
+      } catch { /* 校验失败，继续下载 */ }
+    }
+
+    // ═══ Layer 0: Fast Path ═══
+    if (acqConfig.enableFastPath) {
+      const fp = tryFastPath(doi, arxivId, pmcid);
+      if (fp.matched && fp.pdfUrl) {
+        notify?.(fp.source ?? 'fast-path', 'start');
+        this.logger.info('[Acquire] Layer 0 Fast Path HIT', { source: fp.source, url: fp.pdfUrl });
+
+        // Zenodo 需要 API 查询拿真实 PDF URL
+        let downloadUrl = fp.pdfUrl;
+        if (fp.source === 'zenodo') {
+          const realUrl = await resolveZenodoPdfUrl(fp.pdfUrl, this.http, perSourceTimeoutMs);
+          if (!realUrl) {
+            attempts.push(makeAttempt('zenodo', 'failed', 0, { failureReason: 'No PDF file in Zenodo record' }));
+            notify?.('zenodo', 'end', { status: 'failed', failureReason: 'No PDF in record' });
+            // 继续到 Layer 1
+          } else {
+            downloadUrl = realUrl;
+          }
+        }
+
+        if (downloadUrl !== fp.pdfUrl || fp.source !== 'zenodo') {
+          try {
+            const start = Date.now();
+            await downloadPdf(this.http, downloadUrl, tempPath, perSourceTimeoutMs);
+            const validation = await validatePdf(tempPath);
+            if (validation.valid) {
+              const attempt = makeAttempt(fp.source ?? 'fast-path', 'success', Date.now() - start, { httpStatus: 200 });
+              attempts.push(attempt);
+              notify?.(fp.source ?? 'fast-path', 'end', { status: 'success' });
+              return this.finalize(tempPath, savePath, fp.source ?? 'fast-path', attempts, params);
+            }
+            deleteFileIfExists(tempPath);
+            attempts.push(makeAttempt(fp.source ?? 'fast-path', 'failed', Date.now() - start, {
+              failureReason: validation.reason ?? 'PDF validation failed',
+              failureCategory: 'invalid_pdf',
+            }));
+          } catch (err) {
+            deleteFileIfExists(tempPath);
+            const attempt = makeAttempt(fp.source ?? 'fast-path', 'failed', 0, {
+              failureReason: (err as Error).message,
+            });
+            attempts.push(attempt);
+          }
+          notify?.(fp.source ?? 'fast-path', 'end', {
+            status: 'failed',
+            failureReason: attempts[attempts.length - 1]?.failureReason ?? null,
+          });
+        }
       }
     }
 
-    // ─── Level 1: Unpaywall ───
-    if (enabledSources.includes('unpaywall')) {
-      if (!doi || !this.config.apiKeys.unpaywallEmail) {
-        attempts.push({
-          source: 'unpaywall',
-          status: 'skipped',
-          durationMs: 0,
-          failureReason: !doi ? 'No DOI' : 'No Unpaywall email configured',
-          httpStatus: null,
+    // ═══ Layer 1: Recon ═══
+    let recon: ReconResult | null = null;
+    if (acqConfig.enableRecon && doi) {
+      notify?.('recon', 'start');
+      try {
+        recon = await runRecon({
+          doi,
+          http: this.http,
+          proxyHttp: this.proxyHttp,
+          openAlexLimiter: this.openAlexLimiter,
+          crossRefLimiter: this.crossRefLimiter,
+          openAlexEmail: this.config.apiKeys.openalexEmail,
+          cache: this.reconCache,
+          reconCacheTtlDays: acqConfig.reconCacheTtlDays,
+          oaCacheRefreshDays: acqConfig.oaCacheRefreshDays,
+          perSourceTimeoutMs: acqConfig.reconTimeoutMs,
+          logger: this.logger,
         });
-      } else {
-        const attempt = await tryUnpaywall(
-          this.http, this.unpaywallLimiter, doi,
-          this.config.apiKeys.unpaywallEmail, tempPath, perSourceTimeoutMs,
-        );
-        attempts.push(attempt);
-        if (attempt.status === 'success') {
-          return this.finalize(tempPath, savePath, 'unpaywall', attempts);
-        }
-      }
-    }
-
-    // ─── Level 2: arXiv ───
-    if (enabledSources.includes('arxiv')) {
-      if (!arxivId) {
-        attempts.push({
-          source: 'arxiv',
-          status: 'skipped',
-          durationMs: 0,
-          failureReason: 'No arXiv ID',
-          httpStatus: null,
+        this.logger.info('[Acquire] Layer 1 Recon complete', {
+          doi,
+          fromCache: recon!.fromCache,
+          publisherDomain: recon!.publisherDomain,
+          resolvedUrl: recon!.resolvedUrl?.slice(0, 100),
+          isOa: recon!.openAlexData?.isOa ?? null,
+          oaStatus: recon!.openAlexData?.oaStatus ?? null,
+          oaPdfUrls: recon!.openAlexData?.pdfUrls.length ?? 0,
+          crossRefPdfLinks: recon!.crossRefData?.pdfLinks.length ?? 0,
+          reconAttempts: recon!.reconAttempts.map((a) => `${a.source}:${a.status}(${a.durationMs}ms)`).join(', '),
         });
-      } else {
-        const attempt = await tryArxivPdf(this.http, arxivId, tempPath, perSourceTimeoutMs);
-        attempts.push(attempt);
-        if (attempt.status === 'success') {
-          return this.finalize(tempPath, savePath, 'arxiv', attempts);
-        }
+        notify?.('recon', 'end', { status: 'success' });
+      } catch (err) {
+        this.logger.warn('[Acquire] Recon failed (non-blocking)', { error: (err as Error).message });
+        notify?.('recon', 'end', { status: 'failed', failureReason: (err as Error).message });
       }
     }
 
-    // ─── Level 3: PubMed Central ───
-    if (enabledSources.includes('pmc')) {
-      if (!pmcid && !doi) {
-        attempts.push({
-          source: 'pmc',
-          status: 'skipped',
-          durationMs: 0,
-          failureReason: 'No PMCID or DOI',
-          httpStatus: null,
-        });
-      } else {
-        const attempt = await tryPmc(this.http, doi, pmcid, tempPath, perSourceTimeoutMs);
-        attempts.push(attempt);
-        if (attempt.status === 'success') {
-          return this.finalize(tempPath, savePath, 'pmc', attempts);
-        }
-      }
-    }
-
-    // ─── Level 4: Institutional Proxy ───
-    if (enabledSources.includes('institutional')) {
-      if (!doi || !this.config.acquire.institutionalProxyUrl) {
-        attempts.push({
-          source: 'institutional',
-          status: 'skipped',
-          durationMs: 0,
-          failureReason: !doi ? 'No DOI' : 'No proxy URL configured',
-          httpStatus: null,
-        });
-      } else {
-        const attempt = await tryInstitutional(
-          this.http, doi, this.config.acquire.institutionalProxyUrl,
-          tempPath, perSourceTimeoutMs,
-        );
-        attempts.push(attempt);
-        if (attempt.status === 'success') {
-          return this.finalize(tempPath, savePath, 'institutional', attempts);
-        }
-      }
-    }
-
-    // ─── Level 5: Sci-Hub ───
-    if (enabledSources.includes('scihub')) {
-      if (!doi || !this.config.acquire.enableScihub || !this.config.acquire.scihubDomain) {
-        attempts.push({
-          source: 'scihub',
-          status: 'skipped',
-          durationMs: 0,
-          failureReason: !doi
-            ? 'No DOI'
-            : !this.config.acquire.enableScihub
-              ? 'Sci-Hub disabled'
-              : 'No Sci-Hub domain configured',
-          httpStatus: null,
-        });
-      } else {
-        const attempt = await tryScihub(
-          this.http, doi, this.config.acquire.scihubDomain,
-          tempPath, perSourceTimeoutMs,
-        );
-        attempts.push(attempt);
-        if (attempt.status === 'success') {
-          return this.finalize(tempPath, savePath, 'scihub', attempts);
-        }
-      }
-    }
-
-    // 全部级联源耗尽
-    deleteFileIfExists(tempPath);
-    this.logger.error('All acquire sources exhausted', undefined, {
-      doi, arxivId, pmcid, attemptCount: attempts.length,
+    // ═══ Layer 2: Strategy ═══
+    const fastPath = tryFastPath(doi, arxivId, pmcid);
+    // Layer 0 成功处理过 fast-path → 不重复（matched=false）
+    // Layer 0 被禁用或失败 → 保留 fast-path 候选给 Strategy/Speculative 使用
+    const fastPathAlreadySucceeded = acqConfig.enableFastPath
+      && attempts.some((a) => a.source === (fastPath.source ?? 'fast-path') && a.status === 'success');
+    const strategy = buildStrategy({
+      doi, arxivId, pmcid,
+      recon,
+      fastPath: fastPathAlreadySucceeded ? { ...fastPath, matched: false } : fastPath,
+      cookieJar: this.cookieJar,
+      failureMemory: this.failureMemory,
+      config: acqConfig,
+      logger: this.logger,
     });
 
-    return {
-      status: 'failed',
-      pdfPath: null,
-      source: null,
-      sha256: null,
-      fileSize: null,
-      attempts,
+    // ═══ Layer 3a: Speculative Execution (Phase A) ═══
+    if (acqConfig.enableSpeculativeExecution && strategy.simpleCandidates.length > 0) {
+      notify?.('speculative', 'start');
+      const specResult = await speculativeExecute({
+        candidates: strategy.simpleCandidates,
+        baseTempPath: tempPath,
+        http: this.proxyHttp, // 出版商 PDF 下载可能需要代理
+        maxParallel: acqConfig.maxSpeculativeParallel,
+        perCandidateTimeoutMs: perSourceTimeoutMs,
+        totalTimeoutMs: acqConfig.speculativeTotalTimeoutMs,
+        enablePreflight: acqConfig.enablePreflight,
+        preflightTimeoutMs: acqConfig.preflightTimeoutMs,
+        logger: this.logger,
+      });
+
+      attempts.push(...specResult.attempts);
+
+      this.logger.info('[Acquire] Layer 3a speculative result', {
+        winner: specResult.winner?.source ?? null,
+        attemptSummary: specResult.attempts.map((a) => `${a.source}:${a.status}${a.failureReason ? `(${a.failureReason.slice(0, 60)})` : ''}`).join('; '),
+      });
+
+      if (specResult.winner && specResult.pdfTempPath) {
+        notify?.('speculative', 'end', { status: 'success' });
+        return this.finalize(
+          specResult.pdfTempPath, savePath,
+          specResult.winner.source, attempts, params,
+        );
+      }
+      notify?.('speculative', 'end', { status: 'failed' });
+    } else if (!acqConfig.enableSpeculativeExecution) {
+      // 降级：逐个顺序执行 simpleCandidates
+      for (const candidate of strategy.simpleCandidates) {
+        notify?.(candidate.source, 'start');
+        try {
+          const start = Date.now();
+          await downloadPdf(this.http, candidate.url, tempPath, perSourceTimeoutMs, candidate.headers);
+          const validation = await validatePdf(tempPath);
+          if (validation.valid) {
+            const attempt = makeAttempt(candidate.source, 'success', Date.now() - start, { httpStatus: 200 });
+            attempts.push(attempt);
+            notify?.(candidate.source, 'end', { status: 'success' });
+            return this.finalize(tempPath, savePath, candidate.source, attempts, params);
+          }
+          deleteFileIfExists(tempPath);
+          attempts.push(makeAttempt(candidate.source, 'failed', Date.now() - start, {
+            failureReason: validation.reason ?? 'PDF validation failed',
+            failureCategory: 'invalid_pdf',
+          }));
+        } catch (err) {
+          deleteFileIfExists(tempPath);
+          attempts.push(makeAttempt(candidate.source, 'failed', 0, {
+            failureReason: (err as Error).message,
+          }));
+        }
+        notify?.(candidate.source, 'end', {
+          status: 'failed',
+          failureReason: attempts[attempts.length - 1]?.failureReason ?? null,
+        });
+      }
+    }
+
+    // ═══ Layer 3b: Phase B — 顺序兜底复杂源 ═══
+    const retryConfig: RetryConfig = {
+      maxRetries: acqConfig.maxRetries,
+      retryDelayMs: acqConfig.retryDelayMs,
     };
+
+    for (const candidate of strategy.complexCandidates) {
+      // ── PMC ──
+      if (candidate.source === 'pmc') {
+        if (!pmcid && !doi) continue;
+        notify?.('pmc', 'start');
+        await this.pmcLimiter.acquire();
+        const attempt = await withRetry('pmc', tempPath, retryConfig, () =>
+          tryPmc(this.http, doi, pmcid, tempPath, perSourceTimeoutMs, acqConfig.tarMaxExtractBytes),
+        );
+        attempts.push(attempt);
+        notify?.('pmc', 'end', { status: attempt.status, failureReason: attempt.failureReason });
+        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'pmc', attempts, params);
+        continue;
+      }
+
+      // ── Sci-Hub ──
+      if (candidate.source === 'scihub') {
+        if (!doi) continue;
+        notify?.('scihub', 'start');
+        const preferredDomain = acqConfig.scihubDomain ?? 'sci-hub.se';
+        const attempt = await tryScihub(
+          this.proxyHttp, doi, preferredDomain, tempPath, perSourceTimeoutMs,
+          acqConfig.scihubMaxTotalMs,
+        );
+        attempts.push(attempt);
+        notify?.('scihub', 'end', { status: attempt.status, failureReason: attempt.failureReason });
+        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'scihub', attempts, params);
+        continue;
+      }
+
+      // ── CNKI (知网) ──
+      if (candidate.source === 'cnki') {
+        if (!params.paperTitle) continue;
+        notify?.('cnki', 'start');
+        const attempt = await tryCnki(
+          this.http, params.paperTitle, this.cookieJar,
+          tempPath, perSourceTimeoutMs,
+          params.paperAuthors, params.paperYear,
+          this.logger, this.browserSearchFn,
+        );
+        attempts.push(attempt);
+        notify?.('cnki', 'end', { status: attempt.status, failureReason: attempt.failureReason });
+        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'cnki', attempts, params);
+        continue;
+      }
+
+      // ── Wanfang (万方) ──
+      if (candidate.source === 'wanfang') {
+        if (!params.paperTitle) continue;
+        notify?.('wanfang', 'start');
+        const attempt = await tryWanfang(
+          this.http, params.paperTitle, this.cookieJar,
+          tempPath, perSourceTimeoutMs,
+          params.paperAuthors, params.paperYear,
+          this.logger, this.browserSearchFn,
+        );
+        attempts.push(attempt);
+        notify?.('wanfang', 'end', { status: attempt.status, failureReason: attempt.failureReason });
+        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'wanfang', attempts, params);
+        continue;
+      }
+    }
+
+    // ═══ Fallback: Unpaywall（如果 Recon/Strategy 未覆盖） ═══
+    const triedSources = new Set(attempts.map((a) => a.source));
+    // unpaywallEmail: null → 未配置（跳过）；"" → 配置了但为空（提示需要填写）；"x@y" → 正常
+    const unpaywallEmail = this.config.apiKeys.unpaywallEmail;
+    if (!triedSources.has('unpaywall') && !triedSources.has('openalex-oa') && doi && unpaywallEmail !== null) {
+      if (!unpaywallEmail) {
+        this.logger.warn('[Acquire] unpaywallEmail is empty — Unpaywall requires a valid email. Set apiKeys.unpaywallEmail in config.');
+        attempts.push(makeAttempt('unpaywall', 'skipped', 0, {
+          failureReason: 'unpaywallEmail not configured (set a valid email in settings)',
+          failureCategory: 'no_identifier',
+        }));
+      } else {
+        notify?.('unpaywall', 'start');
+        const attempt = await withRetry('unpaywall', tempPath, retryConfig, () =>
+          tryUnpaywall(this.http, this.unpaywallLimiter, doi, this.config.apiKeys.unpaywallEmail!, tempPath, perSourceTimeoutMs),
+        );
+        attempts.push(attempt);
+        notify?.('unpaywall', 'end', { status: attempt.status, failureReason: attempt.failureReason });
+        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'unpaywall', attempts, params);
+      }
+    }
+
+    // ═══ 全部耗尽 ═══
+    deleteFileIfExists(tempPath);
+    const summary = attempts.map((a) => `${a.source}:${a.failureReason ?? a.status}`).join('; ');
+    this.logger.error('[Acquire] ALL SOURCES EXHAUSTED', undefined, {
+      doi, arxivId, pmcid, attemptCount: attempts.length, summary,
+    });
+
+    return { status: 'failed', pdfPath: null, source: null, sha256: null, fileSize: null, attempts };
   }
 
-  // ─── 成功后处理：重命名 + SHA-256 ───
+  // ─── 成功后处理：重命名 + SHA-256 + ContentSanityCheck ───
 
   private async finalize(
     tempPath: string,
     savePath: string,
     source: string,
     attempts: AcquireAttempt[],
+    params: AcquireFulltextParams,
   ): Promise<AcquireResult> {
-    // 确保目标目录存在（Fix: 使用 path.dirname 兼容 Windows 反斜杠路径）
     const dir = path.dirname(savePath);
     if (dir && dir !== '.' && dir !== savePath) {
       fs.mkdirSync(dir, { recursive: true });
@@ -239,21 +500,74 @@ export class AcquireService {
     const sha256 = await computeSha256(savePath);
     const fileSize = fs.statSync(savePath).size;
 
-    this.logger.info('PDF acquired', {
-      source,
-      fileSize,
-      sha256: sha256.slice(0, 8),
-      savePath,
-    });
+    // ContentSanityCheck
+    if (this.sanityChecker && params.paperTitle) {
+      try {
+        const extractedText = await this.quickExtractText(savePath);
+        if (extractedText) {
+          const sanityInput: SanityCheckInput = {
+            title: params.paperTitle,
+            authors: params.paperAuthors ?? [],
+            year: params.paperYear ?? null,
+            doi: params.doi,
+            extractedText,
+            maxChars: this.config.acquire.sanityCheckMaxChars,
+          };
+          const result = await this.sanityChecker.check(sanityInput);
 
-    return {
-      status: 'success',
-      pdfPath: savePath,
-      source,
-      sha256,
-      fileSize,
-      attempts,
-    };
+          if (result.verdict !== 'pass' && result.confidence >= this.config.acquire.sanityCheckConfidenceThreshold) {
+            this.logger.warn('[Acquire] SanityCheck FAILED', {
+              source, verdict: result.verdict, confidence: result.confidence,
+              explanation: result.explanation,
+            });
+            deleteFileIfExists(savePath);
+            return { status: 'failed', pdfPath: null, source: null, sha256: null, fileSize: null, attempts };
+          }
+        }
+      } catch (err) {
+        this.logger.warn('[Acquire] SanityCheck error (non-blocking)', {
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    this.logger.info('PDF acquired', { source, fileSize, sha256: sha256.slice(0, 8), savePath });
+    return { status: 'success', pdfPath: savePath, source, sha256, fileSize, attempts };
+  }
+
+  private async quickExtractText(pdfPath: string): Promise<string | null> {
+    try {
+      let mupdf: { Document: { openDocument(data: Buffer | ArrayBuffer, magic: string): { loadPage(n: number): { toStructuredText(): { asText(): string }; destroy?(): void }; countPages(): number; destroy?(): void } } };
+      try {
+        mupdf = await import('mupdf') as typeof mupdf;
+      } catch {
+        try {
+          mupdf = await import('mupdf/dist/mupdf.js' as string) as typeof mupdf;
+        } catch {
+          return null;
+        }
+      }
+
+      const buffer = fs.readFileSync(pdfPath);
+      const doc = mupdf.Document.openDocument(buffer, 'application/pdf');
+      const pageCount = doc.countPages();
+      const pages = Math.min(pageCount, 3);
+      const texts: string[] = [];
+
+      for (let i = 0; i < pages; i++) {
+        const page = doc.loadPage(i);
+        try {
+          texts.push(page.toStructuredText().asText());
+        } finally {
+          page.destroy?.();
+        }
+      }
+
+      (doc as { destroy?(): void }).destroy?.();
+      return texts.join('\n');
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -262,6 +576,7 @@ export class AcquireService {
 export function createAcquireService(
   config: AbyssalConfig,
   logger: Logger,
+  llmCallFn?: LlmCallFn | null,
 ): AcquireService {
-  return new AcquireService(config, logger);
+  return new AcquireService(config, logger, llmCallFn);
 }

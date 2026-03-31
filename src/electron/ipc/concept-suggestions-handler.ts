@@ -12,39 +12,35 @@ import { asSuggestionId } from '../../core/types/common';
 import type { ConceptDefinition } from '../../core/types/concept';
 
 export function registerConceptSuggestionsHandlers(ctx: AppContext): void {
-  const { logger, dbProxy } = ctx;
+  const { logger } = ctx;
 
   typedHandler('db:suggestedConcepts:list', logger, async () => {
-    return await dbProxy.getSuggestedConcepts() as any;
+    return await ctx.dbProxy.getSuggestedConcepts() as any;
   });
 
   typedHandler('db:suggestedConcepts:accept', logger, async (_e, suggestedId, draft) => {
     const overrides = draft ? (draft as Partial<ConceptDefinition>) : undefined;
-    const conceptId = (await dbProxy.adoptSuggestedConcept(
+    const conceptId = (await ctx.dbProxy.adoptSuggestedConcept(
       asSuggestionId(Number(suggestedId)),
       overrides,
     )) as string;
     await ctx.refreshFrameworkState();
     ctx.pushManager?.enqueueDbChange(['concepts', 'suggested_concepts'], 'insert');
-    const created = await dbProxy.getConcept(conceptId as unknown as import('../../core/types/common').ConceptId);
+    const created = await ctx.dbProxy.getConcept(conceptId as unknown as import('../../core/types/common').ConceptId);
     return created ?? null as any;
   });
 
   typedHandler('db:suggestedConcepts:dismiss', logger, async (_e, suggestedId) => {
-    await dbProxy.dismissSuggestedConcept(asSuggestionId(Number(suggestedId)));
+    await ctx.dbProxy.dismissSuggestedConcept(asSuggestionId(Number(suggestedId)));
     ctx.pushManager?.enqueueDbChange(['suggested_concepts'], 'update');
   });
 
-  typedHandler('db:suggestedConcepts:restore', logger, async (_e, _suggestedId) => {
-    // TODO: DatabaseService has no restoreSuggestedConcept method
+  typedHandler('db:suggestedConcepts:restore', logger, async (_e, suggestedId) => {
+    await ctx.dbProxy.restoreSuggestedConcept(asSuggestionId(Number(suggestedId)));
+    ctx.pushManager?.enqueueDbChange(['suggested_concepts'], 'update');
   });
 
   typedHandler('db:suggestedConcepts:getStats', logger, async () => {
-    // TODO: implement aggregated stats query
-    const all = (await dbProxy.getSuggestedConcepts()) as any as Array<Record<string, unknown>>;
-    const pending = all.filter((s) => s['status'] === 'pending').length;
-    const adopted = all.filter((s) => s['status'] === 'adopted').length;
-    const dismissed = all.filter((s) => s['status'] === 'dismissed').length;
-    return { pendingCount: pending, adoptedCount: adopted, dismissedCount: dismissed };
+    return (await ctx.dbProxy.getSuggestedConceptsStats()) as any;
   });
 }

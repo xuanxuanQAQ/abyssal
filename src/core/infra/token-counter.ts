@@ -17,7 +17,7 @@ function getEncoder(): Encoder | null {
   encoderLoadAttempted = true;
 
   try {
-    // TODO: 确保 js-tiktoken 已安装到 dependencies
+    // js-tiktoken 已在 package.json dependencies 中声明
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getEncoding } = require('js-tiktoken');
     encoder = getEncoding('cl100k_base') as Encoder;
@@ -58,3 +58,11 @@ export function estimateTokens(text: string): number {
   const asciiCharCount = totalCodePoints - cjkCharCount;
   return Math.ceil(cjkCharCount * 0.6 + asciiCharCount / 4);
 }
+
+/**
+ * 估算 memo / 短文本的 token 数。
+ *
+ * 与 estimateTokens 共享同一算法，作为语义别名供 RAG 模块调用，
+ * 确保 retriever / index / context-assembler 使用统一的估算逻辑。
+ */
+export const estimateMemoTokens: (text: string) => number = estimateTokens;

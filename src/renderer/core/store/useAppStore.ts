@@ -71,6 +71,22 @@ export const useAppStore = create<AppStoreState>()(
  * 新增 slice 字段时只需在各 slice 初始值中定义即可，此处自动覆盖。
  */
 export function resetAppStoreForProjectSwitch(): void {
+  // Reset isolated stores (lazily imported to avoid circular dependency in code-split modules)
+  try {
+    const { useReaderStore } = require('./useReaderStore');
+    useReaderStore.getState().resetReader();
+  } catch { /* reader module not loaded yet — nothing to reset */ }
+
+  try {
+    const { useChatStore } = require('./useChatStore');
+    useChatStore.getState().clearChatHistory();
+  } catch { /* chat module not loaded yet — nothing to reset */ }
+
+  try {
+    const { useEditorStore } = require('./useEditorStore');
+    useEditorStore.getState().resetEditor();
+  } catch { /* editor module not loaded yet — nothing to reset */ }
+
   useAppStore.setState({
     // NavigationSlice
     activeView: 'library',
@@ -96,10 +112,12 @@ export function resetAppStoreForProjectSwitch(): void {
     graphSearchQuery: '',
     // PipelineSlice
     activeTasks: {},
+    taskHistory: [],
+    taskPanelOpen: false,
     taskDetailPopoverOpen: false,
+    selectedTaskId: null,
     // PanelSlice — 保留面板尺寸偏好，仅重置 pin/peek/tips
     pinnedSource: null,
-    pinnedChatSessionId: null,
     peekSource: null,
     contextPanelPinned: false,
     proactiveTips: [],

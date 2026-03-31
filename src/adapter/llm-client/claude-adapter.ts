@@ -6,12 +6,12 @@
  * - tool_use content blocks for function calling
  * - vision image blocks for describeImage
  * - stream.abort() for cancellation
+ * - extended thinking support (thinkingBudget → reasoning)
  *
  * See spec: section 2 — Claude Adapter
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { jsonrepair } from 'jsonrepair';
 import type {
   Message,
   ContentBlock,
@@ -22,7 +22,9 @@ import type {
   TokenUsage,
   FinishReason,
   LlmAdapter,
+  AdapterCallParams,
 } from './llm-client';
+import { mapFinishReason, safeParseJson } from './shared';
 
 // ─── Claude adapter ───
 
@@ -35,22 +37,28 @@ export class ClaudeAdapter implements LlmAdapter {
 
   // ─── complete (§2.2-2.3) ───
 
-  async complete(params: {
-    model: string;
-    systemPrompt: string;
-    messages: Message[];
-    tools?: ToolDefinition[];
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-  }): Promise<CompletionResult> {
+  async complete(params: AdapterCallParams): Promise<CompletionResult> {
+    const messages = convertMessages(params.messages);
+
+    // JSON mode: append prefill to guide Claude to output JSON
+    if (params.responseFormat && params.responseFormat.type !== 'text') {
+      appendJsonPrefill(messages);
+    }
+
     const requestParams: Record<string, unknown> = {
       model: params.model,
-      system: params.systemPrompt,
-      messages: convertMessages(params.messages),
+      system: buildCacheableSystem(params.systemPrompt),
+      messages,
       max_tokens: params.maxTokens ?? 4096,
       temperature: params.temperature ?? 0.7,
     };
+
+    // Extended thinking: budget_tokens enables chain-of-thought reasoning
+    if (params.thinkingBudget && params.thinkingBudget > 0) {
+      requestParams['thinking'] = { type: 'enabled', budget_tokens: params.thinkingBudget };
+      // Anthropic requires temperature=1 when thinking is enabled
+      requestParams['temperature'] = 1;
+    }
 
     if (params.tools && params.tools.length > 0) {
       requestParams['tools'] = params.tools.map(toClaudeTool);
@@ -66,22 +74,25 @@ export class ClaudeAdapter implements LlmAdapter {
 
   // ─── completeStream (§2.4) ───
 
-  async *completeStream(params: {
-    model: string;
-    systemPrompt: string;
-    messages: Message[];
-    tools?: ToolDefinition[];
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-  }): AsyncIterable<StreamChunk> {
+  async *completeStream(params: AdapterCallParams): AsyncIterable<StreamChunk> {
+    const messages = convertMessages(params.messages);
+
+    if (params.responseFormat && params.responseFormat.type !== 'text') {
+      appendJsonPrefill(messages);
+    }
+
     const requestParams: Record<string, unknown> = {
       model: params.model,
-      system: params.systemPrompt,
-      messages: convertMessages(params.messages),
+      system: buildCacheableSystem(params.systemPrompt),
+      messages,
       max_tokens: params.maxTokens ?? 4096,
       temperature: params.temperature ?? 0.7,
     };
+
+    if (params.thinkingBudget && params.thinkingBudget > 0) {
+      requestParams['thinking'] = { type: 'enabled', budget_tokens: params.thinkingBudget };
+      requestParams['temperature'] = 1;
+    }
 
     if (params.tools && params.tools.length > 0) {
       requestParams['tools'] = params.tools.map(toClaudeTool);
@@ -97,11 +108,14 @@ export class ClaudeAdapter implements LlmAdapter {
     }
 
     let fullText = '';
+    let thinkingText = '';
     let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let finishReason: FinishReason = 'end_turn';
 
     // Tool use accumulation
     const toolJsonBuffers = new Map<number, { id: string; name: string; json: string }>();
+    // Track which indices are thinking blocks (to silently accumulate)
+    const thinkingIndices = new Set<number>();
 
     try {
       for await (const event of stream) {
@@ -109,14 +123,17 @@ export class ClaudeAdapter implements LlmAdapter {
 
         if (type === 'content_block_start') {
           const block = (event as unknown as Record<string, unknown>)['content_block'] as Record<string, unknown>;
+          const index = (event as unknown as Record<string, unknown>)['index'] as number;
+
           if (block['type'] === 'tool_use') {
-            const index = (event as unknown as Record<string, unknown>)['index'] as number;
             toolJsonBuffers.set(index, {
               id: block['id'] as string,
               name: block['name'] as string,
               json: '',
             });
             yield { type: 'tool_use_start', id: block['id'] as string, name: block['name'] as string };
+          } else if (block['type'] === 'thinking') {
+            thinkingIndices.add(index);
           }
         } else if (type === 'content_block_delta') {
           const delta = (event as unknown as Record<string, unknown>)['delta'] as Record<string, unknown>;
@@ -131,16 +148,19 @@ export class ClaudeAdapter implements LlmAdapter {
             const buf = toolJsonBuffers.get(index);
             if (buf) buf.json += partialJson;
             yield { type: 'tool_use_delta', delta: partialJson };
+          } else if (delta['type'] === 'thinking_delta') {
+            // Silently accumulate thinking content
+            thinkingText += (delta['thinking'] as string) ?? '';
           }
         } else if (type === 'content_block_stop') {
           const index = (event as unknown as Record<string, unknown>)['index'] as number;
           const buf = toolJsonBuffers.get(index);
           if (buf) {
-            let input: Record<string, unknown> = {};
-            try { input = JSON.parse(buf.json); } catch { try { input = JSON.parse(jsonrepair(buf.json)); } catch { /* empty */ } }
+            const input = safeParseJson(buf.json);
             yield { type: 'tool_use_end', id: buf.id, name: buf.name, input };
             toolJsonBuffers.delete(index);
           }
+          thinkingIndices.delete(index);
         } else if (type === 'message_delta') {
           const delta = (event as unknown as Record<string, unknown>)['delta'] as Record<string, unknown>;
           const usageDelta = (event as unknown as Record<string, unknown>)['usage'] as Record<string, number> | undefined;
@@ -161,7 +181,13 @@ export class ClaudeAdapter implements LlmAdapter {
             };
           } catch { /* use accumulated */ }
 
-          yield { type: 'message_end', text: fullText, usage, finishReason };
+          yield {
+            type: 'message_end',
+            text: fullText,
+            usage,
+            finishReason,
+            reasoning: thinkingText || null,
+          };
         }
       }
     } catch (err) {
@@ -210,6 +236,18 @@ export class ClaudeAdapter implements LlmAdapter {
 
 // ─── Helpers ───
 
+/**
+ * Wrap system prompt in a cacheable content block (Anthropic prompt caching).
+ * Saves ~90% input tokens on repeated calls with the same system prompt.
+ */
+function buildCacheableSystem(systemPrompt: string): Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> {
+  return [{
+    type: 'text',
+    text: systemPrompt,
+    cache_control: { type: 'ephemeral' },
+  }];
+}
+
 function convertMessages(messages: Message[]): Anthropic.MessageParam[] {
   return messages.map((m) => ({
     role: m.role,
@@ -250,6 +288,19 @@ function convertContentBlock(block: ContentBlock): Anthropic.ContentBlockParam {
   }
 }
 
+/**
+ * Append a JSON prefill to guide Claude to output valid JSON.
+ * Claude doesn't have native response_format, but prefilling the assistant
+ * turn with `{` forces it to continue with JSON output.
+ */
+function appendJsonPrefill(messages: Anthropic.MessageParam[]): void {
+  // Only add prefill if last message is from user (standard case)
+  const last = messages[messages.length - 1];
+  if (last?.role === 'user') {
+    messages.push({ role: 'assistant', content: '{' });
+  }
+}
+
 function toClaudeTool(tool: ToolDefinition): Record<string, unknown> {
   return {
     name: tool.name,
@@ -264,6 +315,12 @@ function normalizeResponse(response: Anthropic.Message, model: string): Completi
     .map((b) => (b as Anthropic.TextBlock).text)
     .join('');
 
+  // Extract thinking content (extended thinking)
+  const reasoning = response.content
+    .filter((b) => (b as unknown as { type: string }).type === 'thinking')
+    .map((b) => ((b as unknown as { thinking: string }).thinking))
+    .join('\n') || null;
+
   const toolCalls: ToolCall[] = response.content
     .filter((b) => b.type === 'tool_use')
     .map((b) => {
@@ -274,6 +331,7 @@ function normalizeResponse(response: Anthropic.Message, model: string): Completi
   return {
     text,
     toolCalls,
+    reasoning,
     model,
     usage: {
       inputTokens: response.usage.input_tokens,
@@ -281,15 +339,4 @@ function normalizeResponse(response: Anthropic.Message, model: string): Completi
     },
     finishReason: mapFinishReason(response.stop_reason ?? 'end_turn'),
   };
-}
-
-function mapFinishReason(reason: string): FinishReason {
-  const map: Record<string, FinishReason> = {
-    'end_turn': 'end_turn',
-    'tool_use': 'tool_use',
-    'max_tokens': 'max_tokens',
-    'stop_sequence': 'end_turn',
-    'content_filter': 'content_filter',
-  };
-  return map[reason] ?? 'end_turn';
 }

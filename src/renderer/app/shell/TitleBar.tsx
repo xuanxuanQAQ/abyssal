@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search } from 'lucide-react';
 import { ProjectSelector } from './ProjectSelector';
 import { WindowControls } from './WindowControls';
@@ -18,6 +19,7 @@ import { useAppStore } from '../../core/store';
 import { getAPI } from '../../core/ipc/bridge';
 
 export function TitleBar() {
+  const { t } = useTranslation();
   const openGlobalSearch = useAppStore((s) => s.openGlobalSearch);
 
   // §3.2 双击 TitleBar 拖拽区域 → 最大化/还原
@@ -65,7 +67,7 @@ export function TitleBar() {
           }}
         >
           <Search size={14} />
-          <span>搜索… Ctrl+K</span>
+          <span>{t('titleBar.search')}</span>
         </button>
       </div>
 

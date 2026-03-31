@@ -13,6 +13,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FileText } from 'lucide-react';
+import { useAuthorDisplayThreshold } from '../core/hooks/useAuthorDisplay';
 import { getAPI } from '../core/ipc/bridge';
 import type { PaperFilter } from '../../shared-types/ipc';
 
@@ -44,6 +45,7 @@ export function PaperRefAutocomplete({ query, position, onSelect, onClose }: Pap
   const [isLoading, setIsLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
+  const authorThreshold = useAuthorDisplayThreshold();
 
   // 300ms debounced search
   useEffect(() => {
@@ -61,7 +63,7 @@ export function PaperRefAutocomplete({ query, position, onSelect, onClose }: Pap
         const papers = (result as unknown as Array<Record<string, unknown>>).map((p) => ({
           id: (p['id'] as string) ?? '',
           title: (p['title'] as string) ?? '',
-          authors: formatAuthors(p['authors'] as unknown),
+          authors: formatAuthors(p['authors'] as unknown, authorThreshold),
           year: (p['year'] as number) ?? 0,
         }));
         setCandidates(papers);
@@ -177,7 +179,7 @@ export function PaperRefAutocomplete({ query, position, onSelect, onClose }: Pap
 
 // ─── Helpers ───
 
-function formatAuthors(authors: unknown): string {
+function formatAuthors(authors: unknown, threshold: number): string {
   if (!authors) return '';
   if (typeof authors === 'string') return authors;
   if (Array.isArray(authors)) {
@@ -186,7 +188,9 @@ function formatAuthors(authors: unknown): string {
       if (typeof a === 'object' && a !== null) return (a as Record<string, string>)['name'] ?? (a as Record<string, string>)['family'] ?? '';
       return '';
     }).filter(Boolean);
-    if (names.length <= 2) return names.join(' & ');
+    if (threshold === 0 || names.length <= threshold) {
+      return names.length <= 2 ? names.join(' & ') : names.join(', ');
+    }
     return `${names[0]} et al.`;
   }
   return '';

@@ -52,14 +52,15 @@ export {
   type TokenCounter,
 } from '../prompt-assembler/truncation-engine';
 
-// Re-export enhanced concept subset selector (3D scoring)
+// Re-export 6D concept subset selector (annotation, keyword, network, maturity, parent, semantic)
 export {
-  selectConceptSubsetEnhanced,
+  filterConceptSubset,
+  filterConceptSubsetAsync,
   scoreAllConcepts,
   type SubsetSelectorDb,
   type SubsetResult,
-  type ScoredConcept,
-} from './workflows/concept-evolution/concept-subset-selector';
+  type ScoredConceptResult as ScoredConcept,
+} from '../prompt-assembler/concept-subset-selector';
 
 // Re-export maturity evaluator
 export {

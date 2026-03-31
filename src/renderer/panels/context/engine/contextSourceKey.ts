@@ -11,6 +11,9 @@ export function contextSourceKey(source: ContextSource): string {
   switch (source.type) {
     case 'paper':
       return `paper:${source.paperId}`;
+    case 'papers':
+      // 排序后拼接，保证相同论文集合得到相同 key
+      return `papers:${[...source.paperIds].sort().join('+')}`;
     case 'concept':
       return `concept:${source.conceptId}`;
     case 'mapping':
@@ -23,6 +26,8 @@ export function contextSourceKey(source: ContextSource): string {
       return `memo:${source.memoId}`;
     case 'note':
       return `note:${source.noteId}`;
+    case 'allSelected':
+      return `allSelected:${source.excludedCount}`;
     case 'empty':
       return 'global';
   }

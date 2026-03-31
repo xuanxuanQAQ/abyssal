@@ -30,15 +30,16 @@ function buildVerificationPrompt(
   taskDescription: string,
   candidates: RankedChunk[],
 ): string {
-  // §7.3: 每个候选截断到前 200 字符，最多 20 个
+  // Fix #12: 每个候选截断到前 500 字符（200 太短，学术段落通常需要更多上下文才能判断相关性）
   const maxCandidates = Math.min(candidates.length, 20);
   const totalTokens = candidates.reduce((s, c) => s + c.tokenCount, 0);
 
   let passages = '';
   for (let i = 0; i < maxCandidates; i++) {
     const c = candidates[i]!;
-    const preview = c.text.slice(0, 200);
-    passages += `  [${i}] Source: ${c.displayTitle || 'Unknown'}, Section: ${c.sectionTitle || 'N/A'}\n  ${preview}...\n\n`;
+    const preview = c.text.slice(0, 500);
+    const ellipsis = c.text.length > 500 ? '...' : '';
+    passages += `  [${i}] Source: ${c.displayTitle || 'Unknown'}, Section: ${c.sectionTitle || 'N/A'}\n  ${preview}${ellipsis}\n\n`;
   }
 
   if (candidates.length > maxCandidates) {

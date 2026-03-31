@@ -95,6 +95,27 @@ export function useUpdateParent() {
   });
 }
 
+export function useUpdateKeywords() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ conceptId, keywords }: { conceptId: string; keywords: string[] }) =>
+      getAPI().db.concepts.updateKeywords(conceptId, keywords),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['concepts'] });
+    },
+  });
+}
+
+export function useConceptStats(conceptId: string | null) {
+  return useQuery({
+    queryKey: ['concepts', 'stats', conceptId],
+    queryFn: () => getAPI().db.concepts.getStats(conceptId!),
+    enabled: conceptId !== null,
+    staleTime: 60_000,
+    gcTime: 300_000,
+  });
+}
+
 export function useConceptHistory(conceptId: string | null) {
   return useQuery({
     queryKey: ['concepts', conceptId, 'history'],

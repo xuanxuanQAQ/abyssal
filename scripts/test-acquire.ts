@@ -18,6 +18,7 @@ import * as os from 'node:os';
 import { AcquireService } from '../src/core/acquire/index';
 import { validatePdf } from '../src/core/acquire/pdf-validator';
 import { ConsoleLogger } from '../src/core/infra/logger';
+import { DEFAULT_ACQUIRE } from '../src/core/config/config-loader';
 import type { AbyssalConfig } from '../src/core/types/config';
 
 // ─── 测试输出目录 ───
@@ -28,12 +29,10 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const testConfig: AbyssalConfig = {
   project: { name: 'test', description: '', mode: 'auto' },
   acquire: {
+    ...DEFAULT_ACQUIRE,
     enabledSources: ['unpaywall', 'arxiv', 'pmc'],
     enableScihub: false,
-    scihubDomain: null,
-    institutionalProxyUrl: null,
     perSourceTimeoutMs: 30_000,
-    maxRedirects: 5,
   },
   discovery: {
     traversalDepth: 2,
@@ -74,6 +73,7 @@ const testConfig: AbyssalConfig = {
     unpaywallEmail: 'test@example.com',  // Unpaywall 只需要一个邮箱
     cohereApiKey: null,
     jinaApiKey: null,
+    siliconflowApiKey: null,
   },
   workspace: {
     rootDir: OUT_DIR,

@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
 import { useCreateMemo } from '../../../core/ipc/hooks/useMemos';
 
@@ -15,6 +16,7 @@ interface MemoQuickCreateProps {
 }
 
 export function MemoQuickCreate({ paperIds, conceptIds, annotationId, prefillText }: MemoQuickCreateProps) {
+  const { t } = useTranslation();
   const [text, setText] = useState(prefillText ?? '');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const createMemo = useCreateMemo();
@@ -54,7 +56,7 @@ export function MemoQuickCreate({ paperIds, conceptIds, annotationId, prefillTex
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="记录一个想法... (Enter 提交, Shift+Enter 换行)"
+        placeholder={t('notes.memo.createPlaceholder')}
         rows={1}
         style={{
           flex: 1, resize: 'none', border: '1px solid var(--border-subtle)',

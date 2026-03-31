@@ -5,17 +5,11 @@
  * See spec: section 6.4–6.5
  */
 
-import type { RawSuggestion, SuggestionAction } from './diagnostic-queries';
+import type { RawSuggestion } from './diagnostic-queries';
+import type { FormattedSuggestion } from './suggestion-types';
 import type { LlmClient, CompletionResult } from '../llm-client/llm-client';
 
-// ─── Types ───
-
-export interface FormattedSuggestion {
-  title: string;
-  description: string;
-  priority: 'high' | 'medium' | 'low';
-  action: SuggestionAction;
-}
+export type { FormattedSuggestion } from './suggestion-types';
 
 // ─── Format with LLM (§6.4) ───
 
@@ -68,6 +62,7 @@ Output format (JSON array):
         description: item.description,
         priority: raw.priority,
         action: raw.action, // Action from RawSuggestion, not LLM
+        diagnosticSource: raw.diagnosticSource ?? raw.type,
       };
     });
   } catch {
@@ -77,6 +72,7 @@ Output format (JSON array):
       description: s.title,
       priority: s.priority,
       action: s.action,
+      diagnosticSource: s.diagnosticSource ?? s.type,
     }));
   }
 }
@@ -94,6 +90,7 @@ export function formatSuggestionsWithoutLlm(rawSuggestions: RawSuggestion[]): Fo
     description: s.title,
     priority: s.priority,
     action: s.action,
+    diagnosticSource: s.diagnosticSource ?? s.type,
   }));
 }
 

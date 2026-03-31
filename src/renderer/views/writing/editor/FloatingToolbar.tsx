@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { BubbleMenu } from '@tiptap/react';
 import type { Editor } from '@tiptap/react';
 import { Bold, Italic, Strikethrough, Sparkles } from 'lucide-react';
@@ -88,6 +89,7 @@ export function FloatingToolbar({
   onAIExpand,
   onAICompress,
 }: FloatingToolbarProps) {
+  const { t } = useTranslation();
   const preventFocusLoss = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
   }, []);
@@ -104,7 +106,7 @@ export function FloatingToolbar({
         {/* ── Format buttons ── */}
         <button
           type="button"
-          title="Bold"
+          title={t('writing.editor.bold')}
           aria-pressed={editor.isActive('bold')}
           style={btnStyle(editor.isActive('bold'))}
           onClick={() => editor.chain().focus().toggleBold().run()}
@@ -114,7 +116,7 @@ export function FloatingToolbar({
 
         <button
           type="button"
-          title="Italic"
+          title={t('writing.editor.italic')}
           aria-pressed={editor.isActive('italic')}
           style={btnStyle(editor.isActive('italic'))}
           onClick={() => editor.chain().focus().toggleItalic().run()}
@@ -124,7 +126,7 @@ export function FloatingToolbar({
 
         <button
           type="button"
-          title="Strikethrough"
+          title={t('writing.editor.strikethrough')}
           aria-pressed={editor.isActive('strike')}
           style={btnStyle(editor.isActive('strike'))}
           onClick={() => editor.chain().focus().toggleStrike().run()}
@@ -138,32 +140,32 @@ export function FloatingToolbar({
         {/* ── AI operations ── */}
         <button
           type="button"
-          title="AI 重写"
+          title={t('writing.editor.aiRewrite')}
           style={aiButtonStyle}
           onClick={() => onAIRewrite?.()}
         >
           <Sparkles size={ICON_SIZE} />
-          重写
+          {t('writing.editor.rewrite')}
         </button>
 
         <button
           type="button"
-          title="AI 展开"
+          title={t('writing.editor.aiExpand')}
           style={aiButtonStyle}
           onClick={() => onAIExpand?.()}
         >
           <Sparkles size={ICON_SIZE} />
-          展开
+          {t('writing.editor.expand')}
         </button>
 
         <button
           type="button"
-          title="AI 压缩"
+          title={t('writing.editor.aiCompress')}
           style={aiButtonStyle}
           onClick={() => onAICompress?.()}
         >
           <Sparkles size={ICON_SIZE} />
-          压缩
+          {t('writing.editor.compress')}
         </button>
       </div>
     </BubbleMenu>

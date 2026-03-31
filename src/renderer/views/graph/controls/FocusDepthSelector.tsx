@@ -1,22 +1,18 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../../core/store';
 
 type FocusDepthValue = '1-hop' | '2-hop' | 'global';
 
-const segments: { value: FocusDepthValue; label: string }[] = [
-  { value: '1-hop', label: '1-hop' },
-  { value: '2-hop', label: '2-hop' },
-  { value: 'global', label: '全局' },
-];
-
 export function FocusDepthSelector() {
+  const { t } = useTranslation();
   const focusDepth = useAppStore((s) => s.focusDepth);
   const setFocusDepth = useAppStore((s) => s.setFocusDepth);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        Focus Depth
+        {t('graph.focusDepth')}
       </span>
 
       <div
@@ -28,7 +24,11 @@ export function FocusDepthSelector() {
           height: 28,
         }}
       >
-        {segments.map((seg) => {
+        {([
+          { value: '1-hop' as FocusDepthValue, label: '1-hop' },
+          { value: '2-hop' as FocusDepthValue, label: '2-hop' },
+          { value: 'global' as FocusDepthValue, label: t('graph.focusDepthGlobal') },
+        ]).map((seg) => {
           const selected = focusDepth === seg.value;
           return (
             <button

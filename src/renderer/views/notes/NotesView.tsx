@@ -16,6 +16,7 @@ import { NoteEditor } from './note/NoteEditor';
 import { NotesFilterSidebar } from './NotesFilterSidebar';
 import type { MemoFilter } from '../../../shared-types/models';
 import { useConceptList } from '../../core/ipc/hooks/useConcepts';
+import { usePaperList } from '../../core/ipc/hooks/usePapers';
 import { useMemoList } from '../../core/ipc/hooks/useMemos';
 
 export function NotesView() {
@@ -34,6 +35,19 @@ export function NotesView() {
       };
     }),
     [concepts],
+  );
+
+  // Load papers for filter sidebar
+  const { data: papers } = usePaperList();
+  const paperList = useMemo(
+    () => (papers ?? []).map((p) => {
+      const pr = p as unknown as Record<string, unknown>;
+      return {
+        id: (pr['id'] as string) ?? '',
+        title: ((pr['title'] as string) ?? '').slice(0, 80) || ((pr['id'] as string) ?? ''),
+      };
+    }),
+    [papers],
   );
 
   // Aggregate tags from memo data for tag cloud
@@ -56,6 +70,7 @@ export function NotesView() {
         filter={filter}
         onFilterChange={setFilter}
         concepts={conceptList}
+        papers={paperList}
         allTags={allTags}
       />
 
@@ -64,6 +79,7 @@ export function NotesView() {
         <Tabs.Root
           value={activeTab}
           onValueChange={(v) => { setActiveTab(v as 'memos' | 'notes'); setEditingNoteId(null); }}
+          style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
         >
           <Tabs.List style={{
             display: 'flex', alignItems: 'stretch', height: 36,
@@ -77,11 +93,11 @@ export function NotesView() {
             </Tabs.Trigger>
           </Tabs.List>
 
-          <Tabs.Content value="memos" style={{ flex: 1, overflow: 'hidden' }}>
+          <Tabs.Content value="memos" style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
             <MemoStream filter={filter} />
           </Tabs.Content>
 
-          <Tabs.Content value="notes" style={{ flex: 1, overflow: 'hidden' }}>
+          <Tabs.Content value="notes" style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
             {editingNoteId ? (
               <NoteEditor noteId={editingNoteId} onBack={() => setEditingNoteId(null)} />
             ) : (

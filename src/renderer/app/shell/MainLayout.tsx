@@ -23,15 +23,29 @@ import { StatusBar } from './StatusBar';
 import { GlobalSearch } from './GlobalSearch';
 import { DndProvider } from './DndProvider';
 import { ContextPanel } from '../../panels/context/ContextPanel';
+import { WorkflowMonitor } from '../../panels/WorkflowMonitor';
 import { useAppStore } from '../../core/store';
+import { useShallow } from 'zustand/react/shallow';
 import { useHotkey } from '../../core/hooks/useHotkey';
 import { useResponsivePanel } from '../../core/hooks/useResponsivePanel';
+
+const resizeHandleVisibleStyle: React.CSSProperties = { visibility: 'visible' };
+const resizeHandleHiddenStyle: React.CSSProperties = { visibility: 'hidden', width: 0 };
+
+const layoutSelector = (s: ReturnType<typeof useAppStore.getState>) => ({
+  taskPanelOpen: s.taskPanelOpen,
+  contextPanelOpen: s.contextPanelOpen,
+  contextPanelSize: s.contextPanelSize,
+  toggleContextPanel: s.toggleContextPanel,
+  setContextPanelLastSize: s.setContextPanelLastSize,
+  switchView: s.switchView,
+});
+
 export function MainLayout() {
-  const contextPanelOpen = useAppStore((s) => s.contextPanelOpen);
-  const contextPanelSize = useAppStore((s) => s.contextPanelSize);
-  const toggleContextPanel = useAppStore((s) => s.toggleContextPanel);
-  const setContextPanelLastSize = useAppStore((s) => s.setContextPanelLastSize);
-  const switchView = useAppStore((s) => s.switchView);
+  const {
+    taskPanelOpen, contextPanelOpen, contextPanelSize,
+    toggleContextPanel, setContextPanelLastSize, switchView,
+  } = useAppStore(useShallow(layoutSelector));
 
   const workspaceRef = useRef<HTMLDivElement>(null);
   const contextPanelRef = useRef<ImperativePanelHandle>(null);
@@ -91,15 +105,23 @@ export function MainLayout() {
   useHotkey('Ctrl+3', () => switchView('analysis'));
   useHotkey('Ctrl+4', () => switchView('graph'));
   useHotkey('Ctrl+5', () => switchView('writing'));
+  useHotkey('Ctrl+6', () => switchView('notes'));
   useHotkey('Ctrl+,', () => switchView('settings'));
+
+  // Ctrl+J: 展开/折叠任务面板
+  const toggleTaskPanel = useAppStore((s) => s.toggleTaskPanel);
+  useHotkey('Ctrl+J', () => toggleTaskPanel());
 
   // Escape: 关闭最上层弹层
   useHotkey('Escape', () => {
     const state = useAppStore.getState();
+    if (state.taskPanelOpen) {
+      state.toggleTaskPanel();
+      return;
+    }
     if (state.globalSearchOpen) {
       state.closeGlobalSearch();
     }
-    // TODO: 关闭 Dialog、Popover 等
   });
 
   return (
@@ -128,10 +150,7 @@ export function MainLayout() {
             {/* ResizeHandle — 始终渲染，折叠时隐藏样式 */}
             <PanelResizeHandle
               className="panel-resize-handle"
-              style={{
-                visibility: contextPanelOpen ? 'visible' : 'hidden',
-                width: contextPanelOpen ? undefined : 0,
-              }}
+              style={contextPanelOpen ? resizeHandleVisibleStyle : resizeHandleHiddenStyle}
             />
 
             {/* ContextPanel — 始终渲染，由 collapsible API 控制折叠 */}
@@ -151,6 +170,13 @@ export function MainLayout() {
           </PanelGroup>
         </DndProvider>
       </div>
+
+      {/* Bottom panel — 任务活动面板 */}
+      {taskPanelOpen && (
+        <div className="app-shell__bottompanel">
+          <WorkflowMonitor />
+        </div>
+      )}
 
       {/* §6 StatusBar */}
       <StatusBar />

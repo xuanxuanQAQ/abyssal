@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getAPI } from '../../../core/ipc/bridge';
@@ -16,6 +17,7 @@ interface FileImportTabProps {
 }
 
 export function FileImportTab({ onClose }: FileImportTabProps) {
+  const { t } = useTranslation();
   const [files, setFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -29,7 +31,7 @@ export function FileImportTab({ onClose }: FileImportTabProps) {
       return validExts.includes(ext);
     });
     if (valid.length < newFiles.length) {
-      toast.error('部分文件格式不支持，已跳过');
+      toast.error(t('library.fileImport.unsupportedSkipped'));
     }
     setFiles((prev) => [...prev, ...valid]);
   }, []);
@@ -53,10 +55,10 @@ export function FileImportTab({ onClose }: FileImportTabProps) {
       const paths = files.map((f) => (f as File & { path: string }).path);
       const result = await getAPI().fs.importFiles(paths);
       queryClient.invalidateQueries({ queryKey: ['papers'] });
-      toast.success(`成功导入 ${result.imported} 篇论文`);
+      toast.success(t('library.fileImport.successCount', { count: result.imported }));
       onClose();
     } catch {
-      toast.error('导入失败');
+      toast.error(t('library.fileImport.failed'));
     } finally {
       setImporting(false);
     }
@@ -82,10 +84,10 @@ export function FileImportTab({ onClose }: FileImportTabProps) {
       >
         <Upload size={32} style={{ color: 'var(--text-muted)', marginBottom: 8 }} />
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
-          拖拽文件到此处
+          {t('library.fileImport.dropHint')}
         </p>
         <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: 4 }}>
-          支持: .bib, .ris, .pdf
+          {t('library.fileImport.supported')}
         </p>
       </div>
 
@@ -104,7 +106,7 @@ export function FileImportTab({ onClose }: FileImportTabProps) {
       {files.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <p style={{ fontSize: 'var(--text-sm)', fontWeight: 500, marginBottom: 8 }}>
-            已选文件:
+            {t('library.fileImport.selectedFiles')}
           </p>
           {files.map((f, i) => (
             <div
@@ -138,7 +140,7 @@ export function FileImportTab({ onClose }: FileImportTabProps) {
             cursor: 'pointer',
           }}
         >
-          取消
+          {t('common.cancel')}
         </button>
         <button
           onClick={handleImport}
@@ -153,7 +155,7 @@ export function FileImportTab({ onClose }: FileImportTabProps) {
             cursor: files.length > 0 ? 'pointer' : 'default',
           }}
         >
-          {importing ? '导入中…' : `导入 ${files.length} 个文件`}
+          {importing ? t('library.fileImport.importing') : t('library.fileImport.importCount', { count: files.length })}
         </button>
       </div>
     </div>

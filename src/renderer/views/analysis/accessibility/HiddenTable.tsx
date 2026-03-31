@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import type { HeatmapCell } from '../../../../shared-types/models';
+import { cellKey } from '../shared/cellKey';
 
 interface HiddenTableProps {
   conceptNames: string[];
@@ -26,7 +27,7 @@ export function HiddenTable({ conceptNames, paperLabels, cells, numPapers, numCo
   const cellMap = useMemo(() => {
     const map = new Map<string, HeatmapCell>();
     for (const cell of cells) {
-      map.set(`${cell.conceptIndex}:${cell.paperIndex}`, cell);
+      map.set(cellKey(cell.conceptIndex, cell.paperIndex), cell);
     }
     return map;
   }, [cells]);
@@ -48,7 +49,7 @@ export function HiddenTable({ conceptNames, paperLabels, cells, numPapers, numCo
             <tr key={r}>
               <th scope="row">{name}</th>
               {Array.from({ length: numPapers }, (_, c) => {
-                const cell = cellMap.get(`${r}:${c}`);
+                const cell = cellMap.get(cellKey(r, c));
                 return (
                   <td key={c}>
                     {cell ? `${cell.relationType}: ${cell.confidence.toFixed(2)}` : '无映射'}

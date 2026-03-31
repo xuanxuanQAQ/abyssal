@@ -1,8 +1,10 @@
 /**
  * CrossfadeTransition — ContentPane 切换的交叉淡入淡出（§11）
  *
- * 旧内容退出：150ms opacity 1→0 + translateY 0→−8px
- * 新内容进入：200ms（延迟 100ms） opacity 0→1 + translateY 8px→0
+ * 统一动画规范：
+ * - 退出：var(--duration-fast) 100ms, opacity→0 + translateY(0→-6px)
+ * - 进入：var(--duration-normal) 200ms, ctx-enter keyframe
+ * - 缓动：var(--easing-default)
  *
  * 当 animationEnabled === false 时，直接硬切。
  * 过渡期间滚动位置重置到顶部。
@@ -10,6 +12,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useLayout } from '../../../core/context/LayoutContext';
+
+// 与 CSS 变量保持一致（JS 中无法直接读取，镜像定义）
+const EXIT_MS = 100;  // --duration-fast
+const ENTER_MS = 200; // --duration-normal
 
 interface CrossfadeTransitionProps {
   /** 变化时触发过渡的标识 key */
@@ -48,10 +54,10 @@ export function CrossfadeTransition({
 
       const enterTimer = setTimeout(() => {
         setPhase('idle');
-      }, 200);
+      }, ENTER_MS);
 
       return () => clearTimeout(enterTimer);
-    }, 150);
+    }, EXIT_MS);
 
     return () => clearTimeout(exitTimer);
   }, [transitionKey, displayKey, animationEnabled]);
@@ -60,14 +66,14 @@ export function CrossfadeTransition({
     phase === 'exit'
       ? {
           opacity: 0,
-          transform: 'translateY(-8px)',
-          transition: 'opacity 150ms ease-out, transform 150ms ease-out',
+          transform: 'translateY(-6px)',
+          transition: `opacity ${EXIT_MS}ms cubic-bezier(0.16, 1, 0.3, 1), transform ${EXIT_MS}ms cubic-bezier(0.16, 1, 0.3, 1)`,
         }
       : phase === 'enter'
         ? {
             opacity: 0,
-            transform: 'translateY(8px)',
-            animation: 'crossfade-enter 200ms ease-out forwards',
+            transform: 'translateY(6px)',
+            animation: `ctx-enter ${ENTER_MS}ms cubic-bezier(0.16, 1, 0.3, 1) forwards`,
           }
         : {};
 

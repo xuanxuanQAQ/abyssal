@@ -5,7 +5,7 @@
 // 避免纯正则误将有序列表误判为节标题。
 
 import * as fs from 'node:fs';
-import type { TextExtractionResult } from '../types';
+import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata } from '../types';
 import { PdfCorruptedError, ProcessError, OcrFailedError } from '../types/errors';
 import { countTokens, estimateTokens } from '../infra/token-counter';
 
@@ -67,6 +67,15 @@ let ocrInitPromise: Promise<typeof ocrScheduler> | null = null;
 
 const OCR_POOL_SIZE = Math.min(4, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 4) || 4);
 
+/** Hard page limit to prevent OOM on very large documents */
+const MAX_PAGES = 2000;
+
+/** Per-job OCR timeout (ms) — prevents a single hung page from blocking the pool */
+const OCR_JOB_TIMEOUT_MS = 60_000;
+
+/** Max pages to buffer for OCR at once — limits peak memory usage */
+const OCR_BATCH_SIZE = 50;
+
 async function getOcrScheduler(
   languages: string[],
 ): Promise<typeof ocrScheduler> {
@@ -119,6 +128,10 @@ export interface ExtractTextOptions {
   ocrEnabled?: boolean | undefined;
   ocrLanguages?: string[] | undefined;
   charDensityThreshold?: number | undefined;
+  /** Maximum pages to process. Documents exceeding this throw ProcessError. Default: 2000 */
+  maxPages?: number | undefined;
+  /** Per-OCR-job timeout in ms. Default: 60000 */
+  ocrJobTimeoutMs?: number | undefined;
 }
 
 // ─── §1.1 extractText 主函数 ───
@@ -130,11 +143,13 @@ export async function extractText(
   const ocrEnabled = options.ocrEnabled ?? true;
   const ocrLanguages = options.ocrLanguages ?? ['eng', 'chi_sim'];
   const charDensityThreshold = options.charDensityThreshold ?? 10;
+  const maxPages = options.maxPages ?? MAX_PAGES;
+  const ocrJobTimeout = options.ocrJobTimeoutMs ?? OCR_JOB_TIMEOUT_MS;
 
   const mupdf = await getMupdf();
 
-  // §1.2: 打开文档
-  const buffer = fs.readFileSync(pdfPath);
+  // §1.2: 打开文档（Fix #10: 异步读取避免阻塞主线程）
+  const buffer = await fs.promises.readFile(pdfPath);
   let doc: { loadPage(i: number): unknown; countPages(): number; destroy(): void; needsPassword?(): boolean };
   try {
     doc = mupdf.Document.openDocument(buffer, 'application/pdf') as typeof doc;
@@ -155,6 +170,22 @@ export async function extractText(
   }
 
   const pageCount = doc.countPages();
+
+  // Fix #4: Hard page limit to prevent OOM
+  if (pageCount > maxPages) {
+    doc.destroy();
+    throw new ProcessError({
+      message: `Document has ${pageCount} pages, exceeding the limit of ${maxPages}. Split the document or increase the limit.`,
+    });
+  }
+
+  // Fix #11: 超大文档内存警告
+  if (pageCount > 500) {
+    console.warn(
+      `[extract-text] Large document: ${pageCount} pages. Processing may use significant memory.`,
+    );
+  }
+
   const pageTexts: string[] = [];
   const pageBoundsArea: number[] = []; // 每页面积（平方英寸）
   const scannedPageIndices: number[] = [];
@@ -238,7 +269,8 @@ export async function extractText(
         // §3a 改进：有效词元占比检测（防止不可见乱码文本绕过密度检测）
         // Fix: 增加 chars > 0 守卫，防止除零
         if (density >= charDensityThreshold && chars > 100) {
-          const alphaCount = (pageText.match(/[a-zA-Z\u4e00-\u9fff]/g) ?? []).length;
+          // Fix #12: 扩展有效字符范围，包含希腊字母、数学运算符、字母符号、Latin Extended
+          const alphaCount = (pageText.match(/[a-zA-Z\u4e00-\u9fff\u0370-\u03FF\u2200-\u22FF\u2100-\u214F\u00C0-\u00FF]/g) ?? []).length;
           const alphaRatio = chars > 0 ? alphaCount / chars : 0;
           if (alphaRatio < 0.3) {
             // 虽然字符密度达标，但有效字符占比极低→乱码页
@@ -267,46 +299,137 @@ export async function extractText(
       }
 
       if (scheduler) {
-        // 先渲染全部扫描页为 PNG（mupdf 操作必须在主线程串行）
-        const pngBuffers: Array<{ pageIdx: number; png: Buffer }> = [];
-        for (const pageIdx of scannedPageIndices) {
-          const page = doc.loadPage(pageIdx) as {
-            toPixmap(matrix: unknown, colorspace: unknown, alpha?: boolean): { destroy(): void; asPNG(): Buffer };
-            destroy(): void;
-          };
-          try {
-            const scale = 300 / 72;
-            const pixmap = page.toPixmap(
-              [scale, 0, 0, scale, 0, 0],
-              (mupdf as { ColorSpace?: { DeviceRGB?: unknown } }).ColorSpace?.DeviceRGB ?? 'DeviceRGB' as unknown,
-            );
+        // Fix #4: Process scanned pages in batches to limit peak memory
+        // Each 300DPI letter-size PNG is ~25MB; batching prevents OOM
+        for (let batchStart = 0; batchStart < scannedPageIndices.length; batchStart += OCR_BATCH_SIZE) {
+          const batchIndices = scannedPageIndices.slice(batchStart, batchStart + OCR_BATCH_SIZE);
+
+          // Render batch to PNG (mupdf operations must be serial on main thread)
+          const pngBuffers: Array<{ pageIdx: number; png: Buffer }> = [];
+          for (const pageIdx of batchIndices) {
+            const page = doc.loadPage(pageIdx) as {
+              toPixmap(matrix: unknown, colorspace: unknown, alpha?: boolean): { destroy(): void; asPNG(): Buffer };
+              destroy(): void;
+            };
             try {
-              pngBuffers.push({ pageIdx, png: pixmap.asPNG() });
+              const scale = 300 / 72;
+              const pixmap = page.toPixmap(
+                [scale, 0, 0, scale, 0, 0],
+                (mupdf as { ColorSpace?: { DeviceRGB?: unknown } }).ColorSpace?.DeviceRGB ?? 'DeviceRGB' as unknown,
+              );
+              try {
+                pngBuffers.push({ pageIdx, png: pixmap.asPNG() });
+              } finally {
+                pixmap.destroy();
+              }
             } finally {
-              pixmap.destroy();
+              page.destroy();
             }
-          } finally {
-            page.destroy();
           }
+
+          // Fix #5: Per-job timeout — prevents a single hung page from blocking the pool
+          const ocrResults = await Promise.allSettled(
+            pngBuffers.map(async ({ pageIdx, png }) => {
+              const result = await Promise.race([
+                scheduler!.addJob('recognize', png),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`OCR timeout for page ${pageIdx}`)), ocrJobTimeout),
+                ),
+              ]);
+              return { pageIdx, text: result.data.text, confidence: result.data.confidence };
+            }),
+          );
+
+          for (const r of ocrResults) {
+            if (r.status === 'fulfilled') {
+              // Fix: OCR 置信度阈值——低于 60% 的 OCR 结果可能比 mupdf 提取更差
+              if (r.value.confidence >= 60) {
+                pageTexts[r.value.pageIdx] = r.value.text;
+              }
+              ocrConfidences.push(r.value.confidence);
+            }
+            // rejected (timeout or error) → 保留 mupdf 结果
+          }
+
+          // Release PNG buffers between batches to allow GC
+          pngBuffers.length = 0;
+        }
+      }
+    }
+
+    // §1.5a: PDF metadata dict 提取（零成本）
+    const pdfMetadata: PdfEmbeddedMetadata = { title: null, author: null, subject: null, keywords: null, creator: null, producer: null, creationDate: null };
+    try {
+      const docAny = doc as unknown as { getMetadata?(key: string): string };
+      if (typeof docAny.getMetadata === 'function') {
+        const get = (key: string): string | null => {
+          try {
+            const v = docAny.getMetadata!(key);
+            return (v && typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
+          } catch { return null; }
+        };
+        pdfMetadata.title = get('info:Title');
+        pdfMetadata.author = get('info:Author');
+        pdfMetadata.subject = get('info:Subject');
+        pdfMetadata.keywords = get('info:Keywords');
+        pdfMetadata.creator = get('info:Creator');
+        pdfMetadata.producer = get('info:Producer');
+        pdfMetadata.creationDate = get('info:CreationDate');
+      }
+    } catch { /* non-fatal */ }
+
+    // §1.5b: 首页启发式标题/作者提取
+    const firstPage: FirstPageMetadata = { titleCandidate: null, authorCandidates: [], firstPageText: '' };
+    {
+      // 收集首页 styledLines
+      const page0Lines = allStyledLines.filter((l) => l.pageIndex === 0);
+      firstPage.firstPageText = (pageTexts[0] ?? '').slice(0, 2000);
+
+      if (page0Lines.length > 0) {
+        // 计算全文档基线字号（众数）
+        const allSizes = allStyledLines.map((l) => l.fontSize).filter((s) => s > 0);
+        const baselineSize = allSizes.length > 0 ? mode(allSizes) : 10;
+
+        // 标题候选：首页中字号 > 基线 × 1.3 的最大字号行
+        const titleThreshold = baselineSize * 1.3;
+        const largeFontLines = page0Lines
+          .filter((l) => l.fontSize > titleThreshold && l.text.trim().length > 3)
+          .sort((a, b) => b.fontSize - a.fontSize);
+
+        if (largeFontLines.length > 0) {
+          // 合并连续的最大字号行作为标题（多行标题）
+          const maxSize = largeFontLines[0]!.fontSize;
+          const titleLines = largeFontLines
+            .filter((l) => Math.abs(l.fontSize - maxSize) < 0.5)
+            .map((l) => l.text.trim());
+          firstPage.titleCandidate = titleLines.join(' ').replace(/\s+/g, ' ');
         }
 
-        // 并发提交 OCR 任务给 Scheduler
-        const ocrResults = await Promise.allSettled(
-          pngBuffers.map(async ({ pageIdx, png }) => {
-            const result = await scheduler!.addJob('recognize', png);
-            return { pageIdx, text: result.data.text, confidence: result.data.confidence };
-          }),
-        );
-
-        for (const r of ocrResults) {
-          if (r.status === 'fulfilled') {
-            // Fix: OCR 置信度阈值——低于 60% 的 OCR 结果可能比 mupdf 提取更差
-            if (r.value.confidence >= 60) {
-              pageTexts[r.value.pageIdx] = r.value.text;
+        // 作者候选：标题下方、字号比标题小但比正文大（或 bold）的行
+        // 取标题之后到 Abstract/Introduction 之前的行
+        if (firstPage.titleCandidate) {
+          const titleIdx = page0Lines.findIndex(
+            (l) => l.text.trim() === largeFontLines[0]?.text.trim(),
+          );
+          if (titleIdx >= 0) {
+            const authorThreshold = baselineSize * 0.95;
+            for (let j = titleIdx + 1; j < page0Lines.length; j++) {
+              const line = page0Lines[j]!;
+              const trimmed = line.text.trim();
+              // 遇到 Abstract/关键字/Introduction 等标记 → 停止
+              if (/^(abstract|摘\s*要|introduction|keywords|关键词)/i.test(trimmed)) break;
+              // 空行跳过
+              if (trimmed.length === 0) continue;
+              // 太长的行可能是正文
+              if (trimmed.length > 200) break;
+              // 字号略大于正文或 bold → 可能是作者
+              if (line.fontSize > authorThreshold || line.isBold) {
+                firstPage.authorCandidates.push(trimmed);
+              }
+              // 收集到足够作者行后停止
+              if (firstPage.authorCandidates.length >= 10) break;
             }
-            ocrConfidences.push(r.value.confidence);
           }
-          // rejected → 保留 mupdf 结果
         }
       }
     }
@@ -339,6 +462,8 @@ export async function extractText(
       ocrConfidence,
       scannedPageIndices,
       styledLines: allStyledLines,
+      pdfMetadata,
+      firstPage,
     };
   } finally {
     // §1.6: 资源释放

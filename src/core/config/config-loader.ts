@@ -5,11 +5,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
   AbyssalConfig,
+  GlobalConfig,
   ApiKeysConfig,
   ConceptChangeConfig,
   NotesConfig,
   BatchConfig,
   AdvisoryConfig,
+  LoggingConfig,
+  WritingConfig,
   ProjectConfig,
   AcquireConfig,
   DiscoveryConfig,
@@ -20,13 +23,44 @@ import type {
   WorkspaceConfig,
   ConceptsConfig,
   ContextBudgetConfig,
+  PersonalizationConfig,
+  WebSearchConfig,
 } from '../types/config';
 import { ConfigParseError } from '../types/errors';
 import { CONFIG_FIELD_DEFS, coerceToSchemaType, getNestedValue } from './config-schema';
 import { parseEnvironmentVariables, resolveApiKeys } from './env-parser';
 
-// TODO — Logger 注入；当前使用 console.warn 作为占位
 type WarnFn = (message: string, ctx?: Record<string, unknown>) => void;
+
+/**
+ * 缓冲式警告收集器。
+ *
+ * 配置加载发生在 Logger 创建之前（鸡生蛋问题），
+ * 所以先收集警告，Logger 就绪后调用 flush() 回放。
+ */
+export class BufferedWarnCollector {
+  private readonly buffer: Array<{ message: string; ctx: Record<string, unknown> | undefined }> = [];
+
+  readonly warn: WarnFn = (message, ctx) => {
+    this.buffer.push({ message, ctx });
+  };
+
+  /** 将缓冲的警告回放到 Logger（或其他 sink） */
+  flush(sink: WarnFn): void {
+    for (const { message, ctx } of this.buffer) {
+      if (ctx !== undefined) {
+        sink(message, ctx);
+      } else {
+        sink(message);
+      }
+    }
+    this.buffer.length = 0;
+  }
+
+  get length(): number {
+    return this.buffer.length;
+  }
+}
 
 // ═══ §1.2 深度合并算法 ═══
 
@@ -92,7 +126,8 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
  * | --concurrency | batch.concurrency      | integer  |
  * | --workspace   | workspace.baseDir      | string   |
  * | --dry-run     | batch.dryRun           | boolean  |
- * | --verbose     | (log.level = 'debug')  | boolean  |
+ * | --verbose     | logging.level = 'debug'| boolean  |
+ * | --log-level   | logging.level          | string   |
  * | --force       | batch.force            | boolean  |
  * | --mode        | project.mode           | string   |
  * | --provider    | llm.defaultProvider    | string   |
@@ -136,10 +171,16 @@ export function mapCliToConfig(
     current[configPath[configPath.length - 1]!] = value;
   }
 
-  // --verbose → 特殊处理
+  // --verbose → logging.level = 'debug'
   if (cliArgs['verbose'] === true) {
-    // TODO — log.level 不在 AbyssalConfig 中；由上层消费
-    (result as Record<string, unknown>)['_verbose'] = true;
+    if (!result['logging']) result['logging'] = {};
+    (result['logging'] as Record<string, unknown>)['level'] = 'debug';
+  }
+
+  // --log-level → logging.level（优先级高于 --verbose）
+  if (cliArgs['logLevel'] !== undefined) {
+    if (!result['logging']) result['logging'] = {};
+    (result['logging'] as Record<string, unknown>)['level'] = cliArgs['logLevel'];
   }
 
   return result;
@@ -265,6 +306,58 @@ function flattenTomlSections(parsed: Record<string, unknown>): Record<string, un
 }
 
 /**
+ * §1.2b: [acquire] 段中 TOML 的布尔简写 → 运行时字段映射。
+ *
+ * TOML 允许用户写：
+ *   unpaywall = true
+ *   arxiv = true
+ *   scihub = true
+ *
+ * 但运行时配置期望：
+ *   enabledSources: ["unpaywall", "arxiv", ...]
+ *   enableScihub: true
+ *
+ * 此函数在 snakeToCamelDeep 之前调用（输入仍是 snake_case 键名）。
+ */
+function normalizeAcquireSection(parsed: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...parsed };
+  const acquire = result['acquire'];
+  if (!acquire || typeof acquire !== 'object') return result;
+
+  const acq = { ...(acquire as Record<string, unknown>) };
+
+  // ── 布尔简写 → enabledSources 数组 ──
+  // 已知数据源标识（TOML 中可作为布尔开关使用的键名）
+  const SOURCE_KEYS = ['unpaywall', 'arxiv', 'pmc', 'institutional'] as const;
+  const hasAnySourceFlag = SOURCE_KEYS.some((k) => typeof acq[k] === 'boolean');
+
+  if (hasAnySourceFlag) {
+    // 用户使用了布尔简写 → 从中构建 enabledSources
+    const sources: string[] = [];
+    for (const key of SOURCE_KEYS) {
+      if (acq[key] === true) sources.push(key);
+      delete acq[key]; // 清理，防止作为杂余字段进入运行时配置
+    }
+    // 仅当用户未显式提供 enabled_sources 数组时才从布尔推断
+    if (!acq['enabled_sources'] && !acq['enabledSources']) {
+      acq['enabled_sources'] = sources;
+    }
+  }
+
+  // ── scihub → enable_scihub 映射 ──
+  // TOML 中 `scihub = true` 应映射到运行时的 `enableScihub`
+  if (typeof acq['scihub'] === 'boolean' && acq['enable_scihub'] === undefined) {
+    acq['enable_scihub'] = acq['scihub'];
+    delete acq['scihub'];
+  }
+
+  // ── scihub_domain: 保持原样（snake_case → camelCase 由后续处理） ──
+
+  result['acquire'] = acq;
+  return result;
+}
+
+/**
  * TOML 中的 snake_case 键名 → camelCase 转换。
  * 递归处理嵌套对象。
  */
@@ -291,13 +384,44 @@ const DEFAULT_PROJECT: Omit<ProjectConfig, 'name'> = {
   mode: 'auto',
 };
 
-const DEFAULT_ACQUIRE: AcquireConfig = {
+export const DEFAULT_ACQUIRE: AcquireConfig = {
   enabledSources: ['unpaywall', 'arxiv', 'pmc'],
   enableScihub: false,
   scihubDomain: null,
   institutionalProxyUrl: null,
   perSourceTimeoutMs: 30_000,
   maxRedirects: 5,
+  maxRetries: 1,
+  retryDelayMs: 2000,
+  scihubMaxTotalMs: 60_000,
+  tarMaxExtractBytes: 200 * 1024 * 1024,
+  enableContentSanityCheck: false,
+  sanityCheckMaxChars: 2000,
+  sanityCheckConfidenceThreshold: 0.85,
+  enableFailureMemory: true,
+  failureMemoryWindowDays: 90,
+  enableFuzzyResolve: true,
+  fuzzyResolveConfidenceThreshold: 0.8,
+  enableChinaInstitutional: false,
+  chinaInstitutionId: null,
+  chinaCustomIdpEntityId: null,
+  enableCnki: false,
+  enableWanfang: false,
+  // Pipeline v2
+  enableFastPath: true,
+  enableRecon: true,
+  reconCacheTtlDays: 30,
+  oaCacheRefreshDays: 7,
+  reconTimeoutMs: 10_000,
+  enablePreflight: true,
+  preflightTimeoutMs: 5_000,
+  enableSpeculativeExecution: true,
+  maxSpeculativeParallel: 3,
+  speculativeTotalTimeoutMs: 45_000,
+  ezproxyUrlTemplate: null,
+  proxyEnabled: false,
+  proxyUrl: 'http://127.0.0.1:7890',
+  proxyMode: 'blocked-only',
 };
 
 const DEFAULT_DISCOVERY: DiscoveryConfig = {
@@ -317,35 +441,35 @@ const DEFAULT_ANALYSIS: AnalysisConfig = {
   autoSuggestConcepts: true,
 };
 
-const DEFAULT_RAG: RagConfig = {
-  embeddingBackend: 'api',
+export const DEFAULT_RAG: RagConfig = {
   embeddingModel: 'text-embedding-3-small',
   embeddingDimension: 1536,
+  embeddingProvider: 'openai',
   defaultTopK: 10,
   expandFactor: 3,
-  rerankerBackend: 'local-bge',
+  rerankerBackend: 'cohere',
   rerankerModel: null,
   tentativeExpandFactorMultiplier: 2.0,
   tentativeTopkMultiplier: 1.5,
   correctiveRagEnabled: true,
   correctiveRagMaxRetries: 2,
   correctiveRagModel: 'deepseek-chat',
-  localOnnxModelPath: null,
-  localRerankerModelPath: null,
+  crossConceptBoostFactor: 1.5,
 };
 
 const DEFAULT_LANGUAGE: LanguageConfig = {
   internalWorkingLanguage: 'en',
   defaultOutputLanguage: 'zh-CN',
+  uiLocale: 'en',
 };
 
-const DEFAULT_LLM: LlmConfig = {
+export const DEFAULT_LLM: LlmConfig = {
   defaultProvider: 'anthropic',
   defaultModel: 'claude-sonnet-4-20250514',
   workflowOverrides: {},
 };
 
-const DEFAULT_API_KEYS: ApiKeysConfig = {
+export const DEFAULT_API_KEYS: ApiKeysConfig = {
   anthropicApiKey: null,
   openaiApiKey: null,
   deepseekApiKey: null,
@@ -354,6 +478,8 @@ const DEFAULT_API_KEYS: ApiKeysConfig = {
   unpaywallEmail: null,
   cohereApiKey: null,
   jinaApiKey: null,
+  siliconflowApiKey: null,
+  webSearchApiKey: null,
 };
 
 const DEFAULT_WORKSPACE_PARTIAL: Omit<WorkspaceConfig, 'baseDir'> = {
@@ -402,6 +528,24 @@ const DEFAULT_ADVISORY: AdvisoryConfig = {
   minPapersThreshold: 5,
 };
 
+const DEFAULT_LOGGING: LoggingConfig = {
+  level: 'info',
+};
+
+const DEFAULT_WRITING: WritingConfig = {
+  defaultCslStyleId: 'gb-t-7714',
+  defaultOutputLanguage: 'zh',
+};
+
+const DEFAULT_PERSONALIZATION: PersonalizationConfig = {
+  authorDisplayThreshold: 1,
+};
+
+const DEFAULT_WEB_SEARCH: WebSearchConfig = {
+  enabled: false,
+  backend: 'tavily',
+};
+
 /**
  * Layer 0 硬编码默认值——完整的 AbyssalConfig（除 project.name 和 workspace.baseDir 外）。
  */
@@ -424,6 +568,10 @@ export const DEFAULT_CONFIG: Omit<AbyssalConfig, 'project' | 'workspace'> & {
   notes: DEFAULT_NOTES,
   batch: DEFAULT_BATCH,
   advisory: DEFAULT_ADVISORY,
+  logging: DEFAULT_LOGGING,
+  writing: DEFAULT_WRITING,
+  personalization: DEFAULT_PERSONALIZATION,
+  webSearch: DEFAULT_WEB_SEARCH,
 };
 
 // ═══ §1.6 配置加载的完整流程 ═══
@@ -431,12 +579,18 @@ export const DEFAULT_CONFIG: Omit<AbyssalConfig, 'project' | 'workspace'> & {
 export interface LoadConfigOptions {
   /** CLI 参数（已解析） */
   cliArgs?: Record<string, unknown>;
-  /** 配置文件路径覆盖 */
+  /** 配置���件路径覆盖 */
   configPath?: string;
   /** 环境变量源（默认 process.env） */
   env?: Record<string, string | undefined>;
-  /** 警告回调 */
+  /** 警告回调（默认使用 BufferedWarnCollector，通过返回值的 warnCollector 获取） */
   warn?: WarnFn;
+}
+
+export interface LoadConfigResult {
+  config: AbyssalConfig;
+  /** 非 null 仅当未传入自定义 warn 时——调用 flush(logger.warn) 回放到 Logger */
+  warnCollector: BufferedWarnCollector | null;
 }
 
 /**
@@ -448,11 +602,12 @@ export interface LoadConfigOptions {
  * Layer 3: 环境变量
  * + API keys 特殊处理（优先级最高）
  */
-export function loadConfig(opts: LoadConfigOptions = {}): AbyssalConfig {
+export function loadConfig(opts: LoadConfigOptions = {}): LoadConfigResult {
+  const collector = opts.warn ? null : new BufferedWarnCollector();
   const {
     cliArgs = {},
     env = process.env,
-    warn = console.warn,
+    warn = collector!.warn,
   } = opts;
 
   // Layer 0: 默认值
@@ -487,8 +642,9 @@ export function loadConfig(opts: LoadConfigOptions = {}): AbyssalConfig {
       });
     }
 
-    // 展平 TOML 子节 + snake_case → camelCase
+    // 展平 TOML 子节 + acquire 布尔简写规范化 + snake_case → camelCase
     tomlParsed = flattenTomlSections(tomlParsed);
+    tomlParsed = normalizeAcquireSection(tomlParsed);
     tomlParsed = snakeToCamelDeep(tomlParsed);
 
     config = deepMerge(config, tomlParsed);
@@ -513,7 +669,184 @@ export function loadConfig(opts: LoadConfigOptions = {}): AbyssalConfig {
   // enforceSchema——字段级类型转换 + clamp
   config = enforceSchema(config, warn);
 
-  return config as unknown as AbyssalConfig;
+  return {
+    config: config as unknown as AbyssalConfig,
+    warnCollector: collector,
+  };
+}
+
+// ═══ §1.7 统一配置加载（Electron + CLI 共用） ═══
+
+/**
+ * 五层优先级加载——供 Electron 的 loadFromWorkspace 调用。
+ *
+ * Layer 0: 硬编码默认值 (DEFAULT_CONFIG)
+ * Layer 1: 全局配置      (%APPDATA%/global-config.toml)
+ * Layer 2: 项目配置      (config/abyssal.toml)          — 版本控制
+ * Layer 3: 本地覆盖      (.abyssal/config.toml)          — gitignore
+ * Layer 4: 环境变量                                       — 最高优先级
+ */
+export interface LoadUnifiedConfigOptions {
+  workspaceRoot: string;
+  globalConfig: GlobalConfig;
+  env?: Record<string, string | undefined>;
+  warn?: WarnFn;
+}
+
+export function loadUnifiedConfig(opts: LoadUnifiedConfigOptions): Readonly<AbyssalConfig> {
+  const {
+    workspaceRoot,
+    globalConfig,
+    env = process.env,
+    warn = () => {},
+  } = opts;
+
+  // Layer 0: 默认值
+  let config = structuredClone(DEFAULT_CONFIG) as Record<string, unknown>;
+
+  // Layer 1: 全局配置（apiKeys, llm, rag, acquire, webSearch）
+  const globalLayer: Record<string, unknown> = {
+    apiKeys: globalConfig.apiKeys,
+    llm: globalConfig.llm,
+    rag: globalConfig.rag,
+    acquire: globalConfig.acquire,
+  };
+  if (globalConfig.webSearch) {
+    globalLayer['webSearch'] = globalConfig.webSearch;
+  }
+  config = deepMerge(config, globalLayer);
+
+  // Layer 2: 项目配置（config/abyssal.toml）
+  const projectTomlPath = path.join(workspaceRoot, 'config', 'abyssal.toml');
+  const projectToml = readAndParseToml(projectTomlPath, warn);
+  if (projectToml) {
+    config = deepMerge(config, projectToml);
+  }
+
+  // Layer 3: 本地覆盖（.abyssal/config.toml）
+  const localTomlPath = path.join(workspaceRoot, '.abyssal', 'config.toml');
+  const localToml = readAndParseToml(localTomlPath, warn);
+  if (localToml) {
+    config = deepMerge(config, localToml);
+  }
+
+  // Layer 4: 环境变量
+  const envConfig = parseEnvironmentVariables(env, warn);
+  config = deepMerge(config, envConfig);
+
+  // API keys 特殊处理（环境变量优先级最高）
+  const existingApiKeys = (config['apiKeys'] ?? {}) as Partial<ApiKeysConfig>;
+  config['apiKeys'] = resolveApiKeys(env, existingApiKeys);
+
+  // enforceSchema
+  config = enforceSchema(config, warn);
+
+  // 填充 workspace 和 project.name
+  const projectSection = (config['project'] ?? {}) as Record<string, unknown>;
+  if (!projectSection['name']) {
+    projectSection['name'] = path.basename(workspaceRoot);
+  }
+  config['project'] = projectSection;
+
+  const workspace: WorkspaceConfig = {
+    baseDir: workspaceRoot,
+    dbFileName: 'abyssal.db',
+    pdfDir: 'pdfs',
+    textDir: 'texts',
+    reportsDir: 'reports',
+    notesDir: 'notes',
+    logsDir: path.join('.abyssal', 'logs'),
+    snapshotsDir: path.join('.abyssal', 'snapshots'),
+    privateDocsDir: 'private_docs',
+  };
+  config['workspace'] = workspace;
+
+  const result = config as unknown as AbyssalConfig;
+
+  // 验证
+  validateConfig(result);
+
+  return deepFreeze(result);
+}
+
+/** 读取 TOML 文件并返回 camelCase 化的 plain object，文件不存在或解析失败返回 null */
+function readAndParseToml(
+  filePath: string,
+  warn: WarnFn,
+): Record<string, unknown> | null {
+  if (!fs.existsSync(filePath)) return null;
+
+  let content: string;
+  try {
+    content = stripBom(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    warn(`Cannot read config file: ${filePath}`);
+    return null;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    const toml = require('smol-toml');
+    parsed = toml.parse(content) as Record<string, unknown>;
+  } catch {
+    warn(`TOML parse error in ${filePath}, skipping`);
+    return null;
+  }
+
+  parsed = flattenTomlSections(parsed);
+  parsed = normalizeAcquireSection(parsed);
+  parsed = snakeToCamelDeep(parsed);
+  return parsed;
+}
+
+/** 独立验证函数，供 loadUnifiedConfig 和 loadConfig 共用 */
+function validateConfig(config: AbyssalConfig): void {
+  const { ConfigError } = require('../types/errors');
+
+  if (config.rag.embeddingDimension <= 0) {
+    throw new ConfigError({
+      message: 'rag.embeddingDimension must be > 0',
+      context: { fieldPath: 'rag.embeddingDimension', actual: config.rag.embeddingDimension },
+    });
+  }
+  if (config.rag.defaultTopK <= 0) {
+    throw new ConfigError({
+      message: 'rag.defaultTopK must be > 0',
+      context: { fieldPath: 'rag.defaultTopK', actual: config.rag.defaultTopK },
+    });
+  }
+  if (config.analysis.maxTokensPerChunk <= 0) {
+    throw new ConfigError({
+      message: 'analysis.maxTokensPerChunk must be > 0',
+      context: { fieldPath: 'analysis.maxTokensPerChunk', actual: config.analysis.maxTokensPerChunk },
+    });
+  }
+  if (config.analysis.overlapTokens < 0) {
+    throw new ConfigError({
+      message: 'analysis.overlapTokens must be >= 0',
+      context: { fieldPath: 'analysis.overlapTokens', actual: config.analysis.overlapTokens },
+    });
+  }
+  if (config.discovery.traversalDepth < 0) {
+    throw new ConfigError({
+      message: 'discovery.traversalDepth must be >= 0',
+      context: { fieldPath: 'discovery.traversalDepth', actual: config.discovery.traversalDepth },
+    });
+  }
+  const validRerankerBackends = ['cohere', 'jina', 'siliconflow'];
+  if (!validRerankerBackends.includes(config.rag.rerankerBackend)) {
+    throw new ConfigError({
+      message: `rag.rerankerBackend must be one of: ${validRerankerBackends.join(', ')}`,
+      context: { fieldPath: 'rag.rerankerBackend', actual: config.rag.rerankerBackend },
+    });
+  }
+  const validModes = ['anchored', 'unanchored', 'auto'];
+  if (!validModes.includes(config.project.mode)) {
+    throw new ConfigError({
+      message: `project.mode must be one of: ${validModes.join(', ')}`,
+      context: { fieldPath: 'project.mode', actual: config.project.mode },
+    });
+  }
 }
 
 // ═══ 递归冻结 ═══

@@ -37,11 +37,18 @@ export interface Paper {
   year: number;
   abstract: string | null;
   doi: string | null;
+  arxivId: string | null;
+  pmcid: string | null;
   paperType: PaperType;
   relevance: Relevance;
   fulltextStatus: FulltextStatus;
+  fulltextPath: string | null;
+  fulltextSource: string | null;
+  textPath: string | null;
   analysisStatus: AnalysisStatus;
   decisionNote: string | null;
+  failureReason: string | null;
+  failureCount: number;
   tags: string[];
   dateAdded: string; // ISO 8601
   /** §10.3 分析报告（Markdown 格式，由后端分析管线生成） */
@@ -108,6 +115,7 @@ export interface HeatmapCell {
   relationType: RelationType;
   confidence: number;
   mappingId: string;
+  adjudicationStatus: AdjudicationStatus;
 }
 
 export interface HeatmapMatrix {
@@ -150,10 +158,18 @@ export type NewAnnotation = Omit<Annotation, 'id'>;
 
 // ═══ Article / Writing ═══
 
+export interface ArticleAuthorInfo {
+  name: string;
+  affiliation?: string;
+  email?: string;
+  isCorresponding?: boolean;
+}
+
 export interface ArticleMetadata {
-  authors?: string[] | undefined;
+  authors?: ArticleAuthorInfo[] | undefined;
   institution?: string | undefined;
   abstract?: string | undefined;
+  keywords?: string[] | undefined;
   writingStyle?: string | undefined;
   targetWordCount?: number | undefined;
 }
@@ -196,6 +212,7 @@ export interface SectionContent {
   outlineId: string;
   content: string; // Markdown（【Δ-4】不含标题）
   version: number;
+  citedPaperIds: string[];
 }
 
 export interface SectionPatch {
@@ -212,6 +229,66 @@ export interface SectionVersion {
   content: string;
   createdAt: string;
   source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite';
+}
+
+// ═══ Full Document Operations ═══
+
+export interface FullDocumentSection {
+  sectionId: string;
+  title: string;
+  content: string;
+  documentJson: string | null;
+  version: number;
+  sortIndex: number;
+  parentId: string | null;
+  depth: number;
+}
+
+export interface FullDocumentContent {
+  articleId: string;
+  sections: FullDocumentSection[];
+}
+
+export interface SectionSave {
+  sectionId: string;
+  content: string;
+  documentJson?: string | null;
+  source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite';
+}
+
+// ═══ Article Asset ═══
+
+export interface ArticleAsset {
+  id: string;
+  articleId: string;
+  fileName: string;
+  mimeType: string;
+  filePath: string;
+  fileSize: number;
+  caption: string | null;
+  altText: string | null;
+  createdAt: string;
+}
+
+// ═══ Cross Reference ═══
+
+export type CrossRefType = 'figure' | 'table' | 'equation' | 'section';
+
+export interface CrossRefLabel {
+  id: string;
+  articleId: string;
+  label: string;
+  refType: CrossRefType;
+  sectionId: string | null;
+  displayNumber: string | null;
+}
+
+// ═══ Export Progress ═══
+
+export interface ExportProgress {
+  stage: 'assembling' | 'formatting_citations' | 'generating_references' | 'converting' | 'writing';
+  progress: number; // 0-100
+  message: string;
 }
 
 // ═══ Graph ═══
@@ -457,8 +534,23 @@ export interface NoteContext {
   noteId: string;
 }
 
+/** 多论文上下文（Library 多选） */
+export interface PapersContext {
+  type: 'papers';
+  paperIds: string[];
+  originView: ViewType;
+}
+
+/** 全选上下文（Ctrl+A / allExcept 模式，不枚举完整 ID 列表） */
+export interface AllSelectedContext {
+  type: 'allSelected';
+  excludedCount: number;
+}
+
 export type ContextSource =
   | PaperContext
+  | PapersContext
+  | AllSelectedContext
   | ConceptContext
   | MappingContext
   | SectionContext
@@ -488,6 +580,17 @@ export interface TaskUIState {
   status: string;
   currentStep: string;
   progress: { current: number; total: number };
+  /** 当前论文的子步骤进度（如 acquire cascade 各数据源状态） */
+  substeps?: import('../ipc').SubstepInfo[];
+}
+
+export interface TaskHistoryEntry {
+  taskId: string;
+  workflow: WorkflowType;
+  status: 'completed' | 'failed' | 'cancelled';
+  completedAt: string;
+  progress: { current: number; total: number };
+  error?: { code: string; message: string };
 }
 
 // ═══ App Config ═══
@@ -737,6 +840,126 @@ export interface SectionQualityReport {
   sectionId: string;
   coverage: RetrievalCoverage;
   gaps: string[];
+}
+
+// ═══ Settings ═══
+
+/** Full settings data returned to the renderer (API keys masked) */
+export interface SettingsData {
+  project: {
+    name: string;
+    description: string;
+    mode: string;
+  };
+  llm: {
+    defaultProvider: string;
+    defaultModel: string;
+    workflowOverrides: Record<string, { provider: string; model: string; maxTokens?: number }>;
+  };
+  rag: {
+    embeddingModel: string;
+    embeddingDimension: number;
+    embeddingProvider: string;
+    defaultTopK: number;
+    expandFactor: number;
+    rerankerBackend: string;
+    rerankerModel: string | null;
+    correctiveRagEnabled: boolean;
+    correctiveRagMaxRetries: number;
+    correctiveRagModel: string;
+    tentativeExpandFactorMultiplier: number;
+    tentativeTopkMultiplier: number;
+    crossConceptBoostFactor: number;
+  };
+  acquire: {
+    enabledSources: string[];
+    enableScihub: boolean;
+    scihubDomain: string | null;
+    institutionalProxyUrl: string | null;
+    perSourceTimeoutMs: number;
+    maxRedirects: number;
+    maxRetries: number;
+    retryDelayMs: number;
+    scihubMaxTotalMs: number;
+    tarMaxExtractBytes: number;
+    enableChinaInstitutional: boolean;
+    chinaInstitutionId: string | null;
+    chinaCustomIdpEntityId: string | null;
+    enableCnki: boolean;
+    enableWanfang: boolean;
+    proxyEnabled: boolean;
+    proxyUrl: string;
+    proxyMode: 'all' | 'blocked-only';
+  };
+  discovery: {
+    traversalDepth: number;
+    maxResultsPerQuery: number;
+    concurrency: number;
+  };
+  analysis: {
+    maxTokensPerChunk: number;
+    overlapTokens: number;
+    ocrEnabled: boolean;
+    vlmEnabled: boolean;
+    autoSuggestConcepts: boolean;
+  };
+  language: {
+    internalWorkingLanguage: string;
+    defaultOutputLanguage: string;
+    uiLocale: string;
+  };
+  contextBudget: {
+    focusedMaxTokens: number;
+    broadMaxTokens: number;
+    outputReserveRatio: number;
+    safetyMarginRatio: number;
+    skipRerankerThreshold: number;
+    costPreference: string;
+  };
+  apiKeys: {
+    anthropicApiKey: string | null;
+    openaiApiKey: string | null;
+    deepseekApiKey: string | null;
+    semanticScholarApiKey: string | null;
+    unpaywallEmail: string | null;
+    cohereApiKey: string | null;
+    jinaApiKey: string | null;
+    siliconflowApiKey: string | null;
+    webSearchApiKey: string | null;
+  };
+  webSearch: {
+    enabled: boolean;
+    backend: 'tavily' | 'serpapi' | 'bing';
+  };
+  workspace: {
+    baseDir: string;
+  };
+  personalization: {
+    authorDisplayThreshold: number;
+  };
+}
+
+export interface DbStatsInfo {
+  paperCount: number;
+  analyzedCount: number;
+  conceptCount: number;
+  mappingCount: number;
+  chunkCount: number;
+  dbSizeBytes: number;
+  embeddingModel: string;
+  embeddingDimension: number;
+}
+
+export interface ApiKeyTestResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface SystemInfo {
+  appVersion: string;
+  electronVersion: string;
+  nodeVersion: string;
+  chromeVersion: string;
 }
 
 // ═══ Concept Stats ═══

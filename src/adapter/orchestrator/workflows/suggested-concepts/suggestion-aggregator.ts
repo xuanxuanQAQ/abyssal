@@ -66,52 +66,72 @@ export async function aggregateSuggestions(
   let notificationsSent = 0;
 
   for (const suggestion of suggestions) {
-    const existing = await db.getSuggestedConceptByTerm(suggestion.termNormalized);
+    // Fix #8: Retry loop to handle concurrent write races on term_normalized
+    // Two papers analyzed concurrently may both try to insert the same term.
+    // On UNIQUE constraint violation, retry as an update instead.
+    let retries = 0;
+    const MAX_RETRIES = 2;
 
-    if (existing) {
-      // ── Aggregate: update frequency and source papers ──
-      const existingPaperIds = parseJsonArray(existing['source_paper_ids'] as string);
-      if (existingPaperIds.includes(paperId)) continue;
+    while (retries <= MAX_RETRIES) {
+      try {
+        const existing = await db.getSuggestedConceptByTerm(suggestion.termNormalized);
 
-      existingPaperIds.push(paperId);
-      const newCount = existingPaperIds.length;
+        if (existing) {
+          // ── Aggregate: update frequency and source papers ──
+          const existingPaperIds = parseJsonArray(existing['source_paper_ids'] as string);
+          if (existingPaperIds.includes(paperId)) break; // Already recorded
 
-      await db.updateSuggestedConcept(existing['id'] as string, {
-        source_paper_count: newCount,
-        source_paper_ids: JSON.stringify(existingPaperIds),
-        total_frequency: (existing['total_frequency'] as number ?? 0) + suggestion.frequencyInPaper,
-        updated_at: new Date().toISOString(),
-      });
+          existingPaperIds.push(paperId);
+          const newCount = existingPaperIds.length;
 
-      updatedSuggestions++;
+          await db.updateSuggestedConcept(existing['id'] as string, {
+            source_paper_count: newCount,
+            source_paper_ids: JSON.stringify(existingPaperIds),
+            total_frequency: (existing['total_frequency'] as number ?? 0) + suggestion.frequencyInPaper,
+            updated_at: new Date().toISOString(),
+          });
 
-      // ── Threshold notification (§6.8) ──
-      if (newCount === threshold && notifier) {
-        notifier.pushNotification({
-          type: 'concept_suggestion',
-          title: `AI suggests new concept: "${suggestion.term}"`,
-          description: `Mentioned in ${newCount} papers`,
-          action: {
-            type: 'navigate',
-            route: `/framework?tab=suggestions&focus=${suggestion.termNormalized}`,
-          },
-        });
-        notificationsSent++;
+          updatedSuggestions++;
+
+          // ── Threshold notification (§6.8) ──
+          if (newCount === threshold && notifier) {
+            notifier.pushNotification({
+              type: 'concept_suggestion',
+              title: `AI suggests new concept: "${suggestion.term}"`,
+              description: `Mentioned in ${newCount} papers`,
+              action: {
+                type: 'navigate',
+                route: `/framework?tab=suggestions&focus=${suggestion.termNormalized}`,
+              },
+            });
+            notificationsSent++;
+          }
+        } else {
+          // ── New suggestion ──
+          await db.addSuggestedConcept({
+            term: suggestion.term,
+            termNormalized: suggestion.termNormalized,
+            frequencyInPaper: suggestion.frequencyInPaper,
+            sourcePaperId: paperId,
+            closestExistingConceptId: suggestion.closestExisting,
+            reason: suggestion.reason,
+            suggestedDefinition: suggestion.suggestedDefinition,
+            suggestedKeywords: suggestion.suggestedKeywords,
+          });
+
+          newSuggestions++;
+        }
+        break; // Success — exit retry loop
+      } catch (err) {
+        const msg = (err as Error).message ?? '';
+        // UNIQUE constraint or SQLITE_BUSY — retry as update
+        if ((msg.includes('UNIQUE') || msg.includes('SQLITE_BUSY')) && retries < MAX_RETRIES) {
+          retries++;
+          continue;
+        }
+        // Non-retryable error — skip this suggestion
+        break;
       }
-    } else {
-      // ── New suggestion ──
-      await db.addSuggestedConcept({
-        term: suggestion.term,
-        termNormalized: suggestion.termNormalized,
-        frequencyInPaper: suggestion.frequencyInPaper,
-        sourcePaperId: paperId,
-        closestExistingConceptId: suggestion.closestExisting,
-        reason: suggestion.reason,
-        suggestedDefinition: suggestion.suggestedDefinition,
-        suggestedKeywords: suggestion.suggestedKeywords,
-      });
-
-      newSuggestions++;
     }
   }
 

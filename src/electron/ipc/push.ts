@@ -4,7 +4,7 @@
  * Responsibilities:
  * - db-changed: 100ms debounce window, merges table names and affected IDs
  * - workflow-progress: throttled to 500ms/push
- * - agent-stream: no limit (per-token push)
+ * - agent-stream: text_delta micro-batched (16ms flush), others immediate
  * - notification, advisory-suggestions, memo-created, note-indexed: no limit
  *
  * See spec: section 6 — Streaming Push & State Debounce
@@ -22,30 +22,33 @@ export interface DbChangedEvent {
 }
 
 export interface WorkflowProgressEvent {
-  workflowId: string;
-  type: string;
+  taskId: string;
+  workflow: string;
   status: string;
   currentStep: string;
   progress: { current: number; total: number };
+  entityId?: string;
   error?: { code: string; message: string };
+  substeps?: Array<{ name: string; status: string; detail?: string }>;
 }
 
-export interface AgentStreamChunk {
-  type: 'text_delta' | 'tool_use_start' | 'tool_use_result' | 'done' | 'error';
-  conversationId: string;
-  [key: string]: unknown;
-}
+import type { AgentStreamEvent } from '../../shared-types/ipc';
+
+/** @deprecated Use AgentStreamEvent from shared-types/ipc instead */
+export type AgentStreamChunk = AgentStreamEvent;
 
 // ─── Push channels ───
 
 export const PUSH_CHANNELS = {
-  WORKFLOW_PROGRESS: 'push:workflow-progress',
-  AGENT_STREAM: 'push:agent-stream',
-  DB_CHANGED: 'push:db-changed',
+  WORKFLOW_PROGRESS: 'push:workflowProgress',
+  AGENT_STREAM: 'push:agentStream',
+  DB_CHANGED: 'push:dbChanged',
   NOTIFICATION: 'push:notification',
-  ADVISORY_SUGGESTIONS: 'push:advisory-suggestions',
-  MEMO_CREATED: 'push:memo-created',
-  NOTE_INDEXED: 'push:note-indexed',
+  ADVISORY_SUGGESTIONS: 'push:advisorySuggestions',
+  MEMO_CREATED: 'push:memoCreated',
+  NOTE_INDEXED: 'push:noteIndexed',
+  DB_HEALTH: 'push:dbHealth',
+  EXPORT_PROGRESS: 'push:exportProgress',
 } as const;
 
 // ─── PushManager ───
@@ -67,13 +70,23 @@ export class PushManager {
   };
   private _lastWorkflowPush = 0;
 
+  // ── agent-stream micro-batching (§3.3) ──
+  // Buffer consecutive text_delta events and flush every 16ms to reduce IPC calls.
+  // Non-text events (tool_use_start, done, error) flush the buffer immediately.
+  private _agentStreamBuffer: Map<string, string> = new Map(); // conversationId → accumulated delta
+  private _agentStreamTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly AGENT_STREAM_FLUSH_MS = 16;
+
   /** Update the window reference (call after window creation or recreation) */
   setWindow(window: BrowserWindow | null): void {
     this._window = window;
   }
 
   private send(channel: string, data: unknown): void {
-    if (!this._window || this._window.isDestroyed()) return;
+    if (!this._window || this._window.isDestroyed()) {
+      // Window unavailable — silently drop
+      return;
+    }
     this._window.webContents.send(channel, data);
   }
 
@@ -142,16 +155,56 @@ export class PushManager {
   // ── workflow-progress (500ms throttle) ──
 
   pushWorkflowProgress(event: WorkflowProgressEvent): void {
+    // Terminal events (completed/failed/cancelled) always bypass throttle
+    if (event.status !== 'running') {
+      this.send(PUSH_CHANNELS.WORKFLOW_PROGRESS, event);
+      return;
+    }
     const now = Date.now();
     if (now - this._lastWorkflowPush < 500) return;
     this._lastWorkflowPush = now;
     this.send(PUSH_CHANNELS.WORKFLOW_PROGRESS, event);
   }
 
-  // ── agent-stream (no limit) ──
+  // ── agent-stream (micro-batched text_delta, immediate for others) ──
 
-  pushAgentStream(chunk: AgentStreamChunk): void {
+  pushAgentStream(chunk: AgentStreamEvent): void {
+    if (chunk.type === 'text_delta') {
+      // Accumulate text deltas per conversation
+      const existing = this._agentStreamBuffer.get(chunk.conversationId) ?? '';
+      this._agentStreamBuffer.set(chunk.conversationId, existing + chunk.delta);
+
+      // Schedule flush if not already pending
+      if (this._agentStreamTimer === null) {
+        this._agentStreamTimer = setTimeout(
+          () => this.flushAgentStream(),
+          PushManager.AGENT_STREAM_FLUSH_MS,
+        );
+      }
+      return;
+    }
+
+    // Non-text events: flush any pending text first, then send immediately
+    this.flushAgentStream();
     this.send(PUSH_CHANNELS.AGENT_STREAM, chunk);
+  }
+
+  private flushAgentStream(): void {
+    if (this._agentStreamTimer !== null) {
+      clearTimeout(this._agentStreamTimer);
+      this._agentStreamTimer = null;
+    }
+
+    for (const [conversationId, delta] of this._agentStreamBuffer) {
+      if (delta.length > 0) {
+        this.send(PUSH_CHANNELS.AGENT_STREAM, {
+          type: 'text_delta' as const,
+          conversationId,
+          delta,
+        });
+      }
+    }
+    this._agentStreamBuffer.clear();
   }
 
   // ── notification (no limit) ──
@@ -178,6 +231,30 @@ export class PushManager {
     this.send(PUSH_CHANNELS.NOTE_INDEXED, data);
   }
 
+  // ── db-health (no limit) ──
+
+  pushDbHealth(data: { status: 'connected' | 'degraded' | 'disconnected' }): void {
+    this.send(PUSH_CHANNELS.DB_HEALTH, data);
+  }
+
+  // ── export-progress (no limit) ──
+
+  pushExportProgress(data: { stage: string; progress: number; message: string }): void {
+    this.send(PUSH_CHANNELS.EXPORT_PROGRESS, data);
+  }
+
+  // ── advisory-navigate (no limit) ──
+
+  pushAdvisoryNavigate(data: { route: string }): void {
+    this.send('advisory:navigate$event', data);
+  }
+
+  // ── workspace-switched (no limit) ──
+
+  pushWorkspaceSwitched(data: { rootDir: string; name: string }): void {
+    this.send('workspace:switched$event', data);
+  }
+
   // ── cleanup ──
 
   destroy(): void {
@@ -185,6 +262,11 @@ export class PushManager {
       clearTimeout(this._dbChangePending.timer);
       this._dbChangePending.timer = null;
     }
+    if (this._agentStreamTimer) {
+      clearTimeout(this._agentStreamTimer);
+      this._agentStreamTimer = null;
+    }
+    this._agentStreamBuffer.clear();
     this._window = null;
   }
 }

@@ -11,17 +11,21 @@ import { useWritingContext } from '../../../core/ipc/hooks/useRAG';
 import { SectionContextWindow } from '../cards/SectionContextWindow';
 import { SectionMaterials } from '../cards/SectionMaterials';
 
+const scrollContainerStyle: React.CSSProperties = { overflowY: 'auto', height: '100%' };
+const errorStyle: React.CSSProperties = { padding: 16, color: 'var(--danger)', fontSize: 'var(--text-sm)', textAlign: 'center' };
+const loadingStyle: React.CSSProperties = { padding: 16, color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center' };
+
 interface WritingSectionPaneProps {
   articleId: string;
   sectionId: string;
 }
 
-export function WritingSectionPane({ articleId: _articleId, sectionId }: WritingSectionPaneProps) {
+export const WritingSectionPane = React.memo(function WritingSectionPane({ articleId: _articleId, sectionId }: WritingSectionPaneProps) {
   const { data: writingContext, isLoading, isError } = useWritingContext(sectionId);
 
   if (isError) {
     return (
-      <div style={{ padding: 16, color: 'var(--danger)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
+      <div style={errorStyle}>
         加载写作上下文失败
       </div>
     );
@@ -29,14 +33,14 @@ export function WritingSectionPane({ articleId: _articleId, sectionId }: Writing
 
   if (isLoading || !writingContext) {
     return (
-      <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
+      <div style={loadingStyle}>
         加载写作上下文…
       </div>
     );
   }
 
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
+    <div style={scrollContainerStyle}>
       <SectionContextWindow
         sectionId={sectionId}
         sectionTitle={`§${sectionId}`}
@@ -49,4 +53,4 @@ export function WritingSectionPane({ articleId: _articleId, sectionId }: Writing
       />
     </div>
   );
-}
+});

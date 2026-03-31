@@ -2,15 +2,16 @@
  * SearchHistory — 搜索历史分组（§2.4）
  *
  * 每次 discover 工作流后系统自动创建的历史分组。
- * TODO: 需要 discover_runs 表
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search } from 'lucide-react';
 import { useDiscoverRunList } from '../../../core/ipc/hooks/useDiscoverRuns';
 import { useAppStore } from '../../../core/store';
 
 export function SearchHistory() {
+  const { t } = useTranslation();
   const { data: runs } = useDiscoverRunList();
   const activeGroupId = useAppStore((s) => s.activeGroupId);
   const activeGroupType = useAppStore((s) => s.activeGroupType);
@@ -20,7 +21,7 @@ export function SearchHistory() {
   if (!runs || runs.length === 0) {
     return (
       <div style={{ padding: '8px 20px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
-        暂无搜索历史
+        {t('library.sidebar.noSearchHistory')}
       </div>
     );
   }

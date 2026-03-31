@@ -60,9 +60,10 @@ export interface SubsetSelectorDb {
 
 // ─── Embedder interface (for semantic neighbor supplement) ───
 
-export interface SubsetEmbedder {
-  embed: (texts: string[]) => Promise<number[][]>;
-}
+import type { EmbedFunction } from '../../core/types/common';
+
+/** @deprecated Use EmbedFunction directly */
+export type SubsetEmbedder = EmbedFunction;
 
 // ─── Cross-discipline instruction ───
 
@@ -139,14 +140,13 @@ export function filterConceptSubset(
 /**
  * Async version with semantic neighbor supplement via embedding similarity.
  *
- * TODO — embedder.embed() requires LlmClient injection.
- * TODO — concept definition embedding cache (Map<string, Float32Array>).
+ * embedder is provided by LlmClient.asEmbedFunction().
  */
 export async function filterConceptSubsetAsync(
   allConcepts: ConceptForSubset[],
   paper: PaperForSubset,
   db: SubsetSelectorDb | null,
-  embedder: SubsetEmbedder | null,
+  embedder: EmbedFunction | null,
   maxSize: number = 15,
 ): Promise<SubsetResult> {
   // Start with sync selection
@@ -267,17 +267,59 @@ function ensureParentInclusion(
 
 // ─── §4.5: Semantic neighbor supplement ───
 
+/** LRU cache for concept definition embeddings (keyed by concept ID). */
+const conceptEmbeddingCache = new Map<string, Float32Array>();
+const CONCEPT_CACHE_MAX = 200;
+
+function getCachedOrEmbed(
+  concepts: ConceptForSubset[],
+  embedder: EmbedFunction,
+): Promise<Float32Array[]> {
+  const uncachedIndices: number[] = [];
+  const uncachedTexts: string[] = [];
+  const result: (Float32Array | null)[] = new Array(concepts.length).fill(null);
+
+  for (let i = 0; i < concepts.length; i++) {
+    const cached = conceptEmbeddingCache.get(concepts[i]!.id);
+    if (cached) {
+      result[i] = cached;
+    } else {
+      uncachedIndices.push(i);
+      uncachedTexts.push(concepts[i]!.definition);
+    }
+  }
+
+  if (uncachedTexts.length === 0) {
+    return Promise.resolve(result as Float32Array[]);
+  }
+
+  return embedder.embed(uncachedTexts).then((embeddings) => {
+    for (let j = 0; j < uncachedIndices.length; j++) {
+      const idx = uncachedIndices[j]!;
+      const emb = embeddings[j]!;
+      result[idx] = emb;
+      // Evict oldest if cache full
+      if (conceptEmbeddingCache.size >= CONCEPT_CACHE_MAX) {
+        const firstKey = conceptEmbeddingCache.keys().next().value as string;
+        conceptEmbeddingCache.delete(firstKey);
+      }
+      conceptEmbeddingCache.set(concepts[idx]!.id, emb);
+    }
+    return result as Float32Array[];
+  });
+}
+
 /**
  * If fewer than minCount concepts are selected, supplement with
  * semantically similar concepts using embedding cosine similarity.
  *
- * TODO — concept definition embedding cache for production use.
+ * Uses LRU cache for concept definition embeddings to avoid redundant API calls.
  */
 async function supplementWithSemanticNeighbors(
   selected: ConceptForSubset[],
   allConcepts: ConceptForSubset[],
   paper: PaperForSubset,
-  embedder: SubsetEmbedder,
+  embedder: EmbedFunction,
   minCount: number,
 ): Promise<ConceptForSubset[]> {
   if (selected.length >= minCount) return selected;
@@ -292,9 +334,8 @@ async function supplementWithSemanticNeighbors(
   const [paperEmbedding] = await embedder.embed([paperText]);
   if (!paperEmbedding) return selected;
 
-  // Embed remaining concept definitions
-  const conceptTexts = remaining.map((c) => c.definition);
-  const conceptEmbeddings = await embedder.embed(conceptTexts);
+  // Embed remaining concept definitions (with cache)
+  const conceptEmbeddings = await getCachedOrEmbed(remaining, embedder);
 
   // Score by cosine similarity
   const scored = remaining.map((concept, i) => ({
@@ -310,7 +351,7 @@ async function supplementWithSemanticNeighbors(
   return [...selected, ...supplements];
 }
 
-function cosineSimilarity(a: number[], b: number[]): number {
+function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
   let dotProduct = 0;
   let normA = 0;
   let normB = 0;

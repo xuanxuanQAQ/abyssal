@@ -29,6 +29,7 @@ import type { ResearchNote } from '../types/note';
 import type { SuggestedConcept, SuggestionStatus } from '../types/suggestion';
 import type { PaperRelation } from '../types/relation';
 import type { SeedType } from '../types/config';
+import type { ChatMessageRecord, ChatSessionSummary, PaginationOpts } from '../../shared-types/models';
 
 // ─── 连接 & 迁移 ───
 import { openDatabase, walCheckpoint } from './connection';
@@ -52,8 +53,12 @@ import * as memosDao from './dao/memos';
 import * as notesDao from './dao/notes';
 import * as suggestionsDao from './dao/suggestions';
 import * as articlesDao from './dao/articles';
+import * as discoverRunsDao from './dao/discover-runs';
 import * as relationsDao from './dao/relations';
+import * as referencesDao from './dao/references';
+import * as chatDao from './dao/chat';
 import * as statsDao from './dao/stats';
+import * as reconCacheDao from './dao/recon-cache';
 
 // ─── 快照 ───
 import * as snapshotMod from './snapshot';
@@ -81,6 +86,7 @@ export type {
   RelationGraphFilter,
 } from './dao/relations';
 export type { DatabaseStats, IntegrityReport, IntegrityCheckResult } from './dao/stats';
+export type { ReferenceRow, HydrateLogRow } from './dao/references';
 export type { SnapshotMeta } from './snapshot';
 
 // ═══ DatabaseService ═══
@@ -308,6 +314,10 @@ export class DatabaseService implements IDbService {
     this.withOp(() => mappingsDao.mapPaperConcept(this.db, mapping));
   }
 
+  mapPaperConceptBatch(mappings: ConceptMapping[]): void {
+    this.withOp(() => mappingsDao.mapPaperConceptBatch(this.db, mappings));
+  }
+
   updateMapping(
     paperId: PaperId,
     conceptId: ConceptId,
@@ -342,6 +352,77 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => mappingsDao.getConceptMatrix(this.db));
   }
 
+  adjudicateMapping(
+    paperId: PaperId,
+    conceptId: ConceptId,
+    decision: mappingsDao.AdjudicationDecision,
+    revisions?: { relation?: RelationType; confidence?: number; note?: string },
+  ): number {
+    return this.withOp(() => mappingsDao.adjudicateMapping(this.db, paperId, conceptId, decision, revisions));
+  }
+
+  countMappingsForConceptInPapers(conceptId: ConceptId, paperIds: string[]): number {
+    return this.withOp(() => mappingsDao.countMappingsForConceptInPapers(this.db, conceptId, paperIds));
+  }
+
+  getConceptMappingStats(conceptId: ConceptId): mappingsDao.ConceptStatsResult {
+    return this.withOp(() => mappingsDao.getConceptStats(this.db, conceptId));
+  }
+
+  /**
+   * §10.1: Atomic analysis completion — writes mappings + updates status in a single transaction.
+   * Prevents inconsistent state where mappings exist but status is still 'in_progress'.
+   */
+  completeAnalysis(
+    paperId: PaperId,
+    mappings: ConceptMapping[],
+    status: 'completed' | 'failed',
+    failureReason?: string | null,
+    analysisPath?: string | null,
+  ): void {
+    return this.withOp(() => {
+      const { writeTransaction: wt } = require('./transaction-utils');
+      wt(this.db, () => {
+        // Write mappings
+        if (mappings.length > 0) {
+          mappingsDao.mapPaperConceptBatch(this.db, mappings);
+        }
+        // Update status atomically
+        papersDao.updatePaper(this.db, paperId, {
+          analysisStatus: status,
+          ...(failureReason != null && { failureReason }),
+          ...(analysisPath != null && { analysisPath }),
+        });
+      });
+    });
+  }
+
+  /**
+   * Reset analysis for a paper: delete mappings, clear analysis file, reset status.
+   * Returns the analysisPath that was cleared (so caller can delete the file).
+   */
+  resetAnalysis(paperId: PaperId): string | null {
+    return this.withOp(() => {
+      const { writeTransaction: wt } = require('./transaction-utils');
+      let analysisPath: string | null = null;
+
+      wt(this.db, () => {
+        // Read inside transaction to prevent TOCTOU race
+        const paper = papersDao.getPaper(this.db, paperId);
+        analysisPath = (paper as any)?.analysisPath ?? null;
+
+        mappingsDao.deleteMappingsForPaper(this.db, paperId);
+        papersDao.updatePaper(this.db, paperId, {
+          analysisStatus: 'not_started',
+          analysisPath: null,
+          failureReason: null,
+        });
+      });
+
+      return analysisPath;
+    });
+  }
+
   // ════════════════════════════════════════
   // 标注
   // ════════════════════════════════════════
@@ -358,12 +439,32 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => annotationsDao.getAnnotation(this.db, id));
   }
 
+  updateAnnotation(id: AnnotationId, patch: annotationsDao.AnnotationPatch): number {
+    return this.withOp(() => annotationsDao.updateAnnotation(this.db, id, patch));
+  }
+
   deleteAnnotation(id: AnnotationId): number {
     return this.withOp(() => annotationsDao.deleteAnnotation(this.db, id));
   }
 
   getAnnotationsByConcept(conceptId: ConceptId): Annotation[] {
     return this.withOp(() => annotationsDao.getAnnotationsByConcept(this.db, conceptId));
+  }
+
+  countAnnotationsForPaperConcept(paperId: PaperId, conceptId: ConceptId): number {
+    return this.withOp(() => annotationsDao.countAnnotationsForPaperConcept(this.db, paperId, conceptId));
+  }
+
+  // ════════════════════════════════════════
+  // 搜索历史
+  // ════════════════════════════════════════
+
+  listDiscoverRuns(): ReturnType<typeof discoverRunsDao.listDiscoverRuns> {
+    return this.withOp(() => discoverRunsDao.listDiscoverRuns(this.db));
+  }
+
+  addDiscoverRun(run: { id: string; query: string; resultCount: number }): void {
+    this.withOp(() => discoverRunsDao.addDiscoverRun(this.db, run));
   }
 
   // ════════════════════════════════════════
@@ -437,6 +538,11 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => chunksDao.getChunkByChunkId(this.db, chunkId));
   }
 
+  /** 批量查询已存在的 chunk_id 集合 */
+  getExistingChunkIds(chunkIds: string[]): Set<string> {
+    return this.withOp(() => chunksDao.getExistingChunkIds(this.db, chunkIds));
+  }
+
   // ════════════════════════════════════════
   // §5 碎片笔记
   // ════════════════════════════════════════
@@ -462,6 +568,10 @@ export class DatabaseService implements IDbService {
 
   getMemosByEntity(entityType: memosDao.MemoEntityType, entityId: string | number): ResearchMemo[] {
     return this.withOp(() => memosDao.getMemosByEntity(this.db, entityType, entityId));
+  }
+
+  queryMemos(filter?: { paperIds?: string[]; conceptIds?: string[]; tags?: string[]; searchText?: string; limit?: number; offset?: number }): ResearchMemo[] {
+    return this.withOp(() => memosDao.queryMemos(this.db, filter));
   }
 
   getMemo(id: MemoId): ResearchMemo | null {
@@ -496,6 +606,17 @@ export class DatabaseService implements IDbService {
     newEmbeddings: (Float32Array | null)[],
   ): void {
     this.withOp(() => notesDao.onNoteFileChanged(this.db, noteId, frontmatter, newChunks, newEmbeddings));
+  }
+
+  updateNoteMeta(
+    id: NoteId,
+    updates: Partial<Pick<ResearchNote, 'title' | 'linkedPaperIds' | 'linkedConceptIds' | 'tags'>>,
+  ): ResearchNote | null {
+    return this.withOp(() => notesDao.updateNoteMeta(this.db, id, updates));
+  }
+
+  queryNotes(filter?: { conceptIds?: string[]; paperIds?: string[]; tags?: string[]; searchText?: string }): ResearchNote[] {
+    return this.withOp(() => notesDao.queryNotes(this.db, filter));
   }
 
   linkMemoToNote(memoId: MemoId, noteId: NoteId): void {
@@ -556,6 +677,14 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => suggestionsDao.getSuggestedConcept(this.db, id));
   }
 
+  restoreSuggestedConcept(suggestionId: SuggestionId): number {
+    return this.withOp(() => suggestionsDao.restoreSuggestedConcept(this.db, suggestionId));
+  }
+
+  getSuggestedConceptsStats(): suggestionsDao.SuggestedConceptsStatsResult {
+    return this.withOp(() => suggestionsDao.getSuggestedConceptsStats(this.db));
+  }
+
   // ════════════════════════════════════════
   // §8 文章 / 纲要 / 草稿
   // ════════════════════════════════════════
@@ -591,6 +720,25 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => articlesDao.getOutline(this.db, articleId));
   }
 
+  getOutlineEntry(id: OutlineEntryId): OutlineEntry | null {
+    return this.withOp(() => articlesDao.getOutlineEntry(this.db, id));
+  }
+
+  updateOutlineEntry(
+    id: OutlineEntryId,
+    updates: Partial<Pick<OutlineEntry, 'title' | 'coreArgument' | 'writingInstruction' | 'conceptIds' | 'paperIds' | 'status' | 'sortOrder'>>,
+  ): number {
+    return this.withOp(() => articlesDao.updateOutlineEntry(this.db, id, updates));
+  }
+
+  markOutlineEntryDeleted(id: OutlineEntryId): number {
+    return this.withOp(() => articlesDao.markOutlineEntryDeleted(this.db, id));
+  }
+
+  searchSections(query: string): Array<{ outlineEntryId: OutlineEntryId; articleId: ArticleId; title: string; snippet: string }> {
+    return this.withOp(() => articlesDao.searchSections(this.db, query));
+  }
+
   addSectionDraft(outlineEntryId: OutlineEntryId, content: string, llmBackend: string): number {
     return this.withOp(() => articlesDao.addSectionDraft(this.db, outlineEntryId, content, llmBackend));
   }
@@ -601,6 +749,34 @@ export class DatabaseService implements IDbService {
 
   markEditedParagraphs(outlineEntryId: OutlineEntryId, version: number, paragraphIndices: number[]): number {
     return this.withOp(() => articlesDao.markEditedParagraphs(this.db, outlineEntryId, version, paragraphIndices));
+  }
+
+  getFullDocument(articleId: ArticleId) {
+    return this.withOp(() => articlesDao.getFullDocument(this.db, articleId));
+  }
+
+  saveDocumentSections(articleId: ArticleId, sections: Parameters<typeof articlesDao.saveDocumentSections>[2]) {
+    this.withOp(() => articlesDao.saveDocumentSections(this.db, articleId, sections));
+  }
+
+  cleanupVersions(articleId: ArticleId, keepCount: number): number {
+    return this.withOp(() => articlesDao.cleanupVersions(this.db, articleId, keepCount));
+  }
+
+  addArticleAsset(asset: import('../types/article').ArticleAsset): void {
+    this.withOp(() => articlesDao.addArticleAsset(this.db, asset));
+  }
+
+  getArticleAssets(articleId: ArticleId): import('../types/article').ArticleAsset[] {
+    return this.withOp(() => articlesDao.getArticleAssets(this.db, articleId));
+  }
+
+  getArticleAsset(assetId: string): import('../types/article').ArticleAsset | null {
+    return this.withOp(() => articlesDao.getArticleAsset(this.db, assetId));
+  }
+
+  deleteArticleAsset(assetId: string): number {
+    return this.withOp(() => articlesDao.deleteArticleAsset(this.db, assetId));
   }
 
   // ════════════════════════════════════════
@@ -629,6 +805,66 @@ export class DatabaseService implements IDbService {
   // ════════════════════════════════════════
   // §10 统计与完整性
   // ════════════════════════════════════════
+
+  // ════════════════════════════════════════
+  // §11 参考文献 + 水合日志
+  // ════════════════════════════════════════
+
+  upsertReferences(paperId: PaperId, refs: import('../types').ExtractedReference[]): number {
+    return this.withOp(() => referencesDao.upsertReferences(this.db, paperId, refs));
+  }
+
+  insertHydrateLogs(paperId: PaperId, logs: Array<{ field: string; value: unknown; source: string }>): void {
+    this.withOp(() => referencesDao.insertHydrateLogs(this.db, paperId, logs));
+  }
+
+  getReferencesByPaper(paperId: PaperId): referencesDao.ReferenceRow[] {
+    return this.withOp(() => referencesDao.getReferencesByPaper(this.db, paperId));
+  }
+
+  getHydrateLog(paperId: PaperId): referencesDao.HydrateLogRow[] {
+    return this.withOp(() => referencesDao.getHydrateLog(this.db, paperId));
+  }
+
+  getUnresolvedRefsWithDoi(paperId: PaperId): referencesDao.ReferenceRow[] {
+    return this.withOp(() => referencesDao.getUnresolvedRefsWithDoi(this.db, paperId));
+  }
+
+  resolveReference(refId: number, resolvedPaperId: PaperId): void {
+    this.withOp(() => referencesDao.resolveReference(this.db, refId, resolvedPaperId));
+  }
+
+  // ════════════════════════════════════════
+  // 聊天消息持久化
+  // ════════════════════════════════════════
+
+  saveChatMessage(record: ChatMessageRecord): void {
+    this.withOp(() => chatDao.saveMessage(this.db, record));
+  }
+
+  getChatHistory(contextKey: string, opts?: PaginationOpts): ChatMessageRecord[] {
+    return this.withOp(() => chatDao.getHistory(this.db, contextKey, opts));
+  }
+
+  deleteChatSession(contextKey: string): void {
+    this.withOp(() => chatDao.deleteSession(this.db, contextKey));
+  }
+
+  listChatSessions(): ChatSessionSummary[] {
+    return this.withOp(() => chatDao.listSessions(this.db));
+  }
+
+  // ════════════════════════════════════════
+  // Recon Cache (Acquire Pipeline v2)
+  // ════════════════════════════════════════
+
+  getRecon(doi: string): ReturnType<typeof reconCacheDao.getRecon> {
+    return this.withOp(() => reconCacheDao.getRecon(this.db, doi));
+  }
+
+  upsertRecon(recon: Parameters<typeof reconCacheDao.upsertRecon>[1]): void {
+    this.withOp(() => reconCacheDao.upsertRecon(this.db, recon));
+  }
 
   getStats(): statsDao.DatabaseStats {
     return this.withOp(() => statsDao.getStats(this.db));
@@ -854,22 +1090,30 @@ export function createDatabaseService(
     skipVecExtension,
   });
 
-  // 步骤 3：Schema 迁移（只读模式跳过）
-  if (!readOnly) {
-    const migrationsDir = options.migrationsDir ?? path.resolve(__dirname, 'migrations');
-    runMigrations(db, migrationsDir, config, logger, skipVecExtension);
+  // Wrap subsequent steps in try/catch — if migration or statement prep fails,
+  // close the db connection to release file lock before re-throwing.
+  try {
+    // 步骤 3：Schema 迁移（只读模式跳过）
+    if (!readOnly) {
+      const migrationsDir = options.migrationsDir ?? path.resolve(__dirname, 'migrations');
+      runMigrations(db, migrationsDir, config, logger, skipVecExtension);
+    }
+
+    // 步骤 4：预编译高频 SQL 语句
+    const stmts = createStatements(db, !skipVecExtension);
+
+    // 步骤 5：创建文件锁（只读模式跳过）
+    const fileLock = new FileLock(dbPath);
+    if (!readOnly) {
+      fileLock.acquire();
+    }
+
+    logger.info('DatabaseService initialized', { dbPath, readOnly });
+
+    return new DatabaseService(db, config, logger, dbPath, fileLock, stmts);
+  } catch (err) {
+    // Release the connection so the file lock is freed
+    try { db.close(); } catch { /* ignore close errors */ }
+    throw err;
   }
-
-  // 步骤 4：预编译高频 SQL 语句
-  const stmts = createStatements(db, !skipVecExtension);
-
-  // 步骤 5：创建文件锁（只读模式跳过）
-  const fileLock = new FileLock(dbPath);
-  if (!readOnly) {
-    fileLock.acquire();
-  }
-
-  logger.info('DatabaseService initialized', { dbPath, readOnly });
-
-  return new DatabaseService(db, config, logger, dbPath, fileLock, stmts);
 }

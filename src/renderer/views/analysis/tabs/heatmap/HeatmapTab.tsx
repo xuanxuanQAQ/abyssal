@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { HeatmapToolbar } from './HeatmapToolbar';
 import { HeatmapGrid } from './layout/HeatmapGrid';
@@ -20,6 +21,7 @@ import { exportHeatmapCSV } from './export/exportCSV';
 import { exportHeatmapPNG } from './export/exportPNG';
 
 export function HeatmapTab() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
 
   // ── State ──
@@ -74,6 +76,15 @@ export function HeatmapTab() {
       );
   }, [conceptGroups, orderedConceptIds]);
 
+  // O(1) adjudication status lookup from cell data
+  const adjudicationMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const cell of cellLookup.values()) {
+      map.set(cell.mappingId, cell.adjudicationStatus);
+    }
+    return map;
+  }, [cellLookup]);
+
   // Compute group boundaries for row offsets
   const groupBoundaries = useMemo(() => {
     const boundaries = new Set<number>();
@@ -127,11 +138,11 @@ export function HeatmapTab() {
       sortedPaperIds.length,
       concepts.length,
       rowOffsets,
-      () => 'pending', // TODO: 接入真实裁决状态
+      (mappingId) => (adjudicationMap.get(mappingId) ?? 'pending') as any,
       paperLabels,
       conceptNames,
     );
-  }, [cellLookup, sortedPaperIds, concepts, rowOffsets, paperLabels]);
+  }, [cellLookup, sortedPaperIds, concepts, rowOffsets, adjudicationMap, paperLabels]);
 
   const handleExportCSV = useCallback(() => {
     if (!cellLookup.size) return;
@@ -159,7 +170,7 @@ export function HeatmapTab() {
           fontSize: 13,
         }}
       >
-        加载热力图数据…
+        {t('analysis.heatmap.loading')}
       </div>
     );
   }

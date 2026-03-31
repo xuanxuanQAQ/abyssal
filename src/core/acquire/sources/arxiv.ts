@@ -5,6 +5,7 @@ import type { AcquireAttempt } from '../../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
+import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
 
 export async function tryArxivPdf(
   http: HttpClient,
@@ -22,30 +23,15 @@ export async function tryArxivPdf(
 
     if (!validation.valid) {
       deleteFileIfExists(tempPath);
-      return {
-        source: 'arxiv',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('arxiv', 'failed', Date.now() - start, {
         failureReason: validation.reason ?? 'PDF validation failed',
-        httpStatus: null,
-      };
+        failureCategory: 'invalid_pdf',
+      });
     }
 
-    return {
-      source: 'arxiv',
-      status: 'success',
-      durationMs: Date.now() - start,
-      failureReason: null,
-      httpStatus: 200,
-    };
+    return makeAttempt('arxiv', 'success', Date.now() - start, { httpStatus: 200 });
   } catch (err) {
     deleteFileIfExists(tempPath);
-    return {
-      source: 'arxiv',
-      status: 'failed',
-      durationMs: Date.now() - start,
-      failureReason: (err as Error).message,
-      httpStatus: null,
-    };
+    return makeFailedAttempt('arxiv', start, err);
   }
 }

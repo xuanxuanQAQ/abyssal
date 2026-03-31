@@ -11,15 +11,17 @@ import { hasVecTable } from './chunks';
 export interface DatabaseStats {
   papers: {
     total: number;
+    fulltextNotAttempted: number;
     fulltextPending: number;
-    fulltextAcquired: number;
+    fulltextAvailable: number;
     fulltextAbstractOnly: number;
     fulltextFailed: number;
-    analysisPending: number;
-    analysisAnalyzed: number;
-    analysisReviewed: number;
-    analysisIntegrated: number;
-    analysisParseFailed: number;
+    analysisNotStarted: number;
+    analysisInProgress: number;
+    analysisCompleted: number;
+    analysisNeedsReview: number;
+    analysisFailed: number;
+    relevanceSeed: number;
     relevanceHigh: number;
     relevanceMedium: number;
     relevanceLow: number;
@@ -154,15 +156,17 @@ export function getStats(db: Database.Database): DatabaseStats {
     return {
       papers: {
         total: paperRow['total'] ?? 0,
+        fulltextNotAttempted: paperRow['fulltext_not_attempted'] ?? 0,
         fulltextPending: paperRow['fulltext_pending'] ?? 0,
-        fulltextAcquired: paperRow['fulltext_acquired'] ?? 0,
+        fulltextAvailable: paperRow['fulltext_available'] ?? 0,
         fulltextAbstractOnly: paperRow['fulltext_abstract_only'] ?? 0,
         fulltextFailed: paperRow['fulltext_failed'] ?? 0,
-        analysisPending: paperRow['analysis_pending'] ?? 0,
-        analysisAnalyzed: paperRow['analysis_analyzed'] ?? 0,
-        analysisReviewed: paperRow['analysis_reviewed'] ?? 0,
-        analysisIntegrated: paperRow['analysis_integrated'] ?? 0,
-        analysisParseFailed: paperRow['analysis_parse_failed'] ?? 0,
+        analysisNotStarted: paperRow['analysis_not_started'] ?? 0,
+        analysisInProgress: paperRow['analysis_in_progress'] ?? 0,
+        analysisCompleted: paperRow['analysis_completed'] ?? 0,
+        analysisNeedsReview: paperRow['analysis_needs_review'] ?? 0,
+        analysisFailed: paperRow['analysis_failed'] ?? 0,
+        relevanceSeed: paperRow['relevance_seed'] ?? 0,
         relevanceHigh: paperRow['relevance_high'] ?? 0,
         relevanceMedium: paperRow['relevance_medium'] ?? 0,
         relevanceLow: paperRow['relevance_low'] ?? 0,

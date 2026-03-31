@@ -43,10 +43,17 @@ export function MatrixViewport({
     );
   }
 
+  const rafRef = useRef(0);
+
   const handleScroll = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    onScrollRef.current(el.scrollLeft, el.scrollTop);
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      const el = containerRef.current;
+      if (el) {
+        onScrollRef.current(el.scrollLeft, el.scrollTop);
+      }
+      rafRef.current = 0;
+    });
   }, []);
 
   useEffect(() => {
@@ -54,7 +61,10 @@ export function MatrixViewport({
     if (!el) return;
 
     el.addEventListener('scroll', handleScroll, { passive: true });
-    return () => el.removeEventListener('scroll', handleScroll);
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
   }, [handleScroll]);
 
   return (

@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { TextLayer as PDFJSTextLayer } from 'pdfjs-dist';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
+import './pdfTextLayer.css';
 
 export interface TextLayerProps {
   pageNumber: number;
@@ -46,6 +47,19 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
 
       const viewport = page.getViewport({ scale });
 
+      // pdf.js v4.x uses CSS custom property --scale-factor for span positioning
+      // and container sizing. Must be set before constructing PDFJSTextLayer.
+      container.style.setProperty('--scale-factor', String(scale));
+
+      console.log(`[TextLayer] page=${pageNumber}`, {
+        scale,
+        scaleFactor: scale,
+        viewportWidth: viewport.width,
+        viewportHeight: viewport.height,
+        cssWidth,
+        cssHeight,
+      });
+
       const textLayer = new PDFJSTextLayer({
         textContentSource: textContent,
         container,
@@ -53,6 +67,19 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       });
 
       await textLayer.render();
+
+      // Log first span to verify alignment
+      const spans = container.querySelectorAll('span');
+      if (spans.length > 0) {
+        const s = spans[0]!;
+        const cs = getComputedStyle(s);
+        console.log(`[TextLayer] first span:`, {
+          fontSize: cs.fontSize,
+          left: cs.left,
+          top: cs.top,
+          text: s.textContent?.slice(0, 30),
+        });
+      }
     };
 
     renderTextLayer();
@@ -68,7 +95,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
 
   // Determine pointer-events based on active annotation tool
   let pointerEvents: React.CSSProperties['pointerEvents'];
-  if (activeAnnotationTool === 'areaHighlight') {
+  if (activeAnnotationTool === 'areaHighlight' || activeAnnotationTool === 'hand') {
     pointerEvents = 'none';
   } else {
     // null, textHighlight, textNote, textConceptTag → auto (selection works)
@@ -81,16 +108,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       data-page={pageNumber}
       className="textLayer"
       style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: cssWidth,
-        height: cssHeight,
-        color: 'transparent',
-        lineHeight: 1,
-        opacity: 0.25,
         pointerEvents,
-        zIndex: 1,
       }}
     />
   );

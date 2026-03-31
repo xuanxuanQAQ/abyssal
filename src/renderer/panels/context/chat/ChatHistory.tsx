@@ -8,27 +8,45 @@
  */
 
 import React, { useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown } from 'lucide-react';
 import { ChatBubble } from './ChatBubble';
 import { useAutoScroll } from './hooks/useAutoScroll';
 import type { ChatMessage } from '../../../../shared-types/models';
+
+/** 虚拟化阈值：超过此数量启用虚拟滚动 */
+const VIRTUALIZE_THRESHOLD = 50;
 
 interface ChatHistoryProps {
   messages: ChatMessage[];
   isStreaming: boolean;
   fullyLoaded: boolean;
   onLoadMore: () => void;
+  onRetry?: (messageId: string) => void;
 }
 
-export function ChatHistory({
+export const ChatHistory = React.memo(function ChatHistory({
   messages,
   isStreaming,
   fullyLoaded,
   onLoadMore,
+  onRetry,
 }: ChatHistoryProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const { isUserScrolledUp, unreadCount, handleScroll, scrollToBottom } =
     useAutoScroll(containerRef, messages.length, isStreaming);
+
+  const useVirtual = messages.length > VIRTUALIZE_THRESHOLD;
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => 72,
+    overscan: 8,
+    enabled: useVirtual,
+  });
 
   const handleScrollEvent = useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
@@ -46,6 +64,7 @@ export function ChatHistory({
     <div
       style={{
         flex: 1,
+        height: '100%',
         position: 'relative',
         overflow: 'hidden',
         display: 'flex',
@@ -68,7 +87,7 @@ export function ChatHistory({
             flexShrink: 0,
           }}
         >
-          加载更多历史消息
+          {t('context.chat.loadMore')}
         </button>
       )}
 
@@ -76,17 +95,42 @@ export function ChatHistory({
       <div
         ref={containerRef}
         onScroll={handleScrollEvent}
+        className="chat-scroll-area"
         style={{
           flex: 1,
-          overflowY: 'auto',
+          minHeight: 0,
+          overflowY: 'scroll',
           overflowX: 'hidden',
           padding: '8px 0',
         }}
       >
-        {/* TODO: messages.length > 50 时启用 @tanstack/react-virtual 虚拟化 */}
-        {messages.map((msg) => (
-          <ChatBubble key={msg.id} message={msg} />
-        ))}
+        {useVirtual ? (
+          <div style={{ height: virtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const msg = messages[virtualRow.index]!;
+              return (
+                <div
+                  key={msg.id}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <ChatBubble message={msg} onRetry={onRetry} />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          messages.map((msg) => (
+            <ChatBubble key={msg.id} message={msg} onRetry={onRetry} />
+          ))
+        )}
       </div>
 
       {/* 未读消息浮动提示 */}
@@ -113,9 +157,9 @@ export function ChatHistory({
           }}
         >
           <ChevronDown size={12} />
-          {unreadCount} 条新消息
+          {t('context.chat.newMessages', { count: unreadCount })}
         </button>
       )}
     </div>
   );
-}
+});

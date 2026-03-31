@@ -434,13 +434,7 @@ function validateReranker(
 ): void {
   const backend = config.rag.rerankerBackend;
 
-  if (backend === 'local-bge') {
-    // TODO — 检查本地 BGE 模型文件是否存在
-    // 依赖 ONNX 模型管理模块（尚未实现）
-    return;
-  }
-
-  if (backend === 'api-cohere') {
+  if (backend === 'cohere') {
     if (!config.apiKeys.cohereApiKey) {
       errors.push({
         level: 9,
@@ -452,13 +446,25 @@ function validateReranker(
     return;
   }
 
-  if (backend === 'api-jina') {
+  if (backend === 'jina') {
     if (!config.apiKeys.jinaApiKey) {
       errors.push({
         level: 9,
         severity: 'error',
         field: 'apiKeys.jinaApiKey',
         message: 'Jina reranker requires API key (apiKeys.jinaApiKey)',
+      });
+    }
+    return;
+  }
+
+  if (backend === 'siliconflow') {
+    if (!config.apiKeys.siliconflowApiKey) {
+      errors.push({
+        level: 9,
+        severity: 'error',
+        field: 'apiKeys.siliconflowApiKey',
+        message: 'SiliconFlow reranker requires API key (apiKeys.siliconflowApiKey)',
       });
     }
     return;

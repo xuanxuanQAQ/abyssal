@@ -1,7 +1,7 @@
 // ═══ 作者名解析 ═══
 // §2.6: "Erving Goffman" → "Goffman, Erving"
 
-const SURNAME_PREFIXES = new Set([
+export const SURNAME_PREFIXES = new Set([
   'van', 'von', 'de', 'du', 'di', 'del', 'della', 'dos', 'das',
   'den', 'der', 'el', 'al', 'la', 'le', 'ibn', 'ben', 'bin',
   'bint', 'ap', 'ab', 'mac', 'mc',

@@ -6,9 +6,12 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { X, ChevronDown } from 'lucide-react';
 import { useBatchUpdateRelevance, useBatchDeletePapers } from '../../../core/ipc/hooks/usePapers';
+import { useAcquireBatch } from '../../../core/ipc/hooks/useAcquire';
+import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import { useAppStore } from '../../../core/store';
 import type { Paper } from '../../../../shared-types/models';
 import type { Relevance } from '../../../../shared-types/enums';
@@ -29,8 +32,11 @@ export function BatchActionBar({
   getSelectedIds,
   papers,
 }: BatchActionBarProps) {
+  const { t } = useTranslation();
   const batchUpdateRelevance = useBatchUpdateRelevance();
   const batchDelete = useBatchDeletePapers();
+  const acquireBatch = useAcquireBatch();
+  const startPipeline = useStartPipeline();
   const activeTasks = useAppStore((s) => s.activeTasks);
 
   // 检查是否有正在运行的批量任务
@@ -70,7 +76,7 @@ export function BatchActionBar({
       }}
     >
       <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>
-        ☑ 已选择 {selectedCount} 篇论文
+        {t('library.batch.selected', { count: selectedCount })}
       </span>
 
       <button
@@ -88,7 +94,7 @@ export function BatchActionBar({
           cursor: 'pointer',
         }}
       >
-        <X size={12} /> 取消选择
+        <X size={12} /> {t('library.batch.deselect')}
       </button>
 
       <div style={{ flex: 1 }} />
@@ -97,7 +103,7 @@ export function BatchActionBar({
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button style={actionButtonStyle}>
-            设置相关性 <ChevronDown size={10} />
+            {t('library.batch.setRelevance')} <ChevronDown size={10} />
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -132,21 +138,35 @@ export function BatchActionBar({
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
 
-      <button style={actionButtonStyle}>
-        获取全文
+      <button
+        style={actionButtonStyle}
+        disabled={acquireBatch.isPending}
+        onClick={() => {
+          const ids = getSelectedIds();
+          acquireBatch.mutate(ids);
+        }}
+      >
+        {acquireBatch.isPending ? t('library.batch.acquiring') : t('library.batch.acquireFulltext')}
       </button>
-      <button style={actionButtonStyle}>
-        触发分析
+      <button
+        style={actionButtonStyle}
+        disabled={startPipeline.isPending}
+        onClick={() => {
+          const ids = getSelectedIds();
+          startPipeline.mutate({ workflow: 'analyze', config: { paperIds: ids } });
+        }}
+      >
+        {startPipeline.isPending ? t('library.batch.analyzing') : t('library.batch.triggerAnalysis')}
       </button>
       <button style={actionButtonStyle}>
         {/* TODO: 导出 BibTeX 功能 */}
-        导出 BibTeX
+        {t('library.batch.exportBibtex')}
       </button>
       <button
         onClick={handleDelete}
         style={{ ...actionButtonStyle, color: 'var(--danger)', borderColor: 'var(--danger)' }}
       >
-        删除
+        {t('common.delete')}
       </button>
     </div>
   );

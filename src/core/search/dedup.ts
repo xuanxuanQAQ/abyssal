@@ -2,52 +2,56 @@
 // §5: DOI / arXiv ID / 标题+年份 三级匹配
 
 import type { PaperMetadata } from '../types/paper';
-import { normalizeDoi, normalizeArxivId, titleNormalize, generatePaperId } from './paper-id';
+import { normalizeDoi, normalizeArxivId, titleNormalize, titleNormalizeTokenCount } from './paper-id';
+
+// ─── 标题匹配的最低内容词数 ───
+// 内容词过少时跳过 Level 3 匹配（碰撞概率过高）
+const MIN_TITLE_TOKENS_FOR_DEDUP = 3;
 
 // ─── 合并两篇论文 ───
 
-function mergePapers(a: PaperMetadata, b: PaperMetadata): PaperMetadata {
+function mergePapers(existing: PaperMetadata, incoming: PaperMetadata): PaperMetadata {
   // 字段优先级来源：优先使用书目信息更完整的源（crossref, openalex）
   const biblioPreferred =
-    b.source === 'crossref' || b.source === 'openalex' ? b : a;
-  const biblioOther = biblioPreferred === a ? b : a;
+    incoming.source === 'crossref' || incoming.source === 'openalex' ? incoming : existing;
+  const biblioOther = biblioPreferred === existing ? incoming : existing;
 
+  // Fix #9: 保留已有论文的 ID，避免 PaperId 变化导致 chunk 孤儿引用。
+  // 已索引的 chunk 引用 existing.id，重新计算 ID 会导致引用断裂。
   const merged: PaperMetadata = {
-    id: generatePaperId(
-      a.doi ?? b.doi,
-      a.arxivId ?? b.arxivId,
-      (a.title.length >= b.title.length ? a : b).title,
-    ),
-    title: a.title.length >= b.title.length ? a.title : b.title,
-    authors: a.authors.length >= b.authors.length ? a.authors : b.authors,
-    year: Math.max(a.year, b.year),
-    doi: a.doi ?? b.doi,
-    arxivId: a.arxivId ?? b.arxivId,
+    id: existing.id,
+    title: existing.title.length >= incoming.title.length ? existing.title : incoming.title,
+    authors: existing.authors.length >= incoming.authors.length ? existing.authors : incoming.authors,
+    // Fix #5: 取 min 而非 max——预印本首次发布年份更有语义价值
+    year: Math.min(existing.year, incoming.year),
+    doi: existing.doi ?? incoming.doi,
+    arxivId: existing.arxivId ?? incoming.arxivId,
     abstract:
-      (a.abstract?.length ?? 0) >= (b.abstract?.length ?? 0)
-        ? a.abstract
-        : b.abstract,
+      (existing.abstract?.length ?? 0) >= (incoming.abstract?.length ?? 0)
+        ? existing.abstract
+        : incoming.abstract,
     citationCount:
-      Math.max(a.citationCount ?? 0, b.citationCount ?? 0) || null,
-    paperType: a.paperType !== 'unknown' ? a.paperType : b.paperType,
-    source: a.source, // 保留首次发现的来源
+      Math.max(existing.citationCount ?? 0, incoming.citationCount ?? 0) || null,
+    paperType: existing.paperType !== 'unknown' ? existing.paperType : incoming.paperType,
+    // Fix #6: source 遵循 biblioPreferred 逻辑，不盲目保留首次来源
+    source: biblioPreferred.source,
     venue: biblioPreferred.venue ?? biblioOther.venue,
     journal: biblioPreferred.journal ?? biblioOther.journal,
     volume: biblioPreferred.volume ?? biblioOther.volume,
     issue: biblioPreferred.issue ?? biblioOther.issue,
     pages: biblioPreferred.pages ?? biblioOther.pages,
     publisher: biblioPreferred.publisher ?? biblioOther.publisher,
-    isbn: a.isbn ?? b.isbn,
-    edition: a.edition ?? b.edition,
-    editors: a.editors ?? b.editors,
-    bookTitle: a.bookTitle ?? b.bookTitle,
-    series: a.series ?? b.series,
-    issn: a.issn ?? b.issn,
-    pmid: a.pmid ?? b.pmid,
-    pmcid: a.pmcid ?? b.pmcid,
-    url: a.url ?? b.url,
-    bibtexKey: a.bibtexKey ?? b.bibtexKey,
-    biblioComplete: a.biblioComplete || b.biblioComplete,
+    isbn: existing.isbn ?? incoming.isbn,
+    edition: existing.edition ?? incoming.edition,
+    editors: existing.editors ?? incoming.editors,
+    bookTitle: existing.bookTitle ?? incoming.bookTitle,
+    series: existing.series ?? incoming.series,
+    issn: existing.issn ?? incoming.issn,
+    pmid: existing.pmid ?? incoming.pmid,
+    pmcid: existing.pmcid ?? incoming.pmcid,
+    url: existing.url ?? incoming.url,
+    bibtexKey: existing.bibtexKey ?? incoming.bibtexKey,
+    biblioComplete: existing.biblioComplete || incoming.biblioComplete,
   };
 
   return merged;
@@ -84,15 +88,19 @@ export function deduplicatePapers(
     }
 
     // Level 3: 标题归一化 + 年份模糊匹配
+    // Fix #4: 仅当标题内容词 >= MIN_TITLE_TOKENS_FOR_DEDUP 时才启用，防止短标题碰撞
     if (matchIndex === undefined && paper.title) {
-      const nt = titleNormalize(paper.title);
-      if (nt.length > 0) {
-        const candidates = titleYearMap.get(nt);
-        if (candidates) {
-          for (const c of candidates) {
-            if (Math.abs(c.year - paper.year) <= 1) {
-              matchIndex = c.index;
-              break;
+      const tokenCount = titleNormalizeTokenCount(paper.title);
+      if (tokenCount >= MIN_TITLE_TOKENS_FOR_DEDUP) {
+        const nt = titleNormalize(paper.title);
+        if (nt.length > 0) {
+          const candidates = titleYearMap.get(nt);
+          if (candidates) {
+            for (const c of candidates) {
+              if (Math.abs(c.year - paper.year) <= 1) {
+                matchIndex = c.index;
+                break;
+              }
             }
           }
         }
@@ -102,11 +110,30 @@ export function deduplicatePapers(
     if (matchIndex !== undefined) {
       // 合并到已有记录
       result[matchIndex] = mergePapers(result[matchIndex]!, paper);
-      // 更新索引（合并后 DOI/arXivId 可能填充）
       const merged = result[matchIndex]!;
+
+      // 更新索引（合并后 DOI/arXivId 可能被填充）
       if (merged.doi) doiMap.set(normalizeDoi(merged.doi), matchIndex);
-      if (merged.arxivId)
-        arxivMap.set(normalizeArxivId(merged.arxivId), matchIndex);
+      if (merged.arxivId) arxivMap.set(normalizeArxivId(merged.arxivId), matchIndex);
+
+      // Fix #1: 合并后标题可能变长（取较长者），需更新 titleYearMap 索引
+      if (merged.title) {
+        const mergedNt = titleNormalize(merged.title);
+        if (mergedNt.length > 0) {
+          const existingEntries = titleYearMap.get(mergedNt);
+          if (existingEntries) {
+            // 更新已有条目的 year
+            const entry = existingEntries.find((e) => e.index === matchIndex);
+            if (entry) {
+              entry.year = merged.year;
+            } else {
+              existingEntries.push({ index: matchIndex, year: merged.year });
+            }
+          } else {
+            titleYearMap.set(mergedNt, [{ index: matchIndex, year: merged.year }]);
+          }
+        }
+      }
     } else {
       // 新记录
       const idx = result.length;
@@ -116,11 +143,14 @@ export function deduplicatePapers(
       if (paper.arxivId)
         arxivMap.set(normalizeArxivId(paper.arxivId), idx);
       if (paper.title) {
-        const nt = titleNormalize(paper.title);
-        if (nt.length > 0) {
-          const arr = titleYearMap.get(nt) ?? [];
-          arr.push({ index: idx, year: paper.year });
-          titleYearMap.set(nt, arr);
+        const tokenCount = titleNormalizeTokenCount(paper.title);
+        if (tokenCount >= MIN_TITLE_TOKENS_FOR_DEDUP) {
+          const nt = titleNormalize(paper.title);
+          if (nt.length > 0) {
+            const arr = titleYearMap.get(nt) ?? [];
+            arr.push({ index: idx, year: paper.year });
+            titleYearMap.set(nt, arr);
+          }
         }
       }
     }

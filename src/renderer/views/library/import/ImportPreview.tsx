@@ -6,6 +6,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface ParsedEntry {
   title: string;
@@ -21,6 +22,7 @@ interface ImportPreviewProps {
 }
 
 export function ImportPreview({ entries, onConfirm, onCancel }: ImportPreviewProps) {
+  const { t } = useTranslation();
   const nonDuplicate = entries.filter((e) => !e.isDuplicate);
   const duplicateCount = entries.length - nonDuplicate.length;
 
@@ -41,7 +43,7 @@ export function ImportPreview({ entries, onConfirm, onCancel }: ImportPreviewPro
               {entry.title}
               {entry.isDuplicate && (
                 <span style={{ color: 'var(--warning)', marginLeft: 8, fontSize: 'var(--text-xs)' }}>
-                  重复
+                  {t('library.importPreview.duplicate')}
                 </span>
               )}
             </div>
@@ -54,7 +56,7 @@ export function ImportPreview({ entries, onConfirm, onCancel }: ImportPreviewPro
 
       {duplicateCount > 0 && (
         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginBottom: 12 }}>
-          ⚠ 发现 {duplicateCount} 条重复条目（DOI 匹配），将跳过。
+          {t('library.importPreview.duplicateWarning', { count: duplicateCount })}
         </p>
       )}
 
@@ -71,7 +73,7 @@ export function ImportPreview({ entries, onConfirm, onCancel }: ImportPreviewPro
             cursor: 'pointer',
           }}
         >
-          取消
+          {t('common.cancel')}
         </button>
         <button
           onClick={onConfirm}
@@ -85,7 +87,7 @@ export function ImportPreview({ entries, onConfirm, onCancel }: ImportPreviewPro
             cursor: 'pointer',
           }}
         >
-          导入 {nonDuplicate.length} 条
+          {t('library.importPreview.importCount', { count: nonDuplicate.length })}
         </button>
       </div>
     </div>

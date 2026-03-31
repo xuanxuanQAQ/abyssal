@@ -6,16 +6,19 @@
 // 下载 tar.gz 后解压提取其中的 PDF。
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import type { AcquireAttempt } from '../../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
+import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
 
 const ID_CONVERTER = 'https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/';
 const OA_SERVICE = 'https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi';
+
+/** 默认 200MB 解压上限 */
+const DEFAULT_MAX_EXTRACT_BYTES = 200 * 1024 * 1024;
 
 export async function tryPmc(
   http: HttpClient,
@@ -23,100 +26,80 @@ export async function tryPmc(
   pmcid: string | null,
   tempPath: string,
   timeoutMs: number,
+  tarMaxExtractBytes: number = DEFAULT_MAX_EXTRACT_BYTES,
 ): Promise<AcquireAttempt> {
   const start = Date.now();
 
   try {
     let effectivePmcid = pmcid;
 
-    // DOI → PMCID 转换
+    // DOI → PMCID 转换（子步骤超时：用总超时的 1/4）
     if (!effectivePmcid && doi) {
+      const converterTimeout = Math.min(timeoutMs, Math.floor(timeoutMs / 4) + 5000);
       const converterUrl = `${ID_CONVERTER}?ids=${encodeURIComponent(doi)}&format=json`;
       const data = await http.requestJson<{
         records?: Array<{ pmcid?: string | undefined }> | undefined;
-      }>(converterUrl, { timeoutMs });
+      }>(converterUrl, { timeoutMs: converterTimeout });
 
       effectivePmcid = data.records?.[0]?.pmcid ?? null;
     }
 
     if (!effectivePmcid) {
-      return {
-        source: 'pmc',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('pmc', 'failed', Date.now() - start, {
         failureReason: 'No PMCID available',
-        httpStatus: null,
-      };
+        failureCategory: 'no_pdf_url',
+      });
     }
 
-    // 通过 OA Web Service 获取 FTP 归档链接
+    // 通过 OA Web Service 获取 FTP 归档链接（子步骤超时：用总超时的 1/4）
+    const oaTimeout = Math.min(timeoutMs, Math.floor(timeoutMs / 4) + 5000);
     const oaUrl = `${OA_SERVICE}?id=${encodeURIComponent(effectivePmcid)}`;
-    const oaResponse = await http.request(oaUrl, { timeoutMs });
+    const oaResponse = await http.request(oaUrl, { timeoutMs: oaTimeout });
     const tgzMatch = oaResponse.body.match(/href="((?:https?|ftp):\/\/[^"]+\.tar\.gz)"/);
 
     if (!tgzMatch) {
-      return {
-        source: 'pmc',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('pmc', 'failed', Date.now() - start, {
         failureReason: 'No tar.gz link in OA response (article may not be OA)',
-        httpStatus: null,
-      };
+        failureCategory: 'no_pdf_url',
+      });
     }
 
     // FTP 链接转 HTTPS（NCBI 同时提供 HTTPS 镜像）
     let tgzUrl = tgzMatch[1]!;
     tgzUrl = tgzUrl.replace(/^ftp:\/\/ftp\.ncbi\.nlm\.nih\.gov\//, 'https://ftp.ncbi.nlm.nih.gov/');
 
-    // 下载 tar.gz
+    // 下载 tar.gz（使用剩余超时时间）
     const tgzPath = tempPath + '.tar.gz';
-    await downloadPdf(http, tgzUrl, tgzPath, timeoutMs);
+    const remainingMs = Math.max(5000, timeoutMs - (Date.now() - start));
+    await downloadPdf(http, tgzUrl, tgzPath, remainingMs);
 
-    // 解压并提取 PDF
-    const extracted = await extractPdfFromTarGz(tgzPath, tempPath);
+    // 解压并提取 PDF（带大小限制）
+    const extracted = await extractPdfFromTarGz(tgzPath, tempPath, tarMaxExtractBytes);
     deleteFileIfExists(tgzPath);
 
     if (!extracted) {
       deleteFileIfExists(tempPath);
-      return {
-        source: 'pmc',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('pmc', 'failed', Date.now() - start, {
         failureReason: 'No PDF found inside tar.gz archive',
-        httpStatus: null,
-      };
+        failureCategory: 'parse_error',
+      });
     }
 
     const validation = await validatePdf(tempPath);
 
     if (!validation.valid) {
       deleteFileIfExists(tempPath);
-      return {
-        source: 'pmc',
-        status: 'failed',
-        durationMs: Date.now() - start,
+      return makeAttempt('pmc', 'failed', Date.now() - start, {
         failureReason: validation.reason ?? 'PDF validation failed',
-        httpStatus: null,
-      };
+        failureCategory: 'invalid_pdf',
+      });
     }
 
-    return {
-      source: 'pmc',
-      status: 'success',
-      durationMs: Date.now() - start,
-      failureReason: null,
-      httpStatus: 200,
-    };
+    return makeAttempt('pmc', 'success', Date.now() - start, { httpStatus: 200 });
   } catch (err) {
     deleteFileIfExists(tempPath);
     deleteFileIfExists(tempPath + '.tar.gz');
-    return {
-      source: 'pmc',
-      status: 'failed',
-      durationMs: Date.now() - start,
-      failureReason: (err as Error).message,
-      httpStatus: null,
-    };
+    return makeFailedAttempt('pmc', start, err);
   }
 }
 
@@ -125,10 +108,13 @@ export async function tryPmc(
  *
  * tar 格式：每个文件由 512 字节 header + 文件内容（按 512 字节对齐）组成。
  * 这里用手动解析避免引入额外依赖。
+ *
+ * @param maxExtractBytes 解压后 PDF 文件大小上限，防止 tar bomb
  */
 async function extractPdfFromTarGz(
   tgzPath: string,
   destPath: string,
+  maxExtractBytes: number = DEFAULT_MAX_EXTRACT_BYTES,
 ): Promise<boolean> {
   // 解压 gzip
   const rawPath = tgzPath + '.tar';
@@ -159,7 +145,21 @@ async function extractPdfFromTarGz(
       const isFile = typeFlag === 0 || typeFlag === 0x30; // '\0' or '0'
 
       if (isFile && name.toLowerCase().endsWith('.pdf')) {
+        // 大小限制检查
+        if (fileSize > maxExtractBytes) {
+          throw new Error(
+            `PDF inside tar exceeds size limit: ${fileSize} bytes > ${maxExtractBytes} bytes`,
+          );
+        }
+
         const dataStart = offset + 512;
+        // 验证 buffer 边界：确保 tar 内声称的大小不超出实际数据
+        if (dataStart + fileSize > tarBuf.length) {
+          throw new Error(
+            `Truncated tar: header claims ${fileSize} bytes but only ${tarBuf.length - dataStart} available`,
+          );
+        }
+
         const pdfData = tarBuf.subarray(dataStart, dataStart + fileSize);
         fs.writeFileSync(destPath, pdfData);
         return true;

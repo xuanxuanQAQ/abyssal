@@ -33,15 +33,15 @@ export function SelectionToolbar({
     left: position.x,
     top: position.y - 8,
     transform: 'translate(-50%, -100%)',
-    height: 36,
+    height: 40,
     display: 'flex',
     alignItems: 'center',
     gap: 2,
-    padding: '0 6px',
-    backgroundColor: 'var(--bg-elevated)',
-    border: '1px solid var(--border-subtle)',
+    padding: '0 8px',
+    backgroundColor: '#1e1e1e',
+    border: '1px solid #3a3a3a',
     borderRadius: 8,
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
     zIndex: 25,
     whiteSpace: 'nowrap',
   };
@@ -50,24 +50,27 @@ export function SelectionToolbar({
     display: 'flex',
     alignItems: 'center',
     gap: 4,
-    padding: '4px 8px',
+    padding: '4px 10px',
     backgroundColor: 'transparent',
     border: 'none',
     borderRadius: 'var(--radius-sm)',
     cursor: 'pointer',
-    color: 'var(--text-secondary)',
-    fontSize: 'var(--text-sm)',
+    color: '#e0e0e0',
+    fontSize: 13,
   };
 
   const separatorStyle: React.CSSProperties = {
     width: 1,
     height: 20,
-    backgroundColor: 'var(--border-subtle)',
+    backgroundColor: '#444',
     margin: '0 2px',
   };
 
   return (
-    <div style={toolbarStyle}>
+    <div
+      style={toolbarStyle}
+      onMouseDown={(e) => e.preventDefault()}
+    >
       {/* Highlight button group */}
       <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
         <button
@@ -109,10 +112,10 @@ export function SelectionToolbar({
               left: 0,
               marginTop: 4,
               padding: 6,
-              backgroundColor: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
+              backgroundColor: '#1e1e1e',
+              border: '1px solid #3a3a3a',
               borderRadius: 'var(--radius-sm)',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
               zIndex: 26,
             }}
           >

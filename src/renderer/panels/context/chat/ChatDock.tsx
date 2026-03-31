@@ -7,19 +7,22 @@
  * 全屏模式：覆盖 ContextBody（由 ContextPanel 的 PanelGroup 驱动）。
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
-import { Maximize2, Minimize2, Bot, MessageSquare } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Maximize2, Minimize2, Bot, MessageSquare, History, Plus, Trash2 } from 'lucide-react';
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
+import { ChatSessionList } from './ChatSessionList';
 import { useChatSession, persistMessage } from './hooks/useChatSession';
 import { useChatContext } from './hooks/useChatContext';
 import { ChunkAccumulator } from './streaming/ChunkAccumulator';
 import { useChatStore, type ChatDockMode } from '../../../core/store/useChatStore';
 import { getAPI } from '../../../core/ipc/bridge';
 import type { ChatMessage } from '../../../../shared-types/models';
-import type { ChatResponseEvent } from '../../../../shared-types/ipc';
+import type { AgentStreamEvent } from '../../../../shared-types/ipc';
 
-export function ChatDock() {
+export const ChatDock = React.memo(function ChatDock() {
+  const { t } = useTranslation();
   const {
     contextKey,
     messages,
@@ -52,25 +55,44 @@ export function ChatDock() {
     })
   );
 
+  // Register agentStream listener ONCE (not per contextKey).
+  // Events carry their own conversationId — no need to re-register on context change.
   useEffect(() => {
     const api = getAPI();
-    const unsub = api.chat.onResponse((event: ChatResponseEvent) => {
+    const unsub = api.on.agentStream((event: AgentStreamEvent) => {
       const accumulator = accumulatorRef.current;
-      if (event.chunk) {
-        accumulator.pushChunk(event.chunk);
-      }
-      if (event.toolCalls) {
-        for (const tc of event.toolCalls) {
+
+      switch (event.type) {
+        case 'text_delta':
+          accumulator.pushChunk(event.delta);
+          break;
+
+        case 'tool_use_start':
           accumulator.pushToolCall({
-            name: tc.name,
-            input: tc.input,
-            ...(tc.output !== undefined ? { output: tc.output } : {}),
+            name: event.toolName,
+            input: event.args,
+            status: 'running',
+          });
+          break;
+
+        case 'tool_use_result':
+          accumulator.pushToolCall({
+            name: event.toolName,
+            input: {},
+            output: event.result,
             status: 'completed',
           });
-        }
-      }
-      if (event.isLast) {
-        accumulator.finalize();
+          break;
+
+        case 'done':
+          accumulator.finalize();
+          break;
+
+        case 'error':
+          // Show error as assistant message content
+          accumulator.pushChunk(`\n\n**Error:** ${event.message}`);
+          accumulator.finalize();
+          break;
       }
     });
 
@@ -78,10 +100,17 @@ export function ChatDock() {
       unsub();
       accumulatorRef.current.dispose();
     };
-  }, [contextKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 发送去重：防止快速连点产生重复消息
+  const sendingRef = useRef(false);
 
   const handleSend = useCallback(
     async (text: string) => {
+      if (sendingRef.current) return;
+      sendingRef.current = true;
+
       const userMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'user',
@@ -90,16 +119,14 @@ export function ChatDock() {
         status: 'sending',
       };
 
+      // Ensure session exists before adding messages
+      useChatStore.getState().ensureSession(contextKey);
       useChatStore.getState().addMessage(userMessage);
       persistMessage({ ...userMessage, status: 'completed' }, contextKey);
       const chatContext = buildChatContext();
 
       try {
-        await getAPI().chat.send(text, chatContext);
-        useChatStore.getState().updateMessage(userMessage.id, (msg) => {
-          msg.status = 'sent';
-        });
-
+        // Create assistant placeholder before sending, so streaming has a target
         const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -112,14 +139,73 @@ export function ChatDock() {
         useChatStore.getState().addMessage(assistantMessage);
         useChatStore.getState().setChatStreaming(true);
         accumulatorRef.current.bind(assistantMessage.id);
+
+        await getAPI().chat.send(text, chatContext);
+        useChatStore.getState().updateMessage(userMessage.id, (msg) => {
+          msg.status = 'sent';
+        });
       } catch {
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {
           msg.status = 'error';
         });
+        useChatStore.getState().setChatStreaming(false);
+      } finally {
+        sendingRef.current = false;
       }
     },
     [contextKey, buildChatContext]
   );
+
+  /** 重试失败的用户消息 */
+  const handleRetry = useCallback(
+    (messageId: string) => {
+      const session = useChatStore.getState().sessions[contextKey];
+      const msg = session?.messages.find((m) => m.id === messageId);
+      if (!msg || msg.role !== 'user') return;
+      handleSend(msg.content);
+    },
+    [contextKey, handleSend]
+  );
+
+  const [showSessionList, setShowSessionList] = useState(false);
+
+  const handleSessionSelect = useCallback((selectedKey: string) => {
+    // Switch to selected session by updating store directly
+    useChatStore.getState().ensureSession(selectedKey);
+    useChatStore.getState().setActiveSessionKey(selectedKey);
+    // Load from DB if hot cache is empty
+    getAPI().db.chat.getHistory(selectedKey, { limit: 50 }).then((records) => {
+      const cached = useChatStore.getState().sessions[selectedKey];
+      if (cached && cached.messages.length === 0 && records.length > 0) {
+        const msgs = records.map((r) => ({
+          id: r.id,
+          role: r.role as 'user' | 'assistant',
+          content: r.content,
+          timestamp: r.timestamp,
+          status: 'completed' as const,
+          toolCalls: r.toolCalls ? JSON.parse(r.toolCalls) : undefined,
+          citations: r.citations ? JSON.parse(r.citations) : undefined,
+        }));
+        useChatStore.getState().loadSessionMessages(selectedKey, msgs, msgs.length < 50);
+      }
+    }).catch((err: unknown) => {
+      console.warn('[ChatDock] Failed to load session history:', err);
+    });
+  }, []);
+
+  const handleAbort = useCallback(() => {
+    getAPI().chat.abort(contextKey);
+    // Finalize the current streaming message
+    accumulatorRef.current.finalize();
+  }, [contextKey]);
+
+  const handleNewSession = useCallback(() => {
+    const newKey = `global:${Date.now()}`;
+    useChatStore.getState().ensureSession(newKey);
+    useChatStore.getState().setActiveSessionKey(newKey);
+  }, []);
+
+  const handleClearSession = clearCurrentSession;
 
   const toggleFullscreen = useCallback(() => {
     const newMode: ChatDockMode = chatDockMode === 'fullscreen' ? 'expanded' : 'fullscreen';
@@ -144,6 +230,7 @@ export function ChatDock() {
           padding: '6px 12px',
           flexShrink: 0,
           borderBottom: '1px solid var(--border-subtle)',
+          position: 'relative',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -154,7 +241,7 @@ export function ChatDock() {
             color: 'var(--text-secondary)',
             letterSpacing: '0.01em',
           }}>
-            AI 聊天
+            {t('context.chat.title')}
           </span>
           {messages.length > 0 && (
             <span style={{
@@ -169,33 +256,98 @@ export function ChatDock() {
             </span>
           )}
         </div>
-        <button
-          onClick={toggleFullscreen}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-muted)',
-            cursor: 'pointer',
-            padding: 4,
-            borderRadius: 'var(--radius-sm)',
-            display: 'flex',
-            alignItems: 'center',
-            transition: 'color 100ms ease',
-          }}
-          title={chatDockMode === 'fullscreen' ? '还原' : '最大化'}
-        >
-          {chatDockMode === 'fullscreen' ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <button
+            onClick={handleNewSession}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: 4,
+              borderRadius: 'var(--radius-sm)',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 100ms ease',
+            }}
+            title={t('context.chat.newSession')}
+          >
+            <Plus size={13} />
+          </button>
+          {messages.length > 0 && (
+            <button
+              onClick={handleClearSession}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: 4,
+                borderRadius: 'var(--radius-sm)',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'color 100ms ease',
+              }}
+              title={t('context.chat.clearSession')}
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+          <button
+            onClick={() => setShowSessionList((v) => !v)}
+            style={{
+              background: showSessionList ? 'var(--bg-surface)' : 'none',
+              border: 'none',
+              color: showSessionList ? 'var(--accent-color)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: 4,
+              borderRadius: 'var(--radius-sm)',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 100ms ease',
+            }}
+            title={t('context.chat.historySessions')}
+          >
+            <History size={13} />
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: 4,
+              borderRadius: 'var(--radius-sm)',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 100ms ease',
+            }}
+            title={chatDockMode === 'fullscreen' ? t('context.chat.restore') : t('context.chat.maximize')}
+          >
+            {chatDockMode === 'fullscreen' ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+        </div>
+
+        {/* 历史会话下拉列表 */}
+        {showSessionList && (
+          <ChatSessionList
+            currentKey={contextKey}
+            onSelect={handleSessionSelect}
+            onClose={() => setShowSessionList(false)}
+          />
+        )}
       </div>
 
       {/* 历史消息区域 — 始终可见，flex:1 填充中间 */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {messages.length > 0 ? (
           <ChatHistory
             messages={messages}
             isStreaming={chatStreaming}
             fullyLoaded={fullyLoaded}
             onLoadMore={loadMoreHistory}
+            onRetry={handleRetry}
           />
         ) : (
           <div style={{
@@ -209,17 +361,20 @@ export function ChatDock() {
             opacity: 0.5,
           }}>
             <MessageSquare size={24} />
-            <span style={{ fontSize: 12 }}>暂无对话</span>
+            <span style={{ fontSize: 12 }}>{t('context.chat.empty')}</span>
           </div>
         )}
       </div>
 
       {/* 输入框 — 固定在底部 */}
-      <ChatInput
-        source={source}
-        onSend={handleSend}
-        disabled={chatStreaming}
-      />
+      <div style={{ flexShrink: 0, borderTop: '1px solid var(--border-subtle)' }}>
+        <ChatInput
+          source={source}
+          onSend={handleSend}
+          onAbort={handleAbort}
+          streaming={chatStreaming}
+        />
+      </div>
     </div>
   );
-}
+});

@@ -3,6 +3,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { useImportBibtex } from '../../../core/ipc/hooks/usePapers';
 
@@ -11,6 +12,7 @@ interface TextPasteTabProps {
 }
 
 export function TextPasteTab({ onClose }: TextPasteTabProps) {
+  const { t } = useTranslation();
   const [text, setText] = useState('');
   const importBibtex = useImportBibtex();
 
@@ -21,7 +23,7 @@ export function TextPasteTab({ onClose }: TextPasteTabProps) {
     if (!text.trim()) return;
     importBibtex.mutate(text, {
       onSuccess: (result) => {
-        toast.success(`成功导入 ${result.imported} 篇论文`);
+        toast.success(t('library.fileImport.successCount', { count: result.imported }));
         onClose();
       },
     });
@@ -32,7 +34,7 @@ export function TextPasteTab({ onClose }: TextPasteTabProps) {
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="粘贴 BibTeX 文本…"
+        placeholder={t('library.textPaste.placeholder')}
         style={{
           width: '100%',
           height: 200,
@@ -50,7 +52,7 @@ export function TextPasteTab({ onClose }: TextPasteTabProps) {
 
       {entryCount > 0 && (
         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 8 }}>
-          检测到 {entryCount} 个条目
+          {t('library.textPaste.entryCount', { count: entryCount })}
         </p>
       )}
 
@@ -67,7 +69,7 @@ export function TextPasteTab({ onClose }: TextPasteTabProps) {
             cursor: 'pointer',
           }}
         >
-          取消
+          {t('common.cancel')}
         </button>
         <button
           onClick={handleImport}
@@ -82,7 +84,7 @@ export function TextPasteTab({ onClose }: TextPasteTabProps) {
             cursor: text.trim() ? 'pointer' : 'default',
           }}
         >
-          {importBibtex.isPending ? '导入中…' : '导入'}
+          {importBibtex.isPending ? t('common.loading') : t('library.textPaste.importBtn')}
         </button>
       </div>
     </div>

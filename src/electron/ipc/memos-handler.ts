@@ -10,45 +10,76 @@
 
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
-import { asMemoId } from '../../core/types/common';
+import { asMemoId, asNoteId } from '../../core/types/common';
 import type { MemoEntityType } from '../../core/database/dao/memos';
 import type { ResearchMemo } from '../../core/types/memo';
-import type { Memo } from '../../shared-types/models';
+import type { ResearchNote } from '../../core/types/note';
+import type { Memo, MemoFilter } from '../../shared-types/models';
+import { createConceptFromDraft } from './shared/create-concept';
+
+/** Convert backend ResearchMemo to frontend Memo shape */
+function memoToFrontend(m: ResearchMemo): Memo {
+  return {
+    id: String(m.id),
+    text: m.text,
+    paperIds: m.paperIds,
+    conceptIds: m.conceptIds,
+    annotationId: m.annotationId ? String(m.annotationId) : null,
+    outlineId: m.outlineId ? String(m.outlineId) : null,
+    linkedNoteIds: m.linkedNoteIds,
+    tags: m.tags,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+  };
+}
 
 export function registerMemosHandlers(ctx: AppContext): void {
-  const { logger, dbProxy } = ctx;
+  const { logger } = ctx;
 
   const MEMO_TABLES = ['research_memos', 'chunks', 'chunks_vec'];
 
   // ── db:memos:list ──
   typedHandler('db:memos:list', logger, async (_e, filter) => {
-    const f = (filter as Record<string, unknown>) ?? {};
-    if (f['entityType'] && f['entityId']) {
-      return await dbProxy.getMemosByEntity(
-        f['entityType'] as MemoEntityType,
-        f['entityId'] as string,
-      ) as unknown as Memo[];
+    const f = (filter as MemoFilter | undefined) ?? {};
+
+    // Legacy entity-based query path
+    if ((f as Record<string, unknown>)['entityType'] && (f as Record<string, unknown>)['entityId']) {
+      const memos = await ctx.dbProxy.getMemosByEntity(
+        (f as Record<string, unknown>)['entityType'] as MemoEntityType,
+        (f as Record<string, unknown>)['entityId'] as string,
+      ) as unknown as ResearchMemo[];
+      return memos.map(memoToFrontend);
     }
-    return [];
+
+    // Full filter-based query
+    const queryFilter: Record<string, unknown> = {};
+    if (f.paperIds) queryFilter['paperIds'] = f.paperIds;
+    if (f.conceptIds) queryFilter['conceptIds'] = f.conceptIds;
+    if (f.tags) queryFilter['tags'] = f.tags;
+    if (f.searchText) queryFilter['searchText'] = f.searchText;
+    if (f.limit != null) queryFilter['limit'] = f.limit;
+    if (f.offset != null) queryFilter['offset'] = f.offset;
+    const memos = await ctx.dbProxy.queryMemos(queryFilter as Parameters<typeof ctx.dbProxy.queryMemos>[0]) as unknown as ResearchMemo[];
+    return memos.map(memoToFrontend);
   });
 
   // ── db:memos:get ──
   typedHandler('db:memos:get', logger, async (_e, memoId) => {
-    const memo = await dbProxy.getMemo(asMemoId(memoId));
+    const memo = await ctx.dbProxy.getMemo(asMemoId(memoId)) as unknown as ResearchMemo | null;
     if (!memo) throw new Error(`Memo not found: ${memoId}`);
-    return memo as unknown as Memo;
+    return memoToFrontend(memo);
   });
 
   // ── db:memos:create ──
   typedHandler('db:memos:create', logger, async (_e, memo) => {
     const m = memo as unknown as Record<string, unknown>;
-    const result = await dbProxy.addMemo(
+    const result = await ctx.dbProxy.addMemo(
       {
         text: (m['text'] as string) ?? (m['content'] as string) ?? '',
         paperIds: (m['paperIds'] as string[]) ?? [],
         conceptIds: (m['conceptIds'] as string[]) ?? [],
-        annotationId: null,
-        outlineId: null,
+        annotationId: (m['annotationId'] as string) ?? null,
+        outlineId: (m['outlineId'] as string) ?? null,
         linkedNoteIds: [],
         tags: (m['tags'] as string[]) ?? [],
         indexed: false,
@@ -56,38 +87,100 @@ export function registerMemosHandlers(ctx: AppContext): void {
       null,
     );
     ctx.pushManager?.enqueueDbChange(MEMO_TABLES, 'insert');
-    ctx.pushManager?.pushMemoCreated({ memoId: (result as unknown as Record<string, unknown>)['memoId'] as string });
+
+    const memoId = (result as unknown as Record<string, unknown>)['memoId'] as string;
+    ctx.pushManager?.pushMemoCreated({ memoId });
+
+    // Fetch and return full memo
+    const created = await ctx.dbProxy.getMemo(asMemoId(memoId)) as unknown as ResearchMemo | null;
+    if (created) return memoToFrontend(created);
     return result as unknown as Memo;
   });
 
   // ── db:memos:update ──
   typedHandler('db:memos:update', logger, async (_e, memoId, patch) => {
-    await dbProxy.updateMemo(asMemoId(memoId), patch as Record<string, unknown>);
+    await ctx.dbProxy.updateMemo(asMemoId(memoId), patch as Record<string, unknown>);
     ctx.pushManager?.enqueueDbChange(MEMO_TABLES, 'update');
   });
 
   // ── db:memos:delete ──
   typedHandler('db:memos:delete', logger, async (_e, memoId) => {
-    await dbProxy.deleteMemo(asMemoId(memoId));
+    await ctx.dbProxy.deleteMemo(asMemoId(memoId));
     ctx.pushManager?.enqueueDbChange(MEMO_TABLES, 'delete');
   });
 
   // ── db:memos:upgradeToNote ──
-  typedHandler('db:memos:upgradeToNote', logger, async () => {
-    // TODO: delegate to dbProxy.upgradeFromMemo(memoId) when implemented
-    return { noteId: crypto.randomUUID() };
+  typedHandler('db:memos:upgradeToNote', logger, async (_e, memoId) => {
+    const mid = asMemoId(memoId);
+    const memo = await ctx.dbProxy.getMemo(mid) as unknown as ResearchMemo | null;
+    if (!memo) throw new Error(`Memo not found: ${memoId}`);
+
+    // Create a new note with memo content
+    const noteId = asNoteId(crypto.randomUUID());
+    const title = memo.text.slice(0, 60).replace(/\n/g, ' ').trim() || 'Untitled Note';
+    const filePath = `notes/${noteId}.md`;
+
+    // Build note file with frontmatter
+    const fsp = await import('node:fs/promises');
+    const path = await import('node:path');
+    const notesDir = path.join(ctx.workspaceRoot, 'notes');
+    await fsp.mkdir(notesDir, { recursive: true });
+
+    const fmLines = [
+      '---',
+      `title: "${title.replace(/"/g, '\\"')}"`,
+      `linkedPaperIds: ${JSON.stringify(memo.paperIds)}`,
+      `linkedConceptIds: ${JSON.stringify(memo.conceptIds)}`,
+      `tags: ${JSON.stringify(memo.tags)}`,
+      '---',
+      '',
+      memo.text,
+    ];
+    const absPath = path.join(notesDir, `${noteId}.md`);
+    await fsp.writeFile(absPath, fmLines.join('\n'), 'utf-8');
+
+    // Create note in DB
+    await ctx.dbProxy.createNote(
+      {
+        id: noteId,
+        title,
+        filePath,
+        linkedPaperIds: memo.paperIds,
+        linkedConceptIds: memo.conceptIds,
+        tags: memo.tags,
+      } as unknown as Omit<ResearchNote, 'createdAt' | 'updatedAt'>,
+      [],
+      [],
+    );
+
+    // Link memo to the new note
+    await ctx.dbProxy.linkMemoToNote(mid, noteId);
+
+    ctx.pushManager?.enqueueDbChange([...MEMO_TABLES, 'research_notes'], 'insert');
+    return { noteId: String(noteId) };
   });
 
   // ── db:memos:upgradeToConcept ──
-  typedHandler('db:memos:upgradeToConcept', logger, async () => {
-    throw new Error('Not implemented');
+  typedHandler('db:memos:upgradeToConcept', logger, async (_e, memoId, draft) => {
+    const mid = asMemoId(memoId);
+    const memo = await ctx.dbProxy.getMemo(mid) as unknown as ResearchMemo | null;
+    if (!memo) throw new Error(`Memo not found: ${memoId}`);
+
+    const d = draft as unknown as Record<string, unknown>;
+    const conceptId = await createConceptFromDraft(ctx.dbProxy, d, memo.text.slice(0, 500));
+
+    // Link the memo to the newly created concept
+    await ctx.dbProxy.updateMemo(mid, { conceptIds: [...memo.conceptIds, conceptId] } as Record<string, unknown>);
+
+    ctx.pushManager?.enqueueDbChange([...MEMO_TABLES, 'concepts'], 'insert');
   });
 
   // ── db:memos:getByEntity ──
   typedHandler('db:memos:getByEntity', logger, async (_e, entityType, entityId) => {
-    return await dbProxy.getMemosByEntity(
+    const memos = await ctx.dbProxy.getMemosByEntity(
       entityType as MemoEntityType,
       entityId,
-    ) as unknown as Memo[];
+    ) as unknown as ResearchMemo[];
+    return memos.map(memoToFrontend);
   });
 }

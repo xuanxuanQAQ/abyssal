@@ -21,21 +21,34 @@ function makeApiKeys(overrides: Partial<ApiKeysConfig> = {}): ApiKeysConfig {
     unpaywallEmail: null,
     cohereApiKey: null,
     jinaApiKey: null,
+    siliconflowApiKey: null,
+    webSearchApiKey: null,
     ...overrides,
   };
+}
+
+/** Create a ModelRouter with static config (convenience for tests). */
+function createRouter(
+  llmConfig: LlmConfig = makeConfig(),
+  apiKeys: ApiKeysConfig = makeApiKeys(),
+) {
+  return new ModelRouter({
+    getLlmConfig: () => llmConfig,
+    getApiKeys: () => apiKeys,
+  });
 }
 
 describe('ModelRouter', () => {
   describe('resolve', () => {
     it('returns global default when no workflowId', () => {
-      const router = new ModelRouter(makeConfig(), makeApiKeys());
+      const router = createRouter();
       const route = router.resolve();
       expect(route.provider).toBe('anthropic');
       expect(route.model).toBe('claude-sonnet-4-20250514');
     });
 
     it('uses exact match from workflowOverrides', () => {
-      const router = new ModelRouter(
+      const router = createRouter(
         makeConfig({ workflowOverrides: { analyze: { provider: 'openai', model: 'gpt-4o' } } }),
         makeApiKeys({ openaiApiKey: 'sk-openai' }),
       );
@@ -45,50 +58,127 @@ describe('ModelRouter', () => {
     });
 
     it('uses prefix match for sub-stage workflowIds', () => {
-      const router = new ModelRouter(
+      const router = createRouter(
         makeConfig({ workflowOverrides: { analyze: { provider: 'deepseek', model: 'deepseek-chat' } } }),
-        makeApiKeys(),
       );
       const route = router.resolve('analyze.screening');
       expect(route.provider).toBe('deepseek');
     });
 
-    it('falls back to built-in defaults', () => {
-      const router = new ModelRouter(makeConfig(), makeApiKeys());
+    it('uses global default when no workflow override exists', () => {
+      const router = createRouter();
       const route = router.resolve('discover');
-      expect(route.provider).toBe('deepseek');
-      expect(route.model).toBe('deepseek-chat');
+      expect(route.provider).toBe('anthropic');
+      expect(route.model).toBe('claude-sonnet-4-20250514');
     });
   });
 
-  describe('resolveWithFallback', () => {
-    it('falls back to default when primary API key is missing', () => {
-      const router = new ModelRouter(
-        makeConfig(),
-        makeApiKeys({ anthropicApiKey: 'sk-test' }),
+  describe('resolveAndValidate', () => {
+    it('throws when provider API key is missing', () => {
+      const router = createRouter(
+        makeConfig({
+          workflowOverrides: { discover: { provider: 'deepseek', model: 'deepseek-chat' } },
+        }),
+        makeApiKeys({ anthropicApiKey: 'sk-test', deepseekApiKey: null }),
       );
-      // discover → deepseek, but deepseekApiKey is null
-      const route = router.resolveWithFallback('discover');
-      // Should fall back to anthropic (has key)
-      expect(route.provider).toBe('anthropic');
+      // discover overridden to deepseek, but deepseekApiKey is null → throws
+      expect(() => router.resolveAndValidate('discover')).toThrow(
+        /Provider "deepseek" is not configured/,
+      );
     });
 
-    it('returns primary route when API key is present', () => {
-      const router = new ModelRouter(
-        makeConfig(),
-        makeApiKeys({ deepseekApiKey: 'sk-ds' }),
+    it('returns route when API key is present', () => {
+      const router = createRouter(
+        makeConfig({
+          workflowOverrides: { discover: { provider: 'deepseek', model: 'deepseek-chat' } },
+        }),
+        makeApiKeys({ anthropicApiKey: 'sk-test', deepseekApiKey: 'sk-ds' }),
       );
-      const route = router.resolveWithFallback('discover');
+      const route = router.resolveAndValidate('discover');
       expect(route.provider).toBe('deepseek');
     });
 
+    it('uses global default when no workflow override exists', () => {
+      const router = createRouter(
+        makeConfig(),
+        makeApiKeys({ anthropicApiKey: 'sk-test' }),
+      );
+      const route = router.resolveAndValidate('discover');
+      expect(route.provider).toBe('anthropic');
+    });
+
     it('local models (ollama) always pass availability check', () => {
-      const router = new ModelRouter(
+      const router = createRouter(
         makeConfig({ workflowOverrides: { analyze: { provider: 'ollama', model: 'llama3' } } }),
         makeApiKeys({ anthropicApiKey: null }), // no API keys at all
       );
-      const route = router.resolveWithFallback('analyze');
+      const route = router.resolveAndValidate('analyze');
       expect(route.provider).toBe('ollama');
+    });
+  });
+
+  describe('config hot-reload', () => {
+    it('picks up provider changes immediately via getter', () => {
+      let llmConfig = makeConfig({ defaultProvider: 'anthropic', defaultModel: 'claude-sonnet-4' });
+      const apiKeys = makeApiKeys({ anthropicApiKey: 'sk-a', deepseekApiKey: 'sk-d' });
+
+      const router = new ModelRouter({
+        getLlmConfig: () => llmConfig,
+        getApiKeys: () => apiKeys,
+      });
+
+      // Initial: anthropic
+      expect(router.resolve().provider).toBe('anthropic');
+      expect(router.resolve().model).toBe('claude-sonnet-4');
+
+      // Simulate settings change
+      llmConfig = makeConfig({ defaultProvider: 'deepseek', defaultModel: 'deepseek-chat' });
+
+      // Router immediately sees the new config
+      expect(router.resolve().provider).toBe('deepseek');
+      expect(router.resolve().model).toBe('deepseek-chat');
+    });
+
+    it('picks up API key changes for validation', () => {
+      const llmConfig = makeConfig({
+        workflowOverrides: { discover: { provider: 'deepseek', model: 'deepseek-chat' } },
+      });
+      let apiKeys = makeApiKeys({ anthropicApiKey: 'sk-a', deepseekApiKey: null });
+
+      const router = new ModelRouter({
+        getLlmConfig: () => llmConfig,
+        getApiKeys: () => apiKeys,
+      });
+
+      // discover overridden to deepseek, but no deepseek key → throws
+      expect(() => router.resolveAndValidate('discover')).toThrow(/not configured/);
+
+      // Add deepseek key
+      apiKeys = makeApiKeys({ anthropicApiKey: 'sk-a', deepseekApiKey: 'sk-d' });
+
+      // Now deepseek is available
+      expect(router.resolveAndValidate('discover').provider).toBe('deepseek');
+    });
+
+    it('picks up workflowOverride changes', () => {
+      let llmConfig = makeConfig();
+      const apiKeys = makeApiKeys({ openaiApiKey: 'sk-o' });
+
+      const router = new ModelRouter({
+        getLlmConfig: () => llmConfig,
+        getApiKeys: () => apiKeys,
+      });
+
+      // Initially no override for 'analyze' → builtin (anthropic)
+      expect(router.resolve('analyze').provider).toBe('anthropic');
+
+      // Add override
+      llmConfig = makeConfig({
+        workflowOverrides: { analyze: { provider: 'openai', model: 'gpt-4o' } },
+      });
+
+      expect(router.resolve('analyze').provider).toBe('openai');
+      expect(router.resolve('analyze').model).toBe('gpt-4o');
     });
   });
 });

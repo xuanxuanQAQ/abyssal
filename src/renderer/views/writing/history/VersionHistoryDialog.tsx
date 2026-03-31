@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useSectionVersions, useUpdateSection } from '../../../core/ipc/hooks/useArticles';
 import { VersionTimeline } from './VersionTimeline';
@@ -26,6 +27,7 @@ export function VersionHistoryDialog({
   open,
   onOpenChange,
 }: VersionHistoryDialogProps) {
+  const { t } = useTranslation();
   const { data: versions } = useSectionVersions(sectionId);
   const updateSection = useUpdateSection();
 
@@ -93,12 +95,12 @@ export function VersionHistoryDialog({
             }}
           >
             <Dialog.Title style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-              版本历史
+              {t('writing.history.title')}
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
-                aria-label="关闭"
+                aria-label={t('common.close')}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -147,7 +149,7 @@ export function VersionHistoryDialog({
                     color: 'var(--color-text-secondary, #6b7280)',
                   }}
                 >
-                  选择一个版本以查看差异
+                  {t('writing.history.selectVersion')}
                 </div>
               )}
             </div>
@@ -174,7 +176,7 @@ export function VersionHistoryDialog({
                   cursor: 'pointer',
                 }}
               >
-                取消
+                {t('common.cancel')}
               </button>
             </Dialog.Close>
             <button
@@ -192,7 +194,7 @@ export function VersionHistoryDialog({
                 cursor: selectedVersion ? 'pointer' : 'not-allowed',
               }}
             >
-              {updateSection.isPending ? '恢复中...' : '恢复此版本'}
+              {updateSection.isPending ? t('writing.history.restoring') : t('writing.history.restoreVersion')}
             </button>
           </div>
         </Dialog.Content>

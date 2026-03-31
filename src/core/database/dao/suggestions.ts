@@ -185,6 +185,45 @@ export function dismissSuggestedConcept(
     .run(now(), suggestionId).changes;
 }
 
+// ─── restoreSuggestedConcept ───
+
+export function restoreSuggestedConcept(
+  db: Database.Database,
+  suggestionId: SuggestionId,
+): number {
+  return db
+    .prepare(
+      "UPDATE suggested_concepts SET status = 'pending', updated_at = ? WHERE id = ? AND status = 'dismissed'",
+    )
+    .run(now(), suggestionId).changes;
+}
+
+// ─── getSuggestedConceptsStats ───
+
+export interface SuggestedConceptsStatsResult {
+  pendingCount: number;
+  adoptedCount: number;
+  dismissedCount: number;
+}
+
+export function getSuggestedConceptsStats(
+  db: Database.Database,
+): SuggestedConceptsStatsResult {
+  const row = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+      SUM(CASE WHEN status = 'adopted' THEN 1 ELSE 0 END) AS adopted_count,
+      SUM(CASE WHEN status = 'dismissed' THEN 1 ELSE 0 END) AS dismissed_count
+    FROM suggested_concepts
+  `).get() as { pending_count: number; adopted_count: number; dismissed_count: number };
+
+  return {
+    pendingCount: row.pending_count ?? 0,
+    adoptedCount: row.adopted_count ?? 0,
+    dismissedCount: row.dismissed_count ?? 0,
+  };
+}
+
 // ─── 查询 ───
 
 export function getSuggestedConcepts(

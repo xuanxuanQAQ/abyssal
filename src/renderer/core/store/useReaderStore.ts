@@ -14,6 +14,7 @@ import type { HighlightColor } from '../../../shared-types/enums';
 type ZoomMode = 'fitWidth' | 'fitPage' | 'custom';
 /** §4.5 【Δ-1】三态标注工具模型 */
 type AnnotationTool =
+  | 'hand'
   | 'textHighlight'
   | 'textNote'
   | 'textConceptTag'

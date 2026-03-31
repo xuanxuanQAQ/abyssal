@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../../core/store';
 
 interface NodeContextMenuProps {
@@ -76,6 +77,7 @@ function NodeContextMenu({
   onUnpin,
   isPinned,
 }: NodeContextMenuProps) {
+  const { t } = useTranslation();
   const navigateTo = useAppStore((s) => s.navigateTo);
   const focusGraphNode = useAppStore((s) => s.focusGraphNode);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -120,7 +122,7 @@ function NodeContextMenu({
     >
       {isPaper && (
         <MenuItem
-          label="在 Library 中查看"
+          label={t('graph.nodeMenu.viewInLibrary')}
           onClick={() => {
             navigateTo({ type: 'paper', id: nodeId, view: 'library' });
             onOpenChange(false);
@@ -129,7 +131,7 @@ function NodeContextMenu({
       )}
       {isPaper && (
         <MenuItem
-          label="在 Reader 中打开"
+          label={t('graph.nodeMenu.openInReader')}
           onClick={() => {
             // TODO: check fulltextStatus before navigating
             navigateTo({ type: 'paper', id: nodeId, view: 'reader' });
@@ -139,7 +141,7 @@ function NodeContextMenu({
       )}
       {isPaper && (
         <MenuItem
-          label="查看分析报告"
+          label={t('graph.nodeMenu.viewAnalysisReport')}
           onClick={() => {
             // TODO: check analysisStatus before navigating
             navigateTo({ type: 'paper', id: nodeId, view: 'analysis' });
@@ -149,7 +151,7 @@ function NodeContextMenu({
       )}
       {isPaper && <div style={separatorStyle} />}
       <MenuItem
-        label="以此为焦点展开"
+        label={t('graph.nodeMenu.focusExpand')}
         onClick={() => {
           focusGraphNode(nodeId);
           onOpenChange(false);
@@ -157,7 +159,7 @@ function NodeContextMenu({
       />
       {isPinned && (
         <MenuItem
-          label="释放固定位置"
+          label={t('graph.nodeMenu.unpinPosition')}
           onClick={() => {
             onUnpin(nodeId);
             onOpenChange(false);

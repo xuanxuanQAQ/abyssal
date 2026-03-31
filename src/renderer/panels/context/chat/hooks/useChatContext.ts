@@ -9,6 +9,7 @@ import { useCallback } from 'react';
 import { useAppStore } from '../../../../core/store';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
 import { useEffectiveSource } from '../../engine/useEffectiveSource';
+import { contextSourceKey } from '../../engine/contextSourceKey';
 import type { ChatContext } from '../../../../../shared-types/ipc';
 
 export function useChatContext(): () => ChatContext {
@@ -20,6 +21,7 @@ export function useChatContext(): () => ChatContext {
 
     const context: ChatContext = {
       activeView: appState.activeView,
+      contextKey: contextSourceKey(source),
     };
 
     // 从当前 ContextSource 注入实体信息
@@ -29,6 +31,9 @@ export function useChatContext(): () => ChatContext {
         if (source.originView === 'reader') {
           context.pdfPage = readerState.currentPage;
         }
+        break;
+      case 'papers':
+        context.selectedPaperIds = source.paperIds;
         break;
       case 'concept':
         context.selectedConceptId = source.conceptId;
@@ -53,6 +58,9 @@ export function useChatContext(): () => ChatContext {
         break;
       case 'note':
         // note context — no specific ChatContext field to populate
+        break;
+      case 'allSelected':
+        // allSelected context — library-wide, no specific entity to inject
         break;
       case 'empty':
         break;

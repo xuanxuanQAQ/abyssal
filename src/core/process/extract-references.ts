@@ -66,8 +66,9 @@ function splitEntries(lines: string[], mode: SplitMode): string[] {
       case 'indent': {
         // 悬挂缩进检测：前导空白 = 0 的行起始新条目。
         // 注意：mupdf.js preserve-whitespace 模式下物理空格数可能不稳定（±1-2 空格）。
-        // TODO: 更准确的实现应使用 mupdf.js 结构化文本的 x0 坐标进行聚类分析，
-        //   而非依赖物理空格数。当前使用简单的 ≥2 空格阈值作为折中。
+        // 当前使用简单的 ≥2 空格阈值作为折中。
+        // 更准确方案：接受可选的 x0Coords: Map<number, number[]> 参数（来自 stext.walk 的
+        // origin 坐标），对每行首字符的 x0 做 K-means 或简单阈值聚类，动态判定缩进层级。
         return line.length > 0 && !/^\s{2,}/.test(line);
       }
     }
@@ -126,14 +127,23 @@ function extractFields(rawText: string): Pick<ExtractedReference, 'doi' | 'year'
 export function extractReferences(fullText: string): ExtractedReference[] {
   const lines = fullText.split('\n');
 
-  // §3.2: 区域定位（从末尾向前扫描）
+  // §3.2: 区域定位（两轮从末尾向前扫描，Fix #9: 覆盖短论文）
   let refStartLine: number | null = null;
-  const scanLimit = Math.floor(lines.length * 0.7);
 
-  for (let i = lines.length - 1; i >= scanLimit; i--) {
+  // 第一轮：从末尾到 70%
+  for (let i = lines.length - 1; i >= Math.floor(lines.length * 0.7); i--) {
     if (REFERENCES_HEAD_RE.test(lines[i]!.trim())) {
-      refStartLine = i + 1; // 标志行的下一行
+      refStartLine = i + 1;
       break;
+    }
+  }
+  // 第二轮：从 70% 到 40%（覆盖短论文）
+  if (refStartLine === null) {
+    for (let i = Math.floor(lines.length * 0.7) - 1; i >= Math.floor(lines.length * 0.4); i--) {
+      if (i >= 0 && REFERENCES_HEAD_RE.test(lines[i]!.trim())) {
+        refStartLine = i + 1;
+        break;
+      }
     }
   }
 

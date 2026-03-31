@@ -16,6 +16,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface ConceptCoverageBarProps {
   conceptName: string;
@@ -47,12 +48,13 @@ export function ConceptCoverageBar({
   total,
   onSearchRelated,
 }: ConceptCoverageBarProps) {
+  const { t } = useTranslation();
   const segments: Segment[] = [
-    { count: synthesized, color: 'var(--success)', label: 'Synthesized', opacity: 1 },
-    { count: analyzed, color: 'var(--accent-color)', label: 'Analyzed', opacity: 1 },
-    { count: acquired, color: 'var(--warning)', label: 'Acquired', opacity: 1 },
-    { count: pending, color: 'var(--text-muted)', label: 'Pending', opacity: 1 },
-    { count: excluded, color: 'var(--danger)', label: 'Excluded', opacity: 0.4 },
+    { count: synthesized, color: 'var(--success)', label: t('analysis.coverage.synthesized'), opacity: 1 },
+    { count: analyzed, color: 'var(--accent-color)', label: t('analysis.coverage.analyzed'), opacity: 1 },
+    { count: acquired, color: 'var(--warning)', label: t('analysis.coverage.acquired'), opacity: 1 },
+    { count: pending, color: 'var(--text-muted)', label: t('analysis.coverage.pending'), opacity: 1 },
+    { count: excluded, color: 'var(--danger)', label: t('analysis.coverage.excluded'), opacity: 0.4 },
   ];
 
   const nonExcludedTotal = synthesized + analyzed + acquired + pending;
@@ -82,8 +84,8 @@ export function ConceptCoverageBar({
             <span
               title={
                 total === 0
-                  ? 'No coverage -- search for related papers'
-                  : 'Low coverage (fewer than 3 papers)'
+                  ? t('analysis.coverage.noCoverage')
+                  : t('analysis.coverage.lowCoverage')
               }
               style={{ fontSize: 14, lineHeight: 1 }}
             >
@@ -110,13 +112,21 @@ export function ConceptCoverageBar({
         </div>
 
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          {total} paper{total !== 1 ? 's' : ''}
+          {total} {total !== 1 ? t('analysis.coverage.paperPlural') : t('analysis.coverage.paperSingular')}
         </span>
       </div>
 
       {/* Stacked bar */}
       {total > 0 ? (
         <div
+          role="progressbar"
+          aria-valuenow={Math.round(((synthesized + analyzed) / total) * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={t('analysis.coverage.progressLabel', {
+            concept: conceptName,
+            defaultValue: `${conceptName} coverage`,
+          })}
           style={{
             display: 'flex',
             width: '100%',
@@ -210,7 +220,7 @@ export function ConceptCoverageBar({
             cursor: 'pointer',
           }}
         >
-          Search Related Papers
+          {t('analysis.coverage.searchRelated')}
         </button>
       )}
     </div>

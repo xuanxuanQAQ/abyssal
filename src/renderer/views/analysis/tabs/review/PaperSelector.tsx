@@ -5,6 +5,8 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAuthorDisplayThreshold, formatAuthorShort } from '../../../../core/hooks/useAuthorDisplay';
 
 interface PaperSelectorProps {
   papers: Array<{
@@ -18,15 +20,19 @@ interface PaperSelectorProps {
   onSelect: (id: string) => void;
 }
 
-function formatLabel(paper: PaperSelectorProps['papers'][number]): string {
-  const firstAuthor = paper.authors[0]?.name ?? 'Unknown';
-  const authorSuffix = paper.authors.length > 1 ? ' et al.' : '';
+function formatLabel(paper: PaperSelectorProps['papers'][number], threshold: number): string {
+  const authorStr = formatAuthorShort(
+    paper.authors.map((a) => a.name),
+    threshold,
+  ) || 'Unknown';
   const titleTruncated =
     paper.title.length > 60 ? paper.title.slice(0, 57) + '...' : paper.title;
-  return `${firstAuthor}${authorSuffix} ${paper.year} \u2014 ${titleTruncated}`;
+  return `${authorStr} ${paper.year} \u2014 ${titleTruncated}`;
 }
 
 export function PaperSelector({ papers, selectedId, onSelect }: PaperSelectorProps) {
+  const { t } = useTranslation();
+  const threshold = useAuthorDisplayThreshold();
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <label
@@ -38,7 +44,7 @@ export function PaperSelector({ papers, selectedId, onSelect }: PaperSelectorPro
           whiteSpace: 'nowrap',
         }}
       >
-        Paper:
+        {t('analysis.review.paperLabel')}
       </label>
       <select
         id="paper-review-selector"
@@ -58,7 +64,7 @@ export function PaperSelector({ papers, selectedId, onSelect }: PaperSelectorPro
       >
         {papers.map((p) => (
           <option key={p.id} value={p.id}>
-            {formatLabel(p)}
+            {formatLabel(p, threshold)}
           </option>
         ))}
       </select>

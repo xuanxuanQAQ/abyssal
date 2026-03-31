@@ -6,6 +6,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Wrench, Loader, CheckCircle, XCircle, ChevronRight, ChevronDown } from 'lucide-react';
 import type { ToolCallInfo } from '../../../../shared-types/models';
 
@@ -16,6 +17,7 @@ interface ToolCallCardProps {
 export const ToolCallCard = React.memo(function ToolCallCard({
   toolCall,
 }: ToolCallCardProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
   const statusIcon = (() => {
@@ -39,13 +41,15 @@ export const ToolCallCard = React.memo(function ToolCallCard({
   const statusText = (() => {
     switch (toolCall.status) {
       case 'pending':
-        return '等待中…';
+        return t('context.chat.toolCall.pending');
       case 'running':
-        return '执行中…';
+        return t('context.chat.toolCall.running');
       case 'completed':
-        return `完成${toolCall.duration ? ` (${toolCall.duration}ms)` : ''}`;
+        return toolCall.duration
+          ? t('context.chat.toolCall.completedWithDuration', { duration: toolCall.duration })
+          : t('context.chat.toolCall.completed');
       case 'error':
-        return '失败';
+        return t('context.chat.toolCall.error');
     }
   })();
 
@@ -92,7 +96,7 @@ export const ToolCallCard = React.memo(function ToolCallCard({
             borderTop: '1px solid var(--border-subtle)',
           }}
         >
-          <div style={{ marginBottom: 4, color: 'var(--text-muted)' }}>参数:</div>
+          <div style={{ marginBottom: 4, color: 'var(--text-muted)' }}>{t('context.chat.toolCall.params')}:</div>
           <pre
             style={{
               margin: 0,
@@ -111,7 +115,7 @@ export const ToolCallCard = React.memo(function ToolCallCard({
           {toolCall.output && (
             <>
               <div style={{ marginTop: 8, marginBottom: 4, color: 'var(--text-muted)' }}>
-                结果:
+                {t('context.chat.toolCall.result')}:
               </div>
               <pre
                 style={{

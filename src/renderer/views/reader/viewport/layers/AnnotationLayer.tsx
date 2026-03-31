@@ -115,7 +115,6 @@ const AnnotationLayer = React.memo(function AnnotationLayer(
               top: rect.y,
               width: rect.width,
               height: rect.height,
-              mixBlendMode: 'multiply',
               background: rect.color,
               pointerEvents: 'auto',
               cursor: 'pointer',

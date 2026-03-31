@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import type { HeatmapCell } from '../../../../../../shared-types/models';
 import type { AdjudicationStatus, RelationType } from '../../../../../../shared-types/enums';
+import { cellKey } from '../../../shared/cellKey';
 import {
   CELL_WIDTH,
   CELL_HEIGHT,
@@ -67,6 +68,10 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
   const anchorScrollLeftRef = useRef(0);
   const anchorScrollTopRef = useRef(0);
 
+  const hoveredCellRef = useRef(hoveredCell);
+  const selectedCellRef = useRef(selectedCell);
+  const keyboardFocusRef = useRef(keyboardFocus);
+
   // Canvas dimensions include overscan buffer
   const canvasWidth = Math.ceil(viewportWidth * OVERSCAN_FACTOR);
   const canvasHeight = Math.ceil(viewportHeight * OVERSCAN_FACTOR);
@@ -90,6 +95,15 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   }, []);
+
+  const isDarkRef = useRef(isDark);
+  isDarkRef.current = isDark;
+
+  useEffect(() => {
+    hoveredCellRef.current = hoveredCell;
+    selectedCellRef.current = selectedCell;
+    keyboardFocusRef.current = keyboardFocus;
+  });
 
   /**
    * Convert a cell grid position (row, col) to canvas-local pixel coordinates,
@@ -147,7 +161,7 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
       // Draw visible cells
       for (let r = startRow; r <= endRow; r++) {
         for (let c = startCol; c <= endCol; c++) {
-          const lookupKey = `${r}:${c}`;
+          const lookupKey = cellKey(r, c);
           const cell = cellLookup.get(lookupKey);
           if (!cell) continue;
 
@@ -176,20 +190,20 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
       }
 
       // Draw crosshair for hovered cell
-      if (hoveredCell) {
-        const { cx, cy } = cellToCanvas(hoveredCell.row, hoveredCell.col);
-        drawCrosshair(ctx, canvasWidth, canvasHeight, cx, cy, isDark);
+      if (hoveredCellRef.current) {
+        const { cx, cy } = cellToCanvas(hoveredCellRef.current.row, hoveredCellRef.current.col);
+        drawCrosshair(ctx, canvasWidth, canvasHeight, cx, cy, isDarkRef.current);
       }
 
       // Draw selection border
-      if (selectedCell) {
-        const { cx, cy } = cellToCanvas(selectedCell.row, selectedCell.col);
+      if (selectedCellRef.current) {
+        const { cx, cy } = cellToCanvas(selectedCellRef.current.row, selectedCellRef.current.col);
         drawSelectionBorder(ctx, cx, cy);
       }
 
       // Draw keyboard focus ring
-      if (keyboardFocus) {
-        const { cx, cy } = cellToCanvas(keyboardFocus.row, keyboardFocus.col);
+      if (keyboardFocusRef.current) {
+        const { cx, cy } = cellToCanvas(keyboardFocusRef.current.row, keyboardFocusRef.current.col);
         drawKeyboardFocus(ctx, cx, cy);
       }
 
@@ -208,10 +222,6 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
       cellToCanvas,
       getAdjudicationStatus,
       showGrid,
-      hoveredCell,
-      selectedCell,
-      keyboardFocus,
-      isDark,
     ],
   );
 
@@ -256,6 +266,11 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
   return (
     <canvas
       ref={canvasRef}
+      role="grid"
+      aria-label="概念-论文映射热力图"
+      aria-rowcount={numConcepts}
+      aria-colcount={numPapers}
+      tabIndex={0}
       style={{
         position: 'sticky',
         top: 0,

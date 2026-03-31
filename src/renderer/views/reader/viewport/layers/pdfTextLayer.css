@@ -1,0 +1,88 @@
+/**
+ * pdf.js TextLayer styles — extracted from pdfjs-dist/web/pdf_viewer.css
+ *
+ * These rules position each text span with absolute positioning,
+ * matching the font metrics and transform that pdf.js computes
+ * from the PDF's internal font descriptors. Without them the
+ * transparent selection layer drifts from the canvas rendering.
+ */
+
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+}
+
+.textLayer.highlighting {
+  touch-action: none;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer span[role="img"] {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+/* ── Selection highlight ── */
+
+.textLayer ::-moz-selection {
+  background: rgba(59, 130, 246, 0.55);
+}
+
+.textLayer ::selection {
+  background: rgba(59, 130, 246, 0.55);
+}
+
+.textLayer br::-moz-selection {
+  background: transparent;
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+/* ── End-of-content sentinel (enables drag-to-select past last line) ── */
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}

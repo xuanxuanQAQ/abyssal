@@ -5,12 +5,14 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Send, X } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
 import { useCreateMemo } from '../../../core/ipc/hooks/useMemos';
 
 export function MemoQuickInput() {
+  const { t } = useTranslation();
   const open = useAppStore((s) => s.memoQuickInputOpen);
   const setOpen = useAppStore((s) => s.setMemoQuickInputOpen);
   const activeView = useAppStore((s) => s.activeView);
@@ -71,14 +73,14 @@ export function MemoQuickInput() {
           }}
         >
           <Dialog.Title style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12 }}>
-            快速笔记
+            {t('notes.memo.quickNote')}
           </Dialog.Title>
 
           <textarea
             ref={textareaRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="记录你的想法..."
+            placeholder={t('notes.memo.recordThought')}
             rows={4}
             style={{
               width: '100%', resize: 'vertical', border: '1px solid var(--border-subtle)',
@@ -107,7 +109,7 @@ export function MemoQuickInput() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
             <Dialog.Close asChild>
               <button style={{ padding: '6px 14px', border: '1px solid var(--border-subtle)', borderRadius: 4, background: 'transparent', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}>
-                取消
+                {t('common.cancel')}
               </button>
             </Dialog.Close>
             <button
@@ -120,7 +122,7 @@ export function MemoQuickInput() {
                 display: 'flex', alignItems: 'center', gap: 4,
               }}
             >
-              <Send size={12} /> 提交 (Cmd+Enter)
+              <Send size={12} /> {t('notes.memo.submitHint')}
             </button>
           </div>
 

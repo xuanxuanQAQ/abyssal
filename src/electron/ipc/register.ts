@@ -51,37 +51,61 @@ class IPCTimeoutError extends Error {
  *
  * This prevents contextBridge Structured Clone from silently corrupting data.
  */
-function sanitizeForIPC(value: unknown): unknown {
+function sanitizeForIPC(value: unknown, cache: WeakMap<object, unknown> = new WeakMap()): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value !== 'object') return value; // primitives are safe
 
-  // Date → ISO string
-  if (value instanceof Date) return value.toISOString();
+  // Check cache — avoid re-traversing the same object reference
+  const cached = cache.get(value as object);
+  if (cached !== undefined) return cached;
 
-  // Map → plain object
+  // Date → ISO string
+  if (value instanceof Date) {
+    const result = value.toISOString();
+    cache.set(value as object, result);
+    return result;
+  }
+
   if (value instanceof Map) {
+    // Map → plain object
     const obj: Record<string, unknown> = {};
-    for (const [k, v] of value) obj[String(k)] = sanitizeForIPC(v);
+    cache.set(value as object, obj); // set early for circular refs
+    for (const [k, v] of value) obj[String(k)] = sanitizeForIPC(v, cache);
     return obj;
   }
 
-  // Set → array
-  if (value instanceof Set) return Array.from(value).map(sanitizeForIPC);
+  if (value instanceof Set) {
+    // Set → array
+    const arr: unknown[] = [];
+    cache.set(value as object, arr);
+    for (const item of value) arr.push(sanitizeForIPC(item, cache));
+    return arr;
+  }
 
-  // Array
-  if (Array.isArray(value)) return value.map(sanitizeForIPC);
+  if (Array.isArray(value)) {
+    const arr = new Array(value.length);
+    cache.set(value as object, arr);
+    for (let i = 0; i < value.length; i++) arr[i] = sanitizeForIPC(value[i], cache);
+    return arr;
+  }
 
-  // Float32Array / other TypedArrays → regular array
   if (ArrayBuffer.isView(value) && !(value instanceof Uint8Array)) {
+    // Float32Array / other TypedArrays → regular array
     return Array.from(value as unknown as ArrayLike<number>);
   }
 
-  // Plain object or class instance → strip to plain object
-  const result: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (v !== undefined) result[k] = sanitizeForIPC(v);
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+    // Uint8Array / ArrayBuffer — pass through for Structured Clone
+    return value;
   }
-  return result;
+
+  // Plain object or class instance → strip to plain object
+  const obj: Record<string, unknown> = {};
+  cache.set(value as object, obj);
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v !== undefined) obj[k] = sanitizeForIPC(v, cache);
+  }
+  return obj;
 }
 
 // ─── wrapHandler ───
@@ -111,9 +135,11 @@ export function wrapHandler<T>(
       argsPreview: JSON.stringify(args).slice(0, 200),
     });
 
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new IPCTimeoutError(timeoutMs)), timeoutMs);
+        timerId = setTimeout(() => reject(new IPCTimeoutError(timeoutMs)), timeoutMs);
       });
 
       const result = await Promise.race([
@@ -121,18 +147,19 @@ export function wrapHandler<T>(
         timeoutPromise,
       ]);
 
+      clearTimeout(timerId);
+
       logger.debug(`IPC response: ${channel}`, {
         durationMs: Date.now() - startTime,
       });
 
       // Sanitize result to plain JSON-safe data.
-      // Strips Date objects (→ ISO strings), class instances (→ plain objects),
-      // undefined values, and any non-serializable types that would break
-      // Electron's contextBridge Structured Clone.
       const safeData = sanitizeForIPC(result);
 
       return { ok: true, data: safeData as T };
     } catch (error: unknown) {
+      clearTimeout(timerId);
+
       if (error instanceof IPCTimeoutError) {
         logger.warn(`IPC timeout: ${channel}`, { timeoutMs });
         return {
@@ -162,17 +189,20 @@ export function wrapHandler<T>(
         };
       }
 
-      // Unexpected error
+      // Unexpected error — propagate custom code/recoverable if present
       const err = error as Error;
+      const errCode = typeof (err as any).code === 'string' ? (err as any).code : 'INTERNAL_ERROR';
+      const errRecoverable = typeof (err as any).recoverable === 'boolean' ? (err as any).recoverable : false;
       logger.error(`IPC unexpected error: ${channel}`, err, {
         durationMs: Date.now() - startTime,
       });
       return {
         ok: false,
         error: {
-          code: 'INTERNAL_ERROR',
+          code: errCode,
           message: err.message ?? 'Unknown error',
-          recoverable: false,
+          recoverable: errRecoverable,
+          context: (err as any).context,
         },
       };
     }
@@ -184,7 +214,7 @@ export function wrapHandler<T>(
 /**
  * Register a single IPC request-response channel with wrapHandler.
  * Prefer `typedHandler()` for contract-driven channels.
- * Used by non-contract handlers (acquire, bibliography, process).
+ * Used by non-contract handlers (acquire, etc.).
  */
 export function registerHandler<T>(
   channel: string,
@@ -227,12 +257,10 @@ export function typedHandler<C extends IpcChannel>(
 import { registerPapersHandlers } from './papers-handler';
 import { registerSearchHandlers } from './search-handler';
 import { registerAcquireHandlers } from './acquire-handler';
-import { registerProcessHandlers } from './process-handler';
 import { registerConceptsHandlers } from './concepts-handler';
 import { registerMappingsHandlers } from './mappings-handler';
 import { registerAnnotationsHandlers } from './annotations-handler';
 import { registerRagHandlers } from './rag-handler';
-import { registerBibliographyHandlers } from './bibliography-handler';
 import { registerWorkflowsHandlers } from './workflows-handler';
 import { registerAgentHandlers } from './agent-handler';
 import { registerArticlesHandlers } from './articles-handler';
@@ -241,7 +269,11 @@ import { registerAdvisoryHandlers } from './advisory-handler';
 import { registerMemosHandlers } from './memos-handler';
 import { registerNotesHandlers } from './notes-handler';
 import { registerConceptSuggestionsHandlers } from './concept-suggestions-handler';
+import { registerSettingsHandlers } from './settings-handler';
 import { registerSystemHandlers } from './system-handler';
+import { registerTagsHandlers } from './tags-handler';
+import { registerWindowHandlers } from './window-handler';
+import { registerWorkspaceHandlers } from './workspace-handler';
 
 /**
  * Register all IPC handlers for all namespaces.
@@ -253,12 +285,10 @@ export function registerAllHandlers(ctx: AppContext): void {
   registerPapersHandlers(ctx);
   registerSearchHandlers(ctx);
   registerAcquireHandlers(ctx);
-  registerProcessHandlers(ctx);
   registerConceptsHandlers(ctx);
   registerMappingsHandlers(ctx);
   registerAnnotationsHandlers(ctx);
   registerRagHandlers(ctx);
-  registerBibliographyHandlers(ctx);
   registerWorkflowsHandlers(ctx);
   registerAgentHandlers(ctx);
   registerArticlesHandlers(ctx);
@@ -267,7 +297,11 @@ export function registerAllHandlers(ctx: AppContext): void {
   registerMemosHandlers(ctx);
   registerNotesHandlers(ctx);
   registerConceptSuggestionsHandlers(ctx);
+  registerSettingsHandlers(ctx);
   registerSystemHandlers(ctx);
+  registerTagsHandlers(ctx);
+  registerWindowHandlers(ctx);
+  registerWorkspaceHandlers(ctx);
 
-  ctx.logger.info('IPC handlers registered', { namespaces: 18 });
+  ctx.logger.info('IPC handlers registered', { namespaces: 20 });
 }

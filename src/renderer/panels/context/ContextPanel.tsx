@@ -9,6 +9,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ContextHeader } from './ContextHeader';
 import { ChatDock } from './chat/ChatDock';
@@ -26,7 +27,8 @@ import { WritingSectionPane } from './panes/WritingSectionPane';
 import { GraphPaperNodePane } from './panes/GraphPaperNodePane';
 import { GraphConceptNodePane } from './panes/GraphConceptNodePane';
 import { NoteContextPane } from './panes/NoteContextPane';
-import { EmptyPane } from './panes/EmptyPane';
+import { MultiPaperPane } from './panes/MultiPaperPane';
+import { AllPapersSummaryPane } from './panes/AllPapersSummaryPane';
 
 import { AdvisoryNotifications } from './advisory/AdvisoryNotifications';
 import { ContextPanelErrorBoundary } from '../../app/ErrorBoundaries';
@@ -44,6 +46,10 @@ function renderContentPane(source: ContextSource): React.ReactNode {
       ) : (
         <LibraryPaperPane paperId={source.paperId} />
       );
+    case 'papers':
+      return <MultiPaperPane paperIds={source.paperIds} />;
+    case 'allSelected':
+      return <AllPapersSummaryPane excludedCount={source.excludedCount} />;
     case 'concept':
       return <ConceptPane conceptId={source.conceptId} />;
     case 'mapping':
@@ -72,20 +78,29 @@ function renderContentPane(source: ContextSource): React.ReactNode {
         <GraphConceptNodePane nodeId={source.nodeId} />
       );
     case 'empty':
-      return <EmptyPane />;
+      return null; // ContextBody is hidden when empty — handled by EmptyContextHint
   }
 }
 
 export function ContextPanel() {
+  const { t } = useTranslation();
   const effectiveSource = useEffectiveSource();
-  const transitionKey = contextSourceKey(effectiveSource);
+  // 多论文模式下 transitionKey 固定为 'papers'，
+  // 避免每增减一篇论文触发整面板 crossfade 动画。
+  // 列表增删动画由 MultiPaperPane 内部处理。
+  const transitionKey = effectiveSource.type === 'papers'
+    ? 'papers'
+    : contextSourceKey(effectiveSource);
   const chatDockMode = useChatStore((s) => s.chatDockMode);
   const isFullscreen = chatDockMode === 'fullscreen';
+  const isEmpty = effectiveSource.type === 'empty';
+
+  const showContextBody = !isFullscreen && !isEmpty;
 
   return (
     <div
       role="complementary"
-      aria-label="上下文面板"
+      aria-label={t('context.title')}
       style={{
         height: '100%',
         backgroundColor: 'var(--bg-surface-low)',
@@ -101,26 +116,31 @@ export function ContextPanel() {
       {/* v1.2 Advisory Agent 建议通知 */}
       <AdvisoryNotifications />
 
+      {/* 空状态提示条 — 仅入场动画 */}
+      {isEmpty && !isFullscreen && <EmptyContextHint />}
+
       {/* §1.2 ContextBody + ChatDock 空间竞争 */}
       <PanelGroup
         direction="vertical"
         autoSaveId="abyssal-context-body-chat"
         style={{ flex: 1 }}
       >
-        {/* ContextBody — ChatDock 全屏时条件渲染移除 */}
-        {!isFullscreen && (
+        {/* ContextBody — 有实体时显示，入场淡入 */}
+        {showContextBody && (
           <>
             <Panel
               id="context-body"
-              minSize={20}
-              defaultSize={60}
+              minSize={15}
+              defaultSize={35}
               order={1}
             >
-              <ContextPanelErrorBoundary>
-                <CrossfadeTransition transitionKey={transitionKey}>
-                  {renderContentPane(effectiveSource)}
-                </CrossfadeTransition>
-              </ContextPanelErrorBoundary>
+              <div className="ctx-body-enter" style={{ height: '100%' }}>
+                <ContextPanelErrorBoundary>
+                  <CrossfadeTransition transitionKey={transitionKey}>
+                    {renderContentPane(effectiveSource)}
+                  </CrossfadeTransition>
+                </ContextPanelErrorBoundary>
+              </div>
             </Panel>
 
             <PanelResizeHandle className="panel-resize-handle" />
@@ -130,9 +150,9 @@ export function ContextPanel() {
         {/* ChatDock */}
         <Panel
           id="chat-dock"
-          minSize={isFullscreen ? 100 : 10}
-          defaultSize={isFullscreen ? 100 : 40}
-          collapsible={!isFullscreen}
+          minSize={isFullscreen || isEmpty ? 100 : 20}
+          defaultSize={isFullscreen || isEmpty ? 100 : 65}
+          collapsible={!isFullscreen && !isEmpty}
           order={2}
         >
           <ContextPanelErrorBoundary>
@@ -140,6 +160,51 @@ export function ContextPanel() {
           </ContextPanelErrorBoundary>
         </Panel>
       </PanelGroup>
+    </div>
+  );
+}
+
+// ─── EmptyContextHint ───
+
+import { Search, BookOpen, FileText, BarChart3, Network } from 'lucide-react';
+
+const hintItems = [
+  { icon: <BookOpen size={11} />, label: 'Library', color: '#60a5fa' },
+  { icon: <FileText size={11} />, label: 'Reader', color: '#34d399' },
+  { icon: <BarChart3 size={11} />, label: 'Analysis', color: '#f472b6' },
+  { icon: <Network size={11} />, label: 'Graph', color: '#a78bfa' },
+];
+
+function EmptyContextHint() {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="ctx-hint-enter"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 12px',
+        flexShrink: 0,
+        borderBottom: '1px solid var(--border-subtle)',
+        backgroundColor: 'var(--bg-surface)',
+        fontSize: 11,
+        color: 'var(--text-muted)',
+      }}
+    >
+      <Search size={12} style={{ opacity: 0.5, flexShrink: 0 }} />
+      <span>{t('context.selectEntity')}</span>
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+        {hintItems.map((item) => (
+          <span
+            key={item.label}
+            title={item.label}
+            style={{ color: item.color, display: 'flex', opacity: 0.6 }}
+          >
+            {item.icon}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

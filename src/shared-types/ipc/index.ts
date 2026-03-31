@@ -4,78 +4,13 @@ import type {
   FulltextStatus,
   ViewType,
   WorkflowType,
-  AdjudicationDecision,
   PipelineStatus,
-  ExportFormat,
-  Maturity,
 } from '../enums';
 
 // Re-export ViewType for convenience
 export type { ViewType } from '../enums';
 
-import type {
-  Paper,
-  Concept,
-  ConceptFramework,
-  AffectedMappings,
-  ConceptMapping,
-  HeatmapMatrix,
-  Annotation,
-  NewAnnotation,
-  ArticleOutline,
-  SectionNode,
-  SectionOrder,
-  SectionContent,
-  SectionPatch,
-  SectionVersion,
-  GraphData,
-  RAGResult,
-  WritingContext,
-  AppConfig,
-  ProjectInfo,
-  ImportResult,
-  SnapshotInfo,
-  PDFAnnotation,
-  LayerVisibility,
-  ChatMessageRecord,
-  ChatSessionSummary,
-  PaginationOpts,
-  Tag,
-  PaperCounts,
-  DiscoverRun,
-  ConflictingMappings,
-
-  NewConceptDef,
-  MappingsToReassign,
-  MappingAssignment,
-  RetrievalResult,
-  Recommendation,
-  CleanupPolicy,
-  ProjectSetupConfig,
-  // v2.0
-  Memo,
-  NewMemo,
-  MemoFilter,
-  NoteMeta,
-  NewNote,
-  NoteFilter,
-  SaveNoteResult,
-  SuggestedConcept,
-  ConceptDraft,
-  DefinitionUpdateResult,
-  ConceptParentUpdateResult,
-  MergeResult,
-  SplitResult,
-  MergeConflictResolution,
-  HistoryEntry,
-  AdvisoryNotification,
-  GlobalSearchResult,
-  ConceptStats,
-  SuggestedConceptsStats,
-  WorkspaceInfo,
-  RecentWorkspaceEntry,
-  CurrentWorkspaceInfo,
-} from '../models';
+import type { LayerVisibility } from '../models';
 
 // ═══ Filter / Query 参数 ═══
 
@@ -113,6 +48,13 @@ export interface WorkflowConfig {
 
 // ═══ 事件载荷 ═══
 
+/** 子步骤状态（用于 acquire cascade 等多阶段任务的细粒度进度） */
+export interface SubstepInfo {
+  name: string;
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+  detail?: string;
+}
+
 export interface PipelineProgressEvent {
   taskId: string;
   workflow: WorkflowType;
@@ -121,6 +63,8 @@ export interface PipelineProgressEvent {
   progress: { current: number; total: number };
   entityId?: string;
   error?: { code: string; message: string };
+  /** 当前论文的子步骤进度（如 acquire cascade 各数据源状态） */
+  substeps?: SubstepInfo[];
 }
 
 export interface StreamChunkEvent {
@@ -138,12 +82,33 @@ export interface StreamChunkEvent {
 
 export interface ChatContext {
   activeView: ViewType;
+  contextKey: string;
   selectedPaperId?: string;
+  /** 多论文上下文（Library 多选时） */
+  selectedPaperIds?: string[];
   selectedConceptId?: string;
   selectedSectionId?: string;
   pdfPage?: number;
 }
 
+/**
+ * Agent stream chunk — canonical type for all agent/chat streaming events.
+ *
+ * Discriminated union on `type`:
+ * - text_delta: incremental text content
+ * - tool_use_start: tool invocation started
+ * - tool_use_result: tool returned result
+ * - done: conversation turn complete
+ * - error: agent error
+ */
+export type AgentStreamEvent =
+  | { type: 'text_delta'; conversationId: string; delta: string }
+  | { type: 'tool_use_start'; conversationId: string; toolName: string; args: Record<string, unknown> }
+  | { type: 'tool_use_result'; conversationId: string; toolName: string; result: string }
+  | { type: 'done'; conversationId: string; fullText: string; usage: { inputTokens: number; outputTokens: number } }
+  | { type: 'error'; conversationId: string; code: string; message: string };
+
+/** @deprecated Use AgentStreamEvent instead */
 export interface ChatResponseEvent {
   sessionId: string;
   chunk: string;
@@ -176,6 +141,39 @@ export interface SectionSearchResult {
   snippet: string;
 }
 
+// ═══ Acquire 状态信息 ═══
+
+export interface AcquireStatusInfo {
+  fulltextStatus: import('../enums').FulltextStatus;
+  fulltextPath: string | null;
+  fulltextSource: string | null;
+  failureReason: string | null;
+  failureCount: number;
+}
+
+// ═══ 机构访问 Session 状态 ═══
+
+export interface InstitutionalSessionStatus {
+  loggedIn: boolean;
+  institutionId: string | null;
+  institutionName: string | null;
+  lastLogin: string | null;
+  activeDomains: string[];
+}
+
+export interface InstitutionListItem {
+  id: string;
+  name: string;
+  nameEn: string;
+  publishers: string[];
+}
+
+export interface InstitutionalLoginResult {
+  success: boolean;
+  cookieCount: number;
+  publisher: string;
+}
+
 // ═══ 错误结构体 ═══
 
 /**
@@ -194,218 +192,6 @@ export interface AbyssalIPCError {
 
 export type UnsubscribeFn = () => void;
 
-// ═══ AbyssalAPI 接口定义 ═══
-// TODO: Derive this interface from IpcContract automatically.
-// For now it's kept hand-written for backward compatibility with renderer code.
+// ═══ AbyssalAPI — 从 IPC Contract 自动推导 ═══
 
-export interface AbyssalAPI {
-  db: {
-    papers: {
-      list(filter?: PaperFilter): Promise<Paper[]>;
-      get(id: string): Promise<Paper | null>;
-      update(id: string, patch: Partial<Paper>): Promise<void>;
-      batchUpdateRelevance(ids: string[], rel: Relevance): Promise<void>;
-      importBibtex(content: string): Promise<ImportResult>;
-      getCounts(): Promise<PaperCounts>;
-      delete(id: string): Promise<void>;
-      batchDelete(ids: string[]): Promise<void>;
-    };
-    tags: {
-      list(): Promise<Tag[]>;
-      create(name: string, parentId?: string): Promise<Tag>;
-      update(id: string, patch: Partial<Tag>): Promise<void>;
-      delete(id: string): Promise<void>;
-    };
-    discoverRuns: {
-      list(): Promise<DiscoverRun[]>;
-    };
-    concepts: {
-      list(): Promise<Concept[]>;
-      getFramework(): Promise<ConceptFramework>;
-      updateFramework(fw: ConceptFramework): Promise<AffectedMappings>;
-      search(query: string): Promise<Concept[]>;
-      /** v2.0 创建概念 */
-      create(draft: ConceptDraft): Promise<Concept | null>;
-      /** v2.0 获取统计 */
-      getStats(conceptId: string): Promise<ConceptStats>;
-      /** v2.0 更新成熟度 */
-      updateMaturity(conceptId: string, maturity: Maturity): Promise<{ historyEntry: HistoryEntry }>;
-      /** v2.0 更新定义（含语义判定） */
-      updateDefinition(conceptId: string, newDefinition: string): Promise<DefinitionUpdateResult>;
-      /** v2.0 更新父节点（含环路检测） */
-      updateParent(conceptId: string, newParentId: string | null): Promise<ConceptParentUpdateResult>;
-      /** v2.0 获取演化历史 */
-      getHistory(conceptId: string): Promise<HistoryEntry[]>;
-      /** v2.0 合并（新 4 步） */
-      merge(retainId: string, mergeId: string, conflictResolutions: MergeConflictResolution[]): Promise<MergeResult>;
-      /** v2.0 拆分（新 3 步） */
-      split(originalId: string, concept1: ConceptDraft, concept2: ConceptDraft, mappingAssignments: MappingAssignment[]): Promise<SplitResult>;
-    };
-    /** v2.0 碎片笔记 */
-    memos: {
-      list(filter?: MemoFilter): Promise<Memo[]>;
-      get(memoId: string): Promise<Memo>;
-      create(memo: NewMemo): Promise<Memo>;
-      update(memoId: string, patch: Partial<Memo>): Promise<void>;
-      delete(memoId: string): Promise<void>;
-      upgradeToNote(memoId: string): Promise<{ noteId: string }>;
-      upgradeToConcept(memoId: string, draft: ConceptDraft): Promise<void>;
-      getByEntity(entityType: string, entityId: string): Promise<Memo[]>;
-    };
-    /** v2.0 结构化笔记 */
-    notes: {
-      list(filter?: NoteFilter): Promise<NoteMeta[]>;
-      get(noteId: string): Promise<NoteMeta | null>;
-      create(note: NewNote): Promise<{ noteId: string; filePath: string }>;
-      updateMeta(noteId: string, patch: Partial<NoteMeta>): Promise<NoteMeta>;
-      delete(noteId: string): Promise<void>;
-      upgradeToConcept(noteId: string, draft: ConceptDraft): Promise<void>;
-    };
-    /** v2.0 概念建议队列 */
-    suggestedConcepts: {
-      list(): Promise<SuggestedConcept[]>;
-      accept(suggestedId: string, draft: ConceptDraft): Promise<Concept>;
-      dismiss(suggestedId: string): Promise<void>;
-      restore(suggestedId: string): Promise<void>;
-      getStats(): Promise<SuggestedConceptsStats>;
-    };
-    mappings: {
-      getForPaper(paperId: string): Promise<ConceptMapping[]>;
-      getForConcept(conceptId: string): Promise<ConceptMapping[]>;
-      adjudicate(
-        mappingId: string,
-        decision: AdjudicationDecision,
-        revisedMapping?: Partial<ConceptMapping>
-      ): Promise<void>;
-      getHeatmapData(): Promise<HeatmapMatrix>;
-    };
-    annotations: {
-      listForPaper(paperId: string): Promise<Annotation[]>;
-      create(annotation: NewAnnotation): Promise<Annotation>;
-      update(id: string, patch: Partial<Annotation>): Promise<void>;
-      delete(id: string): Promise<void>;
-    };
-    articles: {
-      listOutlines(): Promise<ArticleOutline[]>;
-      create(title: string): Promise<ArticleOutline>;
-      update(articleId: string, patch: Partial<ArticleOutline>): Promise<void>;
-      getOutline(articleId: string): Promise<ArticleOutline>;
-      updateOutlineOrder(
-        articleId: string,
-        order: SectionOrder[]
-      ): Promise<void>;
-      getSection(sectionId: string): Promise<SectionContent>;
-      updateSection(sectionId: string, patch: SectionPatch): Promise<void>;
-      getSectionVersions(sectionId: string): Promise<SectionVersion[]>;
-      createSection(
-        articleId: string,
-        parentId: string | null,
-        sortIndex: number,
-        title?: string
-      ): Promise<SectionNode>;
-      deleteSection(sectionId: string): Promise<void>;
-      search(query: string): Promise<SectionSearchResult[]>;
-    };
-    relations: {
-      getGraph(filter?: GraphFilter): Promise<GraphData>;
-      /** v1.2 分页加载邻域 */
-      getNeighborhood(nodeId: string, depth: number, layers?: LayerVisibility): Promise<GraphData>;
-    };
-
-    chat: {
-      saveMessage(record: ChatMessageRecord): Promise<void>;
-      getHistory(contextKey: string, opts?: PaginationOpts): Promise<ChatMessageRecord[]>;
-      deleteSession(contextKey: string): Promise<void>;
-      listSessions(): Promise<ChatSessionSummary[]>;
-    };
-  };
-
-  rag: {
-    search(query: string, filter?: RAGFilter): Promise<RAGResult[]>;
-    /** v1.2 带质量报告的检索 */
-    searchWithReport(query: string, filter?: RAGFilter): Promise<RetrievalResult>;
-    getWritingContext(sectionId: string): Promise<WritingContext>;
-  };
-
-  pipeline: {
-    start(workflow: WorkflowType, config?: WorkflowConfig): Promise<string>;
-    cancel(taskId: string): Promise<void>;
-    onProgress(cb: (event: PipelineProgressEvent) => void): UnsubscribeFn;
-    onStreamChunk(cb: (event: StreamChunkEvent) => void): UnsubscribeFn;
-  };
-
-  chat: {
-    send(message: string, context?: ChatContext): Promise<string>;
-    onResponse(cb: (event: ChatResponseEvent) => void): UnsubscribeFn;
-  };
-
-  reader: {
-    /** §13.1 翻页事件推送（fire-and-forget，非 invoke） */
-    pageChanged(paperId: string, page: number): void;
-  };
-
-  fs: {
-    openPDF(paperId: string): Promise<{ path: string; buffer: ArrayBuffer }>;
-    savePDFAnnotations(
-      paperId: string,
-      annotations: PDFAnnotation[]
-    ): Promise<void>;
-    exportArticle(articleId: string, format: ExportFormat): Promise<string>;
-    importFiles(paths: string[]): Promise<ImportResult>;
-    createSnapshot(name: string): Promise<SnapshotInfo>;
-    restoreSnapshot(snapshotId: string): Promise<void>;
-    /** v1.2 快照列表（含磁盘占用） */
-    listSnapshots(): Promise<SnapshotInfo[]>;
-    /** v1.2 快照清理 */
-    cleanupSnapshots(policy: CleanupPolicy): Promise<void>;
-    /** v2.0 读取笔记文件内容 */
-    readNoteFile(noteId: string): Promise<string>;
-    /** v2.0 保存笔记文件内容 */
-    saveNoteFile(noteId: string, content: string): Promise<SaveNoteResult>;
-  };
-
-  /** v1.2 Advisory Agent */
-  advisory: {
-    getRecommendations(): Promise<Recommendation[]>;
-    execute(id: string): Promise<string>;
-    /** v2.0 事件驱动通知 */
-    getNotifications(): Promise<AdvisoryNotification[]>;
-    onNotificationsUpdated(cb: (notifications: AdvisoryNotification[]) => void): UnsubscribeFn;
-  };
-
-  app: {
-    getConfig(): Promise<AppConfig>;
-    updateConfig(patch: Partial<AppConfig>): Promise<void>;
-    getProjectInfo(): Promise<ProjectInfo>;
-    switchProject(projectPath: string): Promise<void>;
-    listProjects(): Promise<ProjectInfo[]>;
-    /** v1.2 创建项目 */
-    createProject(config: ProjectSetupConfig): Promise<ProjectInfo>;
-    /** v2.0 全局搜索（FTS5） */
-    globalSearch(query: string): Promise<GlobalSearchResult[]>;
-    /** v2.0 Pipeline 事件 */
-    onWorkflowComplete(cb: (event: { workflow: WorkflowType; taskId: string }) => void): UnsubscribeFn;
-    onSectionQuality(cb: (event: { sectionId: string; coverage: string; gaps: string[] }) => void): UnsubscribeFn;
-    window: {
-      minimize(): Promise<void>;
-      toggleMaximize(): Promise<boolean>;
-      close(): Promise<void>;
-      popOut(viewType: ViewType, entityId?: string): Promise<void>;
-      onMaximizedChange(cb: (event: WindowMaximizedEvent) => void): UnsubscribeFn;
-    };
-  };
-
-  /** v3.0 工作区管理 */
-  workspace: {
-    create(opts: { rootDir: string; name?: string; description?: string }): Promise<WorkspaceInfo>;
-    openDialog(): Promise<string | null>;
-    listRecent(): Promise<RecentWorkspaceEntry[]>;
-    getCurrent(): Promise<CurrentWorkspaceInfo | null>;
-    switch(workspacePath: string): Promise<void>;
-    removeRecent(workspacePath: string): Promise<void>;
-    togglePin(workspacePath: string): Promise<boolean>;
-    onSwitched(cb: (event: { rootDir: string; name: string }) => void): UnsubscribeFn;
-  };
-}
-
-// 工作区类型定义源在 ../models/index.ts
+export type { DerivedAbyssalAPI as AbyssalAPI } from './derive';

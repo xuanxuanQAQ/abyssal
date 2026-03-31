@@ -26,7 +26,7 @@ export function MemoStream({ filter = {} }: MemoStreamProps) {
   const virtualizer = useVirtualizer({
     count: allMemos.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 80,
+    estimateSize: () => 120,
     overscan: 5,
   });
 

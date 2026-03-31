@@ -27,6 +27,8 @@ export { generatePaperId, titleNormalize, normalizeDoi, normalizeArxivId } from 
 export { deduplicatePapers } from './dedup';
 export { detectBridgePapers } from './bridge-detection';
 export { rebuildAbstract } from './openalex';
+export { createWebSearchService, WebSearchService } from './web-search';
+export type { WebSearchResult, WebSearchBackend, WebSearchOptions, WebSearchServiceConfig } from './web-search';
 
 // ═══ SearchService ═══
 

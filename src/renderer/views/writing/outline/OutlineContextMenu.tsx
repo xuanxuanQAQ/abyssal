@@ -7,6 +7,7 @@
  */
 
 import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import {
   useCreateSection,
@@ -26,11 +27,11 @@ interface OutlineContextMenuProps {
   children: React.ReactNode;
 }
 
-const STATUS_OPTIONS: Array<{ value: SectionStatus; label: string }> = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'drafted', label: 'Drafted' },
-  { value: 'revised', label: 'Revised' },
-  { value: 'finalized', label: 'Finalized' },
+const STATUS_KEYS: Array<{ value: SectionStatus; key: string }> = [
+  { value: 'pending', key: 'writing.outline.statuses.pending' },
+  { value: 'drafted', key: 'writing.outline.statuses.drafted' },
+  { value: 'revised', key: 'writing.outline.statuses.revised' },
+  { value: 'finalized', key: 'writing.outline.statuses.finalized' },
 ];
 
 const menuContentStyle: React.CSSProperties = {
@@ -70,6 +71,7 @@ export function OutlineContextMenu({
   currentStatus,
   children,
 }: OutlineContextMenuProps) {
+  const { t } = useTranslation();
   const createSection = useCreateSection();
   const deleteSection = useDeleteSection();
   const updateSection = useUpdateSection();
@@ -124,7 +126,7 @@ export function OutlineContextMenu({
   const handleDelete = useCallback(() => {
     // Simple confirm guard; a proper Dialog can replace this later
     const confirmed = window.confirm(
-      `确认删除节 "${sectionTitle}" 吗？此操作不可撤销。`,
+      t('writing.outline.deleteConfirm', { title: sectionTitle }),
     );
     if (confirmed) {
       deleteSection.mutate({ sectionId, articleId });
@@ -138,26 +140,26 @@ export function OutlineContextMenu({
         <ContextMenu.Content style={menuContentStyle}>
           {/* AI */}
           <ContextMenu.Item style={menuItemStyle} onSelect={handleAIGenerate}>
-            AI 生成内容
+            {t('writing.outline.aiGenerate')}
           </ContextMenu.Item>
           <ContextMenu.Item
             style={menuItemStyle}
             onSelect={handleWritingInstructions}
           >
-            设置写作指令
+            {t('writing.outline.setInstruction')}
           </ContextMenu.Item>
 
           <ContextMenu.Separator style={separatorStyle} />
 
           {/* Structure */}
           <ContextMenu.Item style={menuItemStyle} onSelect={handleAddChild}>
-            添加子节
+            {t('writing.outline.addChild')}
           </ContextMenu.Item>
           <ContextMenu.Item style={menuItemStyle} onSelect={handleInsertAbove}>
-            在上方插入节
+            {t('writing.outline.insertAbove')}
           </ContextMenu.Item>
           <ContextMenu.Item style={menuItemStyle} onSelect={handleInsertBelow}>
-            在下方插入节
+            {t('writing.outline.insertBelow')}
           </ContextMenu.Item>
 
           <ContextMenu.Separator style={separatorStyle} />
@@ -167,23 +169,23 @@ export function OutlineContextMenu({
             style={menuItemStyle}
             onSelect={handleVersionHistory}
           >
-            查看版本历史
+            {t('writing.outline.viewHistory')}
           </ContextMenu.Item>
 
           {/* Status submenu */}
           <ContextMenu.Sub>
             <ContextMenu.SubTrigger style={menuItemStyle}>
-              设置状态 \u25B8
+              {t('writing.outline.setStatus')} &#x25B8;
             </ContextMenu.SubTrigger>
             <ContextMenu.Portal>
               <ContextMenu.SubContent style={menuContentStyle}>
-                {STATUS_OPTIONS.map((opt) => (
+                {STATUS_KEYS.map((opt) => (
                   <ContextMenu.Item
                     key={opt.value}
                     style={menuItemStyle}
                     onSelect={() => handleSetStatus(opt.value)}
                   >
-                    {opt.label}
+                    {t(opt.key)}
                     {currentStatus === opt.value && ' \u2713'}
                   </ContextMenu.Item>
                 ))}
@@ -198,7 +200,7 @@ export function OutlineContextMenu({
             style={{ ...menuItemStyle, color: 'var(--danger)' }}
             onSelect={handleDelete}
           >
-            删除
+            {t('common.delete')}
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>

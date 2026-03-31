@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../../core/store';
 import { useDerivedContextSource } from './useContextSource';
+import { contextSourceKey } from './contextSourceKey';
 import type { ContextSource } from '../../../../shared-types/models';
 
 const DEBOUNCE_MS = 150;
@@ -23,6 +24,10 @@ function sourceEquals(a: ContextSource, b: ContextSource): boolean {
   switch (a.type) {
     case 'paper':
       return b.type === 'paper' && a.paperId === b.paperId && a.originView === b.originView;
+    case 'papers':
+      // paperIds 已排序（useContextSource 保证），直接逐位比较
+      return b.type === 'papers' && a.paperIds.length === b.paperIds.length
+        && a.paperIds.every((id, i) => b.paperIds[i] === id);
     case 'concept':
       return b.type === 'concept' && a.conceptId === b.conceptId;
     case 'mapping':
@@ -35,6 +40,8 @@ function sourceEquals(a: ContextSource, b: ContextSource): boolean {
       return b.type === 'memo' && a.memoId === b.memoId;
     case 'note':
       return b.type === 'note' && a.noteId === b.noteId;
+    case 'allSelected':
+      return b.type === 'allSelected' && a.excludedCount === b.excludedCount;
     case 'empty':
       return b.type === 'empty';
   }
@@ -58,28 +65,45 @@ export function useEffectiveSource(): ContextSource {
   const immediateSource: ContextSource =
     peekSource ?? (contextPanelPinned && pinnedSource ? pinnedSource : derivedSource);
 
+  // 用 ref 追踪 immediateSource，避免对象引用变化导致 effect 反复触发
+  const immediateRef = useRef(immediateSource);
+  immediateRef.current = immediateSource;
+
+  // 仅当 immediateSource 内容真正变化时才触发防抖
+  // 用序列化 key 做变化检测（比对象引用更可靠）
+  const sourceKey = contextSourceKey(immediateSource);
+  const prevSourceKeyRef = useRef(sourceKey);
+
   useEffect(() => {
     const viewChanged = prevViewRef.current !== activeView;
     prevViewRef.current = activeView;
 
-    if (viewChanged || sourceEquals(immediateSource, debouncedSource)) {
+    // 内容没变——跳过
+    if (prevSourceKeyRef.current === sourceKey && !viewChanged) {
+      return;
+    }
+    prevSourceKeyRef.current = sourceKey;
+
+    // 已经等于当前值——跳过
+    if (sourceEquals(immediateRef.current, debouncedSource)) {
+      return;
+    }
+
+    if (viewChanged) {
       // 视图切换：不防抖，立即响应
-      // 或者 source 没变化：跳过
       clearTimeout(debounceRef.current);
-      if (!sourceEquals(immediateSource, debouncedSource)) {
-        setDebouncedSource(immediateSource);
-      }
+      setDebouncedSource(immediateRef.current);
       return;
     }
 
     // 同一视图内的选择变化：防抖 150ms
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      setDebouncedSource(immediateSource);
+      setDebouncedSource(immediateRef.current);
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(debounceRef.current);
-  }, [immediateSource, debouncedSource, activeView]);
+  }, [sourceKey, activeView, debouncedSource]);
 
   return debouncedSource;
 }

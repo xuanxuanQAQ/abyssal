@@ -6,6 +6,7 @@
  */
 
 import React, { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FileText, Lightbulb } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
 import { useGraphData } from '../../../core/ipc/hooks/useRelations';
@@ -56,7 +57,63 @@ function computeNeighbors(
   return result;
 }
 
-export function NeighborList({ nodeId }: NeighborListProps) {
+// ── Static styles ──
+
+const containerStyle: React.CSSProperties = {
+  padding: '8px 12px',
+};
+
+const sectionTitleStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  fontWeight: 600,
+  color: 'var(--text-secondary)',
+  marginBottom: 8,
+};
+
+const loadingTextStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  textAlign: 'center',
+  padding: 8,
+};
+
+const errorTextStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--danger)',
+  textAlign: 'center',
+  padding: 8,
+};
+
+const neighborRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 0',
+  cursor: 'pointer',
+  fontSize: 'var(--text-xs)',
+};
+
+const iconStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  flexShrink: 0,
+};
+
+const labelStyle: React.CSSProperties = {
+  flex: 1,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  color: 'var(--text-primary)',
+};
+
+const edgeTypeStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: 'var(--text-xs)',
+  flexShrink: 0,
+};
+
+export const NeighborList = React.memo(function NeighborList({ nodeId }: NeighborListProps) {
+  const { t } = useTranslation();
   const navigateTo = useAppStore((s) => s.navigateTo);
   const { data: graphData, isLoading, isError } = useGraphData();
 
@@ -67,12 +124,12 @@ export function NeighborList({ nodeId }: NeighborListProps) {
 
   if (isLoading) {
     return (
-      <div style={{ padding: '8px 12px' }}>
-        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          邻居节点
+      <div style={containerStyle}>
+        <div style={sectionTitleStyle}>
+          {t('context.neighbors.title')}
         </div>
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', textAlign: 'center', padding: 8 }}>
-          加载图数据…
+        <div style={loadingTextStyle}>
+          {t('context.neighbors.loading')}
         </div>
       </div>
     );
@@ -80,12 +137,12 @@ export function NeighborList({ nodeId }: NeighborListProps) {
 
   if (isError) {
     return (
-      <div style={{ padding: '8px 12px' }}>
-        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          邻居节点
+      <div style={containerStyle}>
+        <div style={sectionTitleStyle}>
+          {t('context.neighbors.title')}
         </div>
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', textAlign: 'center', padding: 8 }}>
-          加载图数据失败
+        <div style={errorTextStyle}>
+          {t('context.neighbors.loadError')}
         </div>
       </div>
     );
@@ -93,21 +150,21 @@ export function NeighborList({ nodeId }: NeighborListProps) {
 
   if (neighbors.length === 0) {
     return (
-      <div style={{ padding: '8px 12px' }}>
-        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          邻居节点
+      <div style={containerStyle}>
+        <div style={sectionTitleStyle}>
+          {t('context.neighbors.title')}
         </div>
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', textAlign: 'center', padding: 8 }}>
-          暂无邻居节点
+        <div style={loadingTextStyle}>
+          {t('context.neighbors.empty')}
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: '8px 12px' }}>
-      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-        邻居节点 ({neighbors.length})
+    <div style={containerStyle}>
+      <div style={sectionTitleStyle}>
+        {t('context.neighbors.titleWithCount', { count: neighbors.length })}
       </div>
       {neighbors.map((n) => (
         <div
@@ -119,36 +176,21 @@ export function NeighborList({ nodeId }: NeighborListProps) {
               navigateTo({ type: 'concept', id: n.id });
             }
           }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '4px 0',
-            cursor: 'pointer',
-            fontSize: 'var(--text-xs)',
-          }}
+          style={neighborRowStyle}
         >
           {n.type === 'paper' ? (
-            <FileText size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            <FileText size={10} style={iconStyle} />
           ) : (
-            <Lightbulb size={10} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            <Lightbulb size={10} style={iconStyle} />
           )}
-          <span
-            style={{
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              color: 'var(--text-primary)',
-            }}
-          >
+          <span style={labelStyle}>
             {n.label}
           </span>
-          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', flexShrink: 0 }}>
+          <span style={edgeTypeStyle}>
             {n.edgeType}
           </span>
         </div>
       ))}
     </div>
   );
-}
+});

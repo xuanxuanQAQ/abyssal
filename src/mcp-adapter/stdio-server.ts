@@ -24,6 +24,7 @@ import { createAcquireService, type AcquireService } from '../core/acquire';
 import { createProcessService, type ProcessService } from '../core/process';
 import { createRagService, type RagService } from '../core/rag';
 import { createBibliographyService, type BibliographyService } from '../core/bibliography';
+import { createEmbedFunction } from '../adapter/llm-client/embed-function-factory';
 
 import { getToolDefinitions } from './tool-definitions';
 import { handleToolCall, type ServiceContext } from './tool-handler';
@@ -142,25 +143,33 @@ async function main(): Promise<void> {
   const processService: ProcessService = createProcessService(config, null); // VLM = null in MCP mode
   const bibliographyService: BibliographyService = createBibliographyService(config, logger);
 
-  // RAG Service — EmbedFunction 需要 llm-client 实现
-  // TODO: 当 llm-client 模块实现后，从 config 构建 EmbedFunction
+  // RAG Service
+  const { ConfigProvider } = await import('../core/infra/config-provider');
+  const configProvider = new ConfigProvider(config);
+  const embedFn = createEmbedFunction({ configProvider, logger });
   let ragService: RagService;
-  try {
-    const stubEmbedFn = {
-      embed: async (_texts: string[]): Promise<Float32Array[]> => {
-        throw new Error('EmbedFunction not configured — llm-client module not yet implemented');
-      },
-    };
-    ragService = createRagService(stubEmbedFn, dbService, config, logger);
-  } catch (err) {
-    logger.warn('RAG service init failed, embedding tools will be unavailable', {
-      error: (err as Error).message,
-    });
-    // Fix: 创建 stub RagService 而非 null — 所有方法抛出明确错误而不是 null deref
+  if (embedFn.isAvailable) {
+    try {
+      ragService = createRagService(embedFn, dbService, config, logger);
+    } catch (err) {
+      logger.warn('RAG service init failed, embedding tools will be unavailable', {
+        error: (err as Error).message,
+      });
+      ragService = new Proxy({} as RagService, {
+        get(_target, prop) {
+          if (typeof prop === 'string') {
+            return () => { throw new Error(`RAG service unavailable: ${prop}() cannot be called (init failed)`); };
+          }
+          return undefined;
+        },
+      });
+    }
+  } else {
+    logger.warn('No embedding backend configured — RAG tools will be unavailable');
     ragService = new Proxy({} as RagService, {
       get(_target, prop) {
         if (typeof prop === 'string') {
-          return () => { throw new Error(`RAG service unavailable: ${prop}() cannot be called (init failed)`); };
+          return () => { throw new Error(`RAG service unavailable: ${prop}() — no embedding backend configured`); };
         }
         return undefined;
       },

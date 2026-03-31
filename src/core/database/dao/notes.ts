@@ -13,11 +13,9 @@ import type Database from 'better-sqlite3';
 import type { NoteId, PaperId, ConceptId, MemoId } from '../../types/common';
 import type { ResearchNote } from '../../types/note';
 import type { TextChunk } from '../../types/chunk';
-import type { ConceptDefinition } from '../../types/concept';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 import { insertChunksBatch, deleteChunksByPrefix } from './chunks';
-import { addConcept } from './concepts';
 
 /** 生成笔记文件的临时文件名前缀 */
 export const NOTE_TEMP_PREFIX = '.tmp_';
@@ -115,9 +113,17 @@ export function linkMemoToNote(
   memoId: MemoId,
   noteId: NoteId,
 ): void {
-  const timestamp = now();
+  // Check existing links to prevent duplicates
+  const row = db.prepare('SELECT linked_note_ids FROM research_memos WHERE id = ?')
+    .get(memoId) as { linked_note_ids: string } | undefined;
+  if (!row) return;
 
-  // 追加 noteId 到 memo 的 linkedNoteIds
+  try {
+    const existing: string[] = JSON.parse(row.linked_note_ids);
+    if (existing.includes(noteId)) return;
+  } catch { /* proceed with insert */ }
+
+  const timestamp = now();
   db.prepare(`
     UPDATE research_memos
     SET linked_note_ids = json_insert(linked_note_ids, '$[#]', ?),
@@ -134,14 +140,100 @@ export function linkNoteToConcept(
   noteId: NoteId,
   conceptId: ConceptId,
 ): void {
-  const timestamp = now();
+  const note = getNote(db, noteId);
+  if (!note) return;
 
+  // Prevent duplicate links
+  if (note.linkedConceptIds.includes(conceptId)) return;
+
+  const timestamp = now();
   db.prepare(`
     UPDATE research_notes
     SET linked_concept_ids = json_insert(linked_concept_ids, '$[#]', ?),
         updated_at = ?
     WHERE id = ?
   `).run(conceptId, timestamp, noteId);
+}
+
+// ─── §6.5 updateNoteMeta ───
+
+export function updateNoteMeta(
+  db: Database.Database,
+  id: NoteId,
+  updates: Partial<Pick<ResearchNote, 'title' | 'linkedPaperIds' | 'linkedConceptIds' | 'tags'>>,
+): ResearchNote | null {
+  const timestamp = now();
+
+  const setClauses: string[] = ['updated_at = ?'];
+  const params: unknown[] = [timestamp];
+
+  if (updates.title !== undefined) { setClauses.push('title = ?'); params.push(updates.title); }
+  if (updates.linkedPaperIds !== undefined) { setClauses.push('linked_paper_ids = ?'); params.push(JSON.stringify(updates.linkedPaperIds)); }
+  if (updates.linkedConceptIds !== undefined) { setClauses.push('linked_concept_ids = ?'); params.push(JSON.stringify(updates.linkedConceptIds)); }
+  if (updates.tags !== undefined) { setClauses.push('tags = ?'); params.push(JSON.stringify(updates.tags)); }
+
+  params.push(id);
+
+  db.prepare(
+    `UPDATE research_notes SET ${setClauses.join(', ')} WHERE id = ?`,
+  ).run(...params);
+
+  return getNote(db, id);
+}
+
+// ─── §6.6 queryNotes (with filter) ───
+
+export function queryNotes(
+  db: Database.Database,
+  filter?: {
+    conceptIds?: string[];
+    paperIds?: string[];
+    tags?: string[];
+    searchText?: string;
+  },
+): ResearchNote[] {
+  if (!filter) return getAllNotes(db);
+
+  let sql = 'SELECT * FROM research_notes WHERE 1=1';
+  const params: unknown[] = [];
+
+  if (filter.searchText) {
+    sql += ' AND title LIKE ?';
+    params.push(`%${filter.searchText}%`);
+  }
+
+  // JSON array filtering via json_each
+  if (filter.conceptIds && filter.conceptIds.length > 0) {
+    const placeholders = filter.conceptIds.map(() => '?').join(',');
+    sql += ` AND EXISTS (
+      SELECT 1 FROM json_each(linked_concept_ids) je
+      WHERE je.value IN (${placeholders})
+    )`;
+    params.push(...filter.conceptIds);
+  }
+
+  if (filter.paperIds && filter.paperIds.length > 0) {
+    const placeholders = filter.paperIds.map(() => '?').join(',');
+    sql += ` AND EXISTS (
+      SELECT 1 FROM json_each(linked_paper_ids) je
+      WHERE je.value IN (${placeholders})
+    )`;
+    params.push(...filter.paperIds);
+  }
+
+  if (filter.tags && filter.tags.length > 0) {
+    const placeholders = filter.tags.map(() => '?').join(',');
+    sql += ` AND EXISTS (
+      SELECT 1 FROM json_each(tags) je
+      WHERE je.value IN (${placeholders})
+    )`;
+    params.push(...filter.tags);
+  }
+
+  sql += ' ORDER BY updated_at DESC';
+
+  const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  return rows.map((r) => fromRow<ResearchNote>(r));
 }
 
 // ─── 查询 ───

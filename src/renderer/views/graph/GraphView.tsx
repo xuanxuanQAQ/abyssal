@@ -6,6 +6,7 @@
  */
 
 import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import Graph from 'graphology';
 import { useAppStore } from '../../core/store';
 import { GraphCanvas } from './canvas/GraphCanvas';
@@ -28,6 +29,7 @@ import { useGraphKeyboardNav } from './accessibility/useGraphKeyboardNav';
 import type { GraphFilter } from '../../../shared-types/ipc';
 
 export function GraphView() {
+  const { t } = useTranslation();
   const focusedGraphNodeId = useAppStore((s) => s.focusedGraphNodeId);
   const focusGraphNode = useAppStore((s) => s.focusGraphNode);
   const layerVisibility = useAppStore((s) => s.layerVisibility);
@@ -197,7 +199,7 @@ export function GraphView() {
             color: 'var(--text-muted)',
           }}
         >
-          Ctrl+Shift+T 返回图视图
+          {t('graph.returnHint')}
         </div>
       </div>
     );

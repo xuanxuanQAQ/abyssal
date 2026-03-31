@@ -102,6 +102,42 @@ export function getAnnotation(
   };
 }
 
+// ─── updateAnnotation ───
+
+/** 可更新的标注字段 */
+export interface AnnotationPatch {
+  color?: string;
+  comment?: string | null;
+  conceptId?: ConceptId | null;
+  type?: AnnotationType;
+}
+
+export function updateAnnotation(
+  db: Database.Database,
+  id: AnnotationId,
+  patch: AnnotationPatch,
+): number {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (patch.color !== undefined) { sets.push('color = ?'); values.push(patch.color); }
+  if (patch.comment !== undefined) { sets.push('comment = ?'); values.push(patch.comment); }
+  if (patch.conceptId !== undefined) { sets.push('concept_id = ?'); values.push(patch.conceptId); }
+  if (patch.type !== undefined) {
+    validateAnnotationType(patch.type);
+    if (patch.conceptId !== undefined) {
+      validateAnnotationInvariant(patch.type, patch.conceptId);
+    }
+    sets.push('type = ?');
+    values.push(patch.type);
+  }
+
+  if (sets.length === 0) return 0;
+  values.push(id);
+
+  return db.prepare(`UPDATE annotations SET ${sets.join(', ')} WHERE id = ?`).run(...values).changes;
+}
+
 // ─── deleteAnnotation ───
 
 export function deleteAnnotation(
@@ -109,6 +145,22 @@ export function deleteAnnotation(
   id: AnnotationId,
 ): number {
   return db.prepare('DELETE FROM annotations WHERE id = ?').run(id).changes;
+}
+
+// ─── countAnnotationsForPaperConcept ───
+
+/**
+ * 统计某篇论文上链接到指定概念的标注数量（用于子集选择评分）。
+ */
+export function countAnnotationsForPaperConcept(
+  db: Database.Database,
+  paperId: PaperId,
+  conceptId: ConceptId,
+): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS cnt FROM annotations WHERE paper_id = ? AND concept_id = ?')
+    .get(paperId, conceptId) as { cnt: number };
+  return row.cnt;
 }
 
 // ─── getAnnotationsByConceptId ───

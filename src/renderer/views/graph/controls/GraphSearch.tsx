@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Search } from 'lucide-react';
 import type Graph from 'graphology';
 import { useAppStore } from '../../../core/store';
@@ -15,6 +16,7 @@ interface NodeEntry {
 }
 
 export function GraphSearch({ graph, onSelectNode }: GraphSearchProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showResults, setShowResults] = useState(false);
@@ -116,7 +118,7 @@ export function GraphSearch({ graph, onSelectNode }: GraphSearchProps) {
           onChange={handleInputChange}
           onFocus={() => setShowResults(true)}
           onKeyDown={handleKeyDown}
-          placeholder="搜索论文或概念…"
+          placeholder={t('graph.search')}
           style={{
             flex: 1,
             border: 'none',

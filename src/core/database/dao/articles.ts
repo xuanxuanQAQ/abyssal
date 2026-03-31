@@ -3,7 +3,7 @@
 
 import type Database from 'better-sqlite3';
 import type { ArticleId, OutlineEntryId } from '../../types/common';
-import type { Article, OutlineEntry, SectionDraft, ArticleStyle, ArticleStatus, OutlineEntryStatus } from '../../types/article';
+import type { Article, OutlineEntry, SectionDraft, ArticleStyle, ArticleStatus, OutlineEntryStatus, ArticleAsset, DraftSource } from '../../types/article';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 
@@ -18,8 +18,9 @@ export function createArticle(
   db.prepare(`
     INSERT INTO articles (
       id, title, style, csl_style_id, output_language, status,
+      abstract, keywords, authors, target_word_count,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     article.id,
     article.title,
@@ -27,6 +28,10 @@ export function createArticle(
     article.cslStyleId,
     article.outputLanguage,
     article.status,
+    article.abstract ?? null,
+    JSON.stringify(article.keywords ?? []),
+    JSON.stringify(article.authors ?? []),
+    article.targetWordCount ?? null,
     timestamp,
     timestamp,
   );
@@ -52,7 +57,7 @@ export function getArticle(
 export function updateArticle(
   db: Database.Database,
   id: ArticleId,
-  updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status'>>,
+  updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status' | 'abstract' | 'keywords' | 'authors' | 'targetWordCount'>>,
 ): number {
   const setClauses: string[] = ['updated_at = ?'];
   const params: unknown[] = [now()];
@@ -62,6 +67,10 @@ export function updateArticle(
   if (updates.cslStyleId !== undefined) { setClauses.push('csl_style_id = ?'); params.push(updates.cslStyleId); }
   if (updates.outputLanguage !== undefined) { setClauses.push('output_language = ?'); params.push(updates.outputLanguage); }
   if (updates.status !== undefined) { setClauses.push('status = ?'); params.push(updates.status); }
+  if (updates.abstract !== undefined) { setClauses.push('abstract = ?'); params.push(updates.abstract); }
+  if (updates.keywords !== undefined) { setClauses.push('keywords = ?'); params.push(JSON.stringify(updates.keywords)); }
+  if (updates.authors !== undefined) { setClauses.push('authors = ?'); params.push(JSON.stringify(updates.authors)); }
+  if (updates.targetWordCount !== undefined) { setClauses.push('target_word_count = ?'); params.push(updates.targetWordCount); }
 
   params.push(id);
 
@@ -95,7 +104,7 @@ export function setOutline(
           UPDATE outlines
           SET sort_order = ?, title = ?, core_argument = ?,
               writing_instruction = ?, concept_ids = ?, paper_ids = ?,
-              status = ?, updated_at = ?
+              status = ?, parent_id = ?, depth = ?, updated_at = ?
           WHERE id = ?
         `).run(
           entry.sortOrder,
@@ -105,6 +114,8 @@ export function setOutline(
           JSON.stringify(entry.conceptIds),
           JSON.stringify(entry.paperIds),
           entry.status,
+          entry.parentId ?? null,
+          entry.depth ?? 0,
           timestamp,
           entry.id,
         );
@@ -113,8 +124,9 @@ export function setOutline(
           INSERT INTO outlines (
             id, article_id, sort_order, title, core_argument,
             writing_instruction, concept_ids, paper_ids, status,
+            parent_id, depth,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           entry.id,
           articleId,
@@ -125,6 +137,8 @@ export function setOutline(
           JSON.stringify(entry.conceptIds),
           JSON.stringify(entry.paperIds),
           entry.status,
+          entry.parentId ?? null,
+          entry.depth ?? 0,
           timestamp,
           timestamp,
         );
@@ -168,6 +182,8 @@ export function addSectionDraft(
   outlineEntryId: OutlineEntryId,
   content: string,
   llmBackend: string,
+  source: DraftSource = 'manual',
+  documentJson: string | null = null,
 ): number {
   const timestamp = now();
 
@@ -183,10 +199,10 @@ export function addSectionDraft(
 
     db.prepare(`
       INSERT INTO section_drafts (
-        outline_entry_id, version, content, llm_backend,
-        edited_paragraphs, created_at
-      ) VALUES (?, ?, ?, ?, '[]', ?)
-    `).run(outlineEntryId, version, content, llmBackend, timestamp);
+        outline_entry_id, version, content, document_json, llm_backend,
+        source, edited_paragraphs, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, '[]', ?)
+    `).run(outlineEntryId, version, content, documentJson, llmBackend, source, timestamp);
 
     // 首次生成时从 pending → drafted
     db.prepare(`
@@ -228,6 +244,105 @@ export function markEditedParagraphs(
     .run(JSON.stringify(paragraphIndices), outlineEntryId, version).changes;
 }
 
+// ─── getOutlineEntry ───
+
+export function getOutlineEntry(
+  db: Database.Database,
+  id: OutlineEntryId,
+): OutlineEntry | null {
+  const row = db
+    .prepare('SELECT * FROM outlines WHERE id = ?')
+    .get(id) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return fromRow<OutlineEntry>(row);
+}
+
+// ─── updateOutlineEntry ───
+
+export function updateOutlineEntry(
+  db: Database.Database,
+  id: OutlineEntryId,
+  updates: Partial<Pick<OutlineEntry, 'title' | 'coreArgument' | 'writingInstruction' | 'conceptIds' | 'paperIds' | 'status' | 'sortOrder' | 'parentId' | 'depth'>>,
+): number {
+  const setClauses: string[] = ['updated_at = ?'];
+  const params: unknown[] = [now()];
+
+  if (updates.title !== undefined) { setClauses.push('title = ?'); params.push(updates.title); }
+  if (updates.coreArgument !== undefined) { setClauses.push('core_argument = ?'); params.push(updates.coreArgument); }
+  if (updates.writingInstruction !== undefined) { setClauses.push('writing_instruction = ?'); params.push(updates.writingInstruction); }
+  if (updates.conceptIds !== undefined) { setClauses.push('concept_ids = ?'); params.push(JSON.stringify(updates.conceptIds)); }
+  if (updates.paperIds !== undefined) { setClauses.push('paper_ids = ?'); params.push(JSON.stringify(updates.paperIds)); }
+  if (updates.status !== undefined) { setClauses.push('status = ?'); params.push(updates.status); }
+  if (updates.sortOrder !== undefined) { setClauses.push('sort_order = ?'); params.push(updates.sortOrder); }
+  if (updates.parentId !== undefined) { setClauses.push('parent_id = ?'); params.push(updates.parentId); }
+  if (updates.depth !== undefined) { setClauses.push('depth = ?'); params.push(updates.depth); }
+
+  params.push(id);
+
+  return db
+    .prepare(`UPDATE outlines SET ${setClauses.join(', ')} WHERE id = ?`)
+    .run(...params).changes;
+}
+
+// ─── markOutlineEntryDeleted ───
+
+export function markOutlineEntryDeleted(
+  db: Database.Database,
+  id: OutlineEntryId,
+): number {
+  return db
+    .prepare('UPDATE outlines SET sort_order = -1, updated_at = ? WHERE id = ?')
+    .run(now(), id).changes;
+}
+
+// ─── searchSections ───
+
+export function searchSections(
+  db: Database.Database,
+  query: string,
+): Array<{ outlineEntryId: OutlineEntryId; articleId: ArticleId; title: string; snippet: string }> {
+  const likePattern = `%${query}%`;
+
+  // Search in outline titles
+  const titleMatches = db.prepare(`
+    SELECT o.id AS outline_entry_id, o.article_id, o.title, '' AS snippet
+    FROM outlines o
+    WHERE o.sort_order >= 0 AND o.title LIKE ?
+    LIMIT 20
+  `).all(likePattern) as Array<Record<string, unknown>>;
+
+  // Search in section draft content
+  const contentMatches = db.prepare(`
+    SELECT o.id AS outline_entry_id, o.article_id, o.title,
+           SUBSTR(sd.content, MAX(1, INSTR(sd.content, ?) - 40), 120) AS snippet
+    FROM outlines o
+    JOIN section_drafts sd ON sd.outline_entry_id = o.id
+    WHERE o.sort_order >= 0 AND sd.content LIKE ?
+      AND sd.version = (
+        SELECT MAX(sd2.version) FROM section_drafts sd2 WHERE sd2.outline_entry_id = o.id
+      )
+    LIMIT 20
+  `).all(query, likePattern) as Array<Record<string, unknown>>;
+
+  // Deduplicate by outlineEntryId
+  const seen = new Set<string>();
+  const results: Array<{ outlineEntryId: OutlineEntryId; articleId: ArticleId; title: string; snippet: string }> = [];
+
+  for (const row of [...titleMatches, ...contentMatches]) {
+    const eid = row['outline_entry_id'] as string;
+    if (seen.has(eid)) continue;
+    seen.add(eid);
+    results.push({
+      outlineEntryId: eid as OutlineEntryId,
+      articleId: row['article_id'] as ArticleId,
+      title: (row['title'] as string) ?? '',
+      snippet: (row['snippet'] as string) ?? '',
+    });
+  }
+
+  return results;
+}
+
 // ─── getAllArticles ───
 
 export function getAllArticles(db: Database.Database): Article[] {
@@ -245,4 +360,183 @@ export function deleteArticle(
 ): number {
   // ON DELETE CASCADE 会删除 outlines → section_drafts
   return db.prepare('DELETE FROM articles WHERE id = ?').run(id).changes;
+}
+
+// ═══ Full Document Operations ═══
+
+/**
+ * Fetch all sections for an article with their latest draft content.
+ * Returns sections ordered by sort_order with parent_id/depth.
+ */
+export function getFullDocument(
+  db: Database.Database,
+  articleId: ArticleId,
+): Array<{
+  sectionId: string;
+  title: string;
+  content: string;
+  documentJson: string | null;
+  version: number;
+  sortIndex: number;
+  parentId: string | null;
+  depth: number;
+}> {
+  const rows = db.prepare(`
+    SELECT
+      o.id AS section_id,
+      o.title,
+      o.sort_order,
+      o.parent_id,
+      o.depth,
+      sd.content,
+      sd.document_json,
+      sd.version
+    FROM outlines o
+    LEFT JOIN section_drafts sd ON sd.outline_entry_id = o.id
+      AND sd.version = (
+        SELECT MAX(sd2.version) FROM section_drafts sd2 WHERE sd2.outline_entry_id = o.id
+      )
+    WHERE o.article_id = ? AND o.sort_order >= 0
+    ORDER BY o.sort_order
+  `).all(articleId) as Array<Record<string, unknown>>;
+
+  return rows.map((r) => ({
+    sectionId: r['section_id'] as string,
+    title: (r['title'] as string) ?? '',
+    content: (r['content'] as string) ?? '',
+    documentJson: (r['document_json'] as string | null) ?? null,
+    version: (r['version'] as number) ?? 0,
+    sortIndex: (r['sort_order'] as number) ?? 0,
+    parentId: (r['parent_id'] as string | null) ?? null,
+    depth: (r['depth'] as number) ?? 0,
+  }));
+}
+
+/**
+ * Save multiple section drafts atomically.
+ * Only saves sections that have actually changed.
+ */
+export function saveDocumentSections(
+  db: Database.Database,
+  articleId: ArticleId,
+  sections: Array<{
+    sectionId: string;
+    title?: string;
+    content: string;
+    documentJson?: string | null;
+    source: DraftSource;
+  }>,
+): void {
+  const updateTitle = db.prepare(
+    `UPDATE outlines SET title = ?, updated_at = ? WHERE id = ? AND article_id = ?`,
+  );
+  writeTransaction(db, () => {
+    for (const section of sections) {
+      addSectionDraft(
+        db,
+        section.sectionId as OutlineEntryId,
+        section.content,
+        section.source === 'manual' ? 'manual' : 'ai',
+        section.source,
+        section.documentJson ?? null,
+      );
+      if (section.title !== undefined) {
+        updateTitle.run(section.title, new Date().toISOString(), section.sectionId, articleId);
+      }
+    }
+  });
+}
+
+// ═══ Article Assets CRUD ═══
+
+export function addArticleAsset(
+  db: Database.Database,
+  asset: ArticleAsset,
+): void {
+  db.prepare(`
+    INSERT INTO article_assets (
+      id, article_id, file_name, mime_type, file_path, file_size,
+      caption, alt_text, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    asset.id,
+    asset.articleId,
+    asset.fileName,
+    asset.mimeType,
+    asset.filePath,
+    asset.fileSize,
+    asset.caption,
+    asset.altText,
+    asset.createdAt,
+  );
+}
+
+export function getArticleAssets(
+  db: Database.Database,
+  articleId: ArticleId,
+): ArticleAsset[] {
+  const rows = db.prepare(
+    'SELECT * FROM article_assets WHERE article_id = ? ORDER BY created_at',
+  ).all(articleId) as Record<string, unknown>[];
+  return rows.map((r) => fromRow<ArticleAsset>(r));
+}
+
+export function getArticleAsset(
+  db: Database.Database,
+  assetId: string,
+): ArticleAsset | null {
+  const row = db.prepare(
+    'SELECT * FROM article_assets WHERE id = ?',
+  ).get(assetId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return fromRow<ArticleAsset>(row);
+}
+
+export function deleteArticleAsset(
+  db: Database.Database,
+  assetId: string,
+): number {
+  return db.prepare('DELETE FROM article_assets WHERE id = ?').run(assetId).changes;
+}
+
+// ═══ Version Cleanup ═══
+
+/**
+ * Delete old draft versions, keeping the most recent `keepCount` per section.
+ * Returns the number of deleted rows.
+ */
+export function cleanupVersions(
+  db: Database.Database,
+  articleId: ArticleId,
+  keepCount: number,
+): number {
+  return writeTransaction(db, () => {
+    // Get all outline entry IDs for this article
+    const entries = db.prepare(
+      'SELECT id FROM outlines WHERE article_id = ? AND sort_order >= 0',
+    ).all(articleId) as { id: string }[];
+
+    let totalDeleted = 0;
+
+    for (const entry of entries) {
+      // Find the version threshold
+      const thresholdRow = db.prepare(`
+        SELECT version FROM section_drafts
+        WHERE outline_entry_id = ?
+        ORDER BY version DESC
+        LIMIT 1 OFFSET ?
+      `).get(entry.id, keepCount) as { version: number } | undefined;
+
+      if (!thresholdRow) continue; // fewer versions than keepCount
+
+      const deleted = db.prepare(`
+        DELETE FROM section_drafts
+        WHERE outline_entry_id = ? AND version <= ?
+      `).run(entry.id, thresholdRow.version).changes;
+
+      totalDeleted += deleted;
+    }
+
+    return totalDeleted;
+  });
 }

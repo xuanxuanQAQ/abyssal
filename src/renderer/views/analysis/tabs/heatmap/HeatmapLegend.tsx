@@ -11,6 +11,10 @@ import {
   RELATION_COLORS as COLORS_MAP,
   RELATION_LABELS_EN,
 } from '../../shared/relationTheme';
+import {
+  ADJUDICATION_INDICATORS as SHARED_ADJ_INDICATORS,
+} from '../../shared/adjudicationIndicators';
+import type { AdjudicationStatus } from '../../../../../shared-types/enums';
 import type { RelationType } from '../../../../../shared-types/enums';
 
 interface LegendEntry {
@@ -22,11 +26,20 @@ const RELATION_COLORS: LegendEntry[] = (
   ['supports', 'challenges', 'extends', 'irrelevant'] as RelationType[]
 ).map((rt) => ({ label: RELATION_LABELS_EN[rt], color: COLORS_MAP[rt] }));
 
-const ADJUDICATION_INDICATORS = [
-  { symbol: '\u2713', label: 'Accepted', color: 'var(--text-success, #22c55e)' },
-  { symbol: '\u270F', label: 'Revised', color: 'var(--text-warning, #f59e0b)' },
-  { symbol: '\u00D7', label: 'Rejected', color: 'var(--text-error, #ef4444)' },
-] as const;
+const ADJUDICATION_COLOR: Record<AdjudicationStatus, string> = {
+  pending: 'var(--text-muted)',
+  accepted: 'var(--text-success, #22c55e)',
+  revised: 'var(--text-warning, #f59e0b)',
+  rejected: 'var(--text-error, #ef4444)',
+};
+
+const ADJUDICATION_LEGEND = (
+  ['accepted', 'revised', 'rejected'] as AdjudicationStatus[]
+).map((status) => ({
+  symbol: SHARED_ADJ_INDICATORS[status].symbol,
+  label: SHARED_ADJ_INDICATORS[status].label,
+  color: ADJUDICATION_COLOR[status],
+}));
 
 export function HeatmapLegend() {
   return (
@@ -107,7 +120,7 @@ export function HeatmapLegend() {
 
       {/* Adjudication indicators */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {ADJUDICATION_INDICATORS.map((ind) => (
+        {ADJUDICATION_LEGEND.map((ind) => (
           <div
             key={ind.label}
             style={{ display: 'flex', alignItems: 'center', gap: 3 }}

@@ -68,7 +68,7 @@ export interface DiscoverServices {
     project: { description?: string; keywords?: string[] };
     maxPapersPerSeed?: number;
   };
-  frameworkState: string;
+  frameworkState: string | (() => string);
 }
 
 // ─── Workflow ───
@@ -168,7 +168,10 @@ export function createDiscoverWorkflow(services: DiscoverServices) {
     }
 
     // ═══ Step 4: Concept-dictionary search (§1.6) ═══
-    if (services.frameworkState !== 'zero_concepts' && dbProxy.getAllConcepts) {
+    const frameworkState = typeof services.frameworkState === 'function'
+      ? services.frameworkState()
+      : services.frameworkState;
+    if (frameworkState !== 'zero_concepts' && dbProxy.getAllConcepts) {
       runner.reportProgress({ currentStage: 'concept_search' });
       try {
         const concepts = await dbProxy.getAllConcepts();

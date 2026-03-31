@@ -7,7 +7,8 @@
  * See spec: section 6.4
  */
 
-import React from 'react';
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { NoteCard } from './NoteCard';
 import { CreateNoteDialog } from './CreateNoteDialog';
@@ -20,35 +21,20 @@ interface NoteCardGridProps {
 }
 
 export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
-  // TODO: pass filter to useNoteList when backend supports note filtering
-  const { data: notes } = useNoteList();
-  const [showCreate, setShowCreate] = React.useState(false);
+  const { t } = useTranslation();
+  // Extract NoteFilter-compatible fields from MemoFilter
+  const noteFilter = filter ? (() => {
+    const nf: import('../../../../shared-types/models').NoteFilter = {};
+    if (filter.conceptIds) nf.conceptIds = filter.conceptIds;
+    if (filter.paperIds) nf.paperIds = filter.paperIds;
+    if (filter.tags) nf.tags = filter.tags;
+    if (filter.searchText) nf.searchText = filter.searchText;
+    return nf;
+  })() : undefined;
+  const { data: notes } = useNoteList(noteFilter);
+  const [showCreate, setShowCreate] = useState(false);
 
-  // Client-side filtering as a fallback until backend supports note filters
-  const filteredNotes = React.useMemo(() => {
-    if (!notes) return [];
-    let result = [...notes];
-
-    const searchQuery = (filter as Record<string, unknown> | undefined)?.['searchQuery'] as string | undefined;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter((n) => {
-        const title = ((n as unknown as Record<string, unknown>)['title'] as string ?? '').toLowerCase();
-        return title.includes(q);
-      });
-    }
-
-    const conceptIds = (filter as Record<string, unknown> | undefined)?.['conceptIds'] as string[] | undefined;
-    if (conceptIds && conceptIds.length > 0) {
-      result = result.filter((n) => {
-        const nr = n as unknown as Record<string, unknown>;
-        const linked = (nr['linkedConceptIds'] ?? nr['linked_concept_ids']) as string[] | undefined ?? [];
-        return conceptIds.some((cid) => linked.includes(cid));
-      });
-    }
-
-    return result;
-  }, [notes, filter]);
+  const filteredNotes = notes ?? [];
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: 16 }}>
@@ -62,7 +48,7 @@ export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
             backgroundColor: 'var(--accent-color)', color: '#fff', fontSize: 12, cursor: 'pointer',
           }}
         >
-          <Plus size={14} /> New Note
+          <Plus size={14} /> {t('notes.note.newNote')}
         </button>
       </div>
 
@@ -80,8 +66,8 @@ export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
       {filteredNotes.length === 0 && (
         <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
           {notes && notes.length > 0
-            ? 'No notes match the current filters'
-            : 'No research notes yet — click "New Note" to start'}
+            ? t('notes.note.noMatchingNotes')
+            : t('notes.note.emptyState')}
         </div>
       )}
 

@@ -21,6 +21,52 @@ export interface AcquireConfig {
   institutionalProxyUrl: string | null;
   perSourceTimeoutMs: number; // 默认 30000
   maxRedirects: number; // 默认 5
+  // Retry strategy
+  maxRetries: number; // 默认 1，仅对可重试错误（5xx/timeout）生效
+  retryDelayMs: number; // 默认 2000，重试间隔
+  scihubMaxTotalMs: number; // 默认 60000，Scihub 多域名探测总超时上限
+  tarMaxExtractBytes: number; // 默认 209715200 (200MB)，PMC tar 解压大小限制
+  // Feature 1: LLM content sanity check
+  enableContentSanityCheck: boolean; // 默认 false
+  sanityCheckMaxChars: number; // 默认 2000
+  sanityCheckConfidenceThreshold: number; // 默认 0.85
+  // Feature 2: Failure mode memory
+  enableFailureMemory: boolean; // 默认 true
+  failureMemoryWindowDays: number; // 默认 90
+  // Feature 3: Fuzzy identifier resolution
+  enableFuzzyResolve: boolean; // 默认 true
+  fuzzyResolveConfidenceThreshold: number; // 默认 0.8
+  // Feature 4: China institutional access (CARSI)
+  enableChinaInstitutional: boolean; // 默认 false
+  chinaInstitutionId: string | null; // 大学标识，如 "zju"
+  chinaCustomIdpEntityId: string | null; // 自定义 IdP entityID（非预置大学时使用）
+  // Feature 5: Chinese academic databases (CNKI/Wanfang)
+  enableCnki: boolean; // 默认 false，需要 CARSI 登录后的 cookie
+  enableWanfang: boolean; // 默认 false，需要 CARSI 登录后的 cookie
+  // ── Pipeline v2: 4-Layer Intelligent Acquire ──
+  // Layer 0: Fast Path — DOI 前缀正则直接构造 OA URL
+  enableFastPath: boolean; // 默认 true
+  // Layer 1: Recon — 并行 DOI HEAD + OpenAlex + CrossRef
+  enableRecon: boolean; // 默认 true
+  reconCacheTtlDays: number; // 默认 30，稳定数据（出版商域名、仓库 URL）缓存 TTL
+  oaCacheRefreshDays: number; // 默认 7，OA 状态刷新周期（封锁期后可能变 OA）
+  reconTimeoutMs: number; // 默认 10000，Recon 每数据源超时
+  // Preflight — HEAD 请求检测 Content-Type，防止假 OA 陷阱
+  enablePreflight: boolean; // 默认 true
+  preflightTimeoutMs: number; // 默认 5000
+  // Layer 2+3: Strategy + Speculative Execution
+  enableSpeculativeExecution: boolean; // 默认 true，启用 Promise.any 并行下载
+  maxSpeculativeParallel: number; // 默认 3，投机并行候选数
+  speculativeTotalTimeoutMs: number; // 默认 45000，投机阶段总超时
+  // EZProxy URL 变异模板，如 "https://{hostname}.ezproxy.lib.uni.edu/{path}"
+  ezproxyUrlTemplate: string | null; // 默认 null
+  // ── 代理配置 ──
+  proxyEnabled: boolean; // 默认 false
+  // 支持 http://, https://, socks5:// 协议
+  // 例：socks5://127.0.0.1:7890, http://user:pass@proxy.example.com:8080
+  proxyUrl: string; // 默认 'socks5://127.0.0.1:7890'
+  // 'all' = 全部请求走代理; 'blocked-only' = 仅被封锁源走代理(scihub, doi HEAD 等)
+  proxyMode: 'all' | 'blocked-only'; // 默认 'blocked-only'
 }
 
 export interface DiscoveryConfig {
@@ -41,25 +87,25 @@ export interface AnalysisConfig {
 }
 
 export interface RagConfig {
-  embeddingBackend: 'api' | 'local-onnx';
   embeddingModel: string; // 默认 "text-embedding-3-small"
   embeddingDimension: number; // 默认 1536
   defaultTopK: number; // 默认 10
   expandFactor: number; // 默认 3
-  rerankerBackend: 'api-cohere' | 'api-jina' | 'local-bge';
+  embeddingProvider: 'openai' | 'siliconflow'; // 默认 "openai"
+  rerankerBackend: 'cohere' | 'jina' | 'siliconflow';
   rerankerModel: string | null;
   tentativeExpandFactorMultiplier: number; // 默认 2.0
   tentativeTopkMultiplier: number; // 默认 1.5
   correctiveRagEnabled: boolean; // 默认 true
   correctiveRagMaxRetries: number; // 默认 2
   correctiveRagModel: string; // 默认 "deepseek-chat"
-  localOnnxModelPath: string | null;
-  localRerankerModelPath: string | null;
+  crossConceptBoostFactor: number; // 默认 1.5，跨概念交叉论文的 score boost 系数
 }
 
 export interface LanguageConfig {
   internalWorkingLanguage: string; // 固定 "en"
   defaultOutputLanguage: string; // 默认 "zh-CN"
+  uiLocale: string; // 默认 "en"，界面语言
 }
 
 export interface LlmOverride {
@@ -83,6 +129,9 @@ export interface ApiKeysConfig {
   unpaywallEmail: string | null;
   cohereApiKey: string | null;
   jinaApiKey: string | null;
+  siliconflowApiKey: string | null;
+  /** Web 搜索 API key（Tavily / SerpAPI / Bing） */
+  webSearchApiKey: string | null;
 }
 
 export interface WorkspaceConfig {
@@ -127,11 +176,22 @@ export interface AdvisoryConfig {
   minPapersThreshold: number; // 默认 5
 }
 
+export interface LoggingConfig {
+  level: 'debug' | 'info' | 'warn' | 'error'; // 默认 "info"
+}
+
 export interface NotesConfig {
   memoMaxLength: number; // 默认 500，范围 [50, 2000]
   memoAutoIndex: boolean; // 默认 true
   noteAutoIndex: boolean; // 默认 true
   notesDirectory: string; // 默认 "notes"（相对于 workspace）
+}
+
+export interface WebSearchConfig {
+  /** 是否启用 Web 搜索 */
+  enabled: boolean; // 默认 false
+  /** 搜索后端：tavily | serpapi | bing */
+  backend: 'tavily' | 'serpapi' | 'bing'; // 默认 "tavily"
 }
 
 // ═══ 全局配置（存储在 AppData，跨工作区共享） ═══
@@ -141,6 +201,14 @@ export interface GlobalConfig {
   llm: LlmConfig;
   rag: RagConfig;
   acquire: AcquireConfig;
+  webSearch?: WebSearchConfig;
+}
+
+// ═══ 个性化配置 ═══
+
+export interface PersonalizationConfig {
+  /** 作者 et al. 阈值：超过此数量时缩写为 "et al."；0 = 始终全部显示 */
+  authorDisplayThreshold: number;
 }
 
 // ═══ AbyssalConfig 顶层（合并后的运行时配置） ═══
@@ -161,4 +229,17 @@ export interface AbyssalConfig {
   notes: NotesConfig;
   batch: BatchConfig;
   advisory: AdvisoryConfig;
+  logging: LoggingConfig;
+  writing: WritingConfig;
+  personalization: PersonalizationConfig;
+  webSearch: WebSearchConfig;
+}
+
+// ═══ 写作配置 ═══
+
+export interface WritingConfig {
+  /** 默认 CSL 引用样式 ID（如 "gb-t-7714", "apa", "ieee"） */
+  defaultCslStyleId: string;
+  /** 默认输出语言（BCP 47，如 "zh", "en"） */
+  defaultOutputLanguage: string;
 }

@@ -1,15 +1,33 @@
 export const MAX_TOTAL_PIXELS = 256_000_000;
 export const HIGH_SCALE_THRESHOLD = 2.0;
 
+/**
+ * §5.4: Enhanced memory budget with LRU page tracking.
+ *
+ * Tracks canvas pixel usage per page plus access recency.
+ * getEvictionCandidates() returns pages sorted oldest-access-first
+ * so the caller can release distant pages before the budget overflows.
+ */
 export class MemoryBudget {
   private canvasPixels: Map<number, number> = new Map();
+  /** Page access timestamps for LRU eviction decisions. */
+  private accessOrder: Map<number, number> = new Map();
 
   registerCanvas(pageNumber: number, width: number, height: number): void {
     this.canvasPixels.set(pageNumber, width * height);
+    this.accessOrder.set(pageNumber, Date.now());
   }
 
   unregisterCanvas(pageNumber: number): void {
     this.canvasPixels.delete(pageNumber);
+    this.accessOrder.delete(pageNumber);
+  }
+
+  /** Mark a page as recently accessed (call on scroll into view). */
+  touch(pageNumber: number): void {
+    if (this.canvasPixels.has(pageNumber)) {
+      this.accessOrder.set(pageNumber, Date.now());
+    }
   }
 
   getTotalPixels(): number {
@@ -24,6 +42,21 @@ export class MemoryBudget {
     return this.getTotalPixels() > MAX_TOTAL_PIXELS;
   }
 
+  /**
+   * Returns page numbers sorted by least-recently-accessed first.
+   * Caller can iterate and evict until budget is satisfied.
+   */
+  getEvictionCandidates(): number[] {
+    return Array.from(this.accessOrder.entries())
+      .sort((a, b) => a[1] - b[1])
+      .map(([pageNumber]) => pageNumber);
+  }
+
+  /** Number of canvases currently tracked. */
+  get activeCanvasCount(): number {
+    return this.canvasPixels.size;
+  }
+
   getRecommendedCacheRange(currentScale: number): number {
     if (currentScale > HIGH_SCALE_THRESHOLD) {
       return 1;
@@ -36,5 +69,6 @@ export class MemoryBudget {
 
   clear(): void {
     this.canvasPixels.clear();
+    this.accessOrder.clear();
   }
 }

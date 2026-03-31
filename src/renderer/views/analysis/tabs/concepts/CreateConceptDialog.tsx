@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { useCreateConcept } from '../../../../core/ipc/hooks/useConcepts';
@@ -21,6 +22,7 @@ export function CreateConceptDialog({
   open, onOpenChange, suggestedId,
   prefillNameEn, prefillDefinition, prefillKeywords,
 }: CreateConceptDialogProps) {
+  const { t } = useTranslation();
   const [nameEn, setNameEn] = useState(prefillNameEn ?? '');
   const [nameZh, setNameZh] = useState('');
   const [definition, setDefinition] = useState(prefillDefinition ?? '');
@@ -62,25 +64,25 @@ export function CreateConceptDialog({
           padding: 24, zIndex: 1001, boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
         }}>
           <Dialog.Title style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
-            创建新概念
+            {t('analysis.concepts.create.title')}
           </Dialog.Title>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <InputField label="英文名" value={nameEn} onChange={setNameEn} autoFocus />
-            <InputField label="中文名" value={nameZh} onChange={setNameZh} />
+            <InputField label={t('analysis.concepts.create.nameEn')} value={nameEn} onChange={setNameEn} autoFocus />
+            <InputField label={t('analysis.concepts.create.nameZh')} value={nameZh} onChange={setNameZh} />
             <label style={{ display: 'block' }}>
-              <span style={labelStyle}>定义</span>
+              <span style={labelStyle}>{t('analysis.concepts.create.definition')}</span>
               <textarea value={definition} onChange={(e) => setDefinition(e.target.value)} rows={3} maxLength={500} style={textareaStyle} />
             </label>
-            <InputField label="关键词 (逗号分隔)" value={keywordsStr} onChange={setKeywordsStr} />
+            <InputField label={t('analysis.concepts.create.keywordsHint')} value={keywordsStr} onChange={setKeywordsStr} />
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
             <Dialog.Close asChild>
-              <button style={cancelBtnStyle}>取消</button>
+              <button style={cancelBtnStyle}>{t('common.cancel')}</button>
             </Dialog.Close>
             <button onClick={handleCreate} disabled={!nameEn.trim() || isPending} style={{ ...primaryBtnStyle, opacity: nameEn.trim() ? 1 : 0.5 }}>
-              {isPending ? '创建中...' : '创建 (tentative)'}
+              {isPending ? t('analysis.concepts.create.creating') : t('analysis.concepts.create.createTentative')}
             </button>
           </div>
 

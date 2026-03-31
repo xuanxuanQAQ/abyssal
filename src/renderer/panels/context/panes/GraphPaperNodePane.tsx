@@ -8,17 +8,20 @@ import React from 'react';
 import { PaperQuickInfo } from '../cards/PaperQuickInfo';
 import { NeighborList } from '../cards/NeighborList';
 
+const scrollContainerStyle: React.CSSProperties = { overflowY: 'auto', height: '100%' };
+const borderTopStyle: React.CSSProperties = { borderTop: '1px solid var(--border-subtle)' };
+
 interface GraphPaperNodePaneProps {
   nodeId: string;
 }
 
-export function GraphPaperNodePane({ nodeId }: GraphPaperNodePaneProps) {
+export const GraphPaperNodePane = React.memo(function GraphPaperNodePane({ nodeId }: GraphPaperNodePaneProps) {
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
+    <div style={scrollContainerStyle}>
       <PaperQuickInfo paperId={nodeId} />
-      <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
+      <div style={borderTopStyle}>
         <NeighborList nodeId={nodeId} />
       </div>
     </div>
   );
-}
+});

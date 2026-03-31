@@ -28,6 +28,11 @@ function makeMockToolServices(): ToolServices {
       getStats: vi.fn().mockResolvedValue({ papers: { total: 0 }, concepts: { total: 0 } }),
       getMemosByEntity: vi.fn().mockResolvedValue([]),
       getAllNotes: vi.fn().mockResolvedValue([]),
+      getNote: vi.fn().mockResolvedValue(null),
+      queryNotes: vi.fn().mockResolvedValue([]),
+      createNote: vi.fn().mockResolvedValue(undefined),
+      updateNoteMeta: vi.fn().mockResolvedValue(null),
+      deleteNote: vi.fn().mockResolvedValue(0),
       getSuggestedConcepts: vi.fn().mockResolvedValue([]),
     },
   };

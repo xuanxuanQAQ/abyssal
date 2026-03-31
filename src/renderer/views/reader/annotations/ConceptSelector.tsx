@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Popover from '@radix-ui/react-popover';
 import { Search } from 'lucide-react';
 import type { Concept } from '../../../../shared-types/models';
@@ -18,6 +19,7 @@ export function ConceptSelector({
   onSelect: (conceptId: string) => void;
   onCreateNew: () => void;
 }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
 
   const filteredConcepts = useMemo(() => {
@@ -80,7 +82,7 @@ export function ConceptSelector({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索概念…"
+              placeholder={t('reader.annotations.searchConcepts')}
               autoFocus
               style={{
                 flex: 1,
@@ -143,7 +145,7 @@ export function ConceptSelector({
                   textAlign: 'center',
                 }}
               >
-                无匹配概念
+                {t('reader.annotations.noMatchingConcepts')}
               </div>
             )}
           </div>
@@ -178,7 +180,7 @@ export function ConceptSelector({
                 e.currentTarget.style.backgroundColor = 'transparent';
               }}
             >
-              + 创建新概念
+              {t('reader.annotations.createNewConcept')}
             </button>
           </div>
         </Popover.Content>

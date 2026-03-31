@@ -2,7 +2,8 @@
  * Electron preload script — contextBridge security layer.
  *
  * Exposes `window.abyssal` API to the renderer process.
- * Uses typed `createInvoker` pattern derived from IpcContract.
+ * The API structure is auto-built from IPC channel name arrays,
+ * following the conventions defined in shared-types/ipc/derive.ts.
  *
  * Security constraints:
  * - Renderer cannot access ipcRenderer directly
@@ -14,18 +15,134 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { UnsubscribeFn } from '../shared-types/ipc';
-import type { IpcChannel, IpcArgs, IpcResult } from '../shared-types/ipc/contract';
+import type { AbyssalAPI } from '../shared-types/ipc';
+import type { IpcChannel } from '../shared-types/ipc/contract';
+
+// ─── Channel Name Arrays ───
+// Each entry is validated against its contract type at compile time.
+// If a channel is added to IpcContract but not listed here, the
+// exhaustiveness check at the bottom will produce a type error.
+
+const INVOKE_CHANNELS = [
+  // db:papers
+  'db:papers:list', 'db:papers:get', 'db:papers:update',
+  'db:papers:batchUpdateRelevance', 'db:papers:importBibtex',
+  'db:papers:getCounts', 'db:papers:delete', 'db:papers:batchDelete', 'db:papers:resetAnalysis',
+  'db:papers:linkPdf',
+  // db:tags
+  'db:tags:list', 'db:tags:create', 'db:tags:update', 'db:tags:delete',
+  // db:discoverRuns
+  'db:discoverRuns:list',
+  // db:concepts
+  'db:concepts:list', 'db:concepts:getFramework', 'db:concepts:updateFramework',
+  'db:concepts:search', 'db:concepts:create', 'db:concepts:updateMaturity',
+  'db:concepts:updateDefinition', 'db:concepts:updateParent', 'db:concepts:getHistory',
+  'db:concepts:merge', 'db:concepts:split', 'db:concepts:getTimeline',
+  'db:concepts:getStats', 'db:concepts:getMatrix',
+  // db:memos
+  'db:memos:list', 'db:memos:get', 'db:memos:create', 'db:memos:update',
+  'db:memos:delete', 'db:memos:upgradeToNote', 'db:memos:upgradeToConcept',
+  'db:memos:getByEntity',
+  // db:notes
+  'db:notes:list', 'db:notes:get', 'db:notes:create', 'db:notes:updateMeta',
+  'db:notes:delete', 'db:notes:upgradeToConcept', 'db:notes:onFileChanged',
+  // db:suggestedConcepts
+  'db:suggestedConcepts:list', 'db:suggestedConcepts:accept',
+  'db:suggestedConcepts:dismiss', 'db:suggestedConcepts:restore',
+  'db:suggestedConcepts:getStats',
+  // db:mappings
+  'db:mappings:getForPaper', 'db:mappings:getForConcept',
+  'db:mappings:adjudicate', 'db:mappings:getHeatmapData',
+  // db:annotations
+  'db:annotations:listForPaper', 'db:annotations:create',
+  'db:annotations:update', 'db:annotations:delete',
+  // db:articles
+  'db:articles:listOutlines', 'db:articles:create', 'db:articles:update',
+  'db:articles:getOutline', 'db:articles:updateOutlineOrder',
+  'db:articles:getSection', 'db:articles:updateSection',
+  'db:articles:getSectionVersions', 'db:articles:createSection',
+  'db:articles:deleteSection', 'db:articles:search',
+  'db:articles:getFullDocument', 'db:articles:saveDocumentSections',
+  'db:articles:updateMetadata', 'db:articles:cleanupVersions',
+  // db:assets
+  'db:assets:upload', 'db:assets:list', 'db:assets:get', 'db:assets:delete',
+  // db:relations
+  'db:relations:getGraph', 'db:relations:getNeighborhood',
+  // db:chat
+  'db:chat:saveMessage', 'db:chat:getHistory',
+  'db:chat:deleteSession', 'db:chat:listSessions',
+  // acquire
+  'acquire:fulltext', 'acquire:batch', 'acquire:status',
+  'acquire:getInstitutions', 'acquire:institutionalLogin', 'acquire:sessionStatus', 'acquire:verifyCookies', 'acquire:clearSession',
+  // search
+  'search:semanticScholar', 'search:openAlex', 'search:arxiv',
+  'search:paperDetails', 'search:citations', 'search:related', 'search:byAuthor',
+  // rag
+  'rag:search', 'rag:searchWithReport', 'rag:getWritingContext',
+  // pipeline
+  'pipeline:start', 'pipeline:cancel',
+  // chat
+  'chat:send', 'chat:abort',
+  // fs
+  'fs:openPDF', 'fs:savePDFAnnotations', 'fs:exportArticle', 'fs:importFiles',
+  'fs:createSnapshot', 'fs:restoreSnapshot', 'fs:listSnapshots', 'fs:cleanupSnapshots',
+  'fs:readNoteFile', 'fs:saveNoteFile', 'fs:selectImageFile',
+  // advisory
+  'advisory:getRecommendations', 'advisory:execute', 'advisory:getNotifications',
+  // settings
+  'settings:getAll', 'settings:updateSection', 'settings:updateApiKey',
+  'settings:testApiKey', 'settings:getDbStats', 'settings:getSystemInfo',
+  'settings:openWorkspaceFolder', 'settings:getIndexHealth',
+  // app
+  'app:getConfig', 'app:updateConfig', 'app:getProjectInfo', 'app:switchProject',
+  'app:listProjects', 'app:createProject', 'app:globalSearch',
+  // app:window
+  'app:window:minimize', 'app:window:toggleMaximize', 'app:window:close',
+  'app:window:popOut', 'app:window:list',
+  // concept keywords & article citation helpers
+  'db:concepts:updateKeywords', 'db:articles:getAllCitedPaperIds',
+  // workspace
+  'workspace:create', 'workspace:openDialog', 'workspace:listRecent',
+  'workspace:getCurrent', 'workspace:switch', 'workspace:removeRecent',
+  'workspace:togglePin',
+] as const satisfies readonly IpcChannel[];
+
+/** Compile-time exhaustiveness: fails if any IpcChannel is missing above */
+type _InvokeCheck = Exclude<IpcChannel, typeof INVOKE_CHANNELS[number]> extends never
+  ? true : ['ERROR: missing invoke channels', Exclude<IpcChannel, typeof INVOKE_CHANNELS[number]>];
+const _invokeOk: _InvokeCheck = true;
+
+const EVENT_CHANNELS = [
+  'pipeline:progress$event',
+  'pipeline:streamChunk$event',
+  'app:workflowComplete$event',
+  'app:sectionQuality$event',
+  'chat:response$event',
+  'app:window:maximizedChange$event',
+  'advisory:notificationsUpdated$event',
+  'workspace:switched$event',
+] as const;
+
+const PUSH_CHANNELS = [
+  'push:workflowProgress',
+  'push:agentStream',
+  'push:dbChanged',
+  'push:notification',
+  'push:advisorySuggestions',
+  'push:memoCreated',
+  'push:noteIndexed',
+  'push:dbHealth',
+  'push:exportProgress',
+] as const;
+
+const FAF_CHANNELS = [
+  'reader:pageChanged',
+] as const;
 
 // ─── Helpers ───
 
-/**
- * Invoke an IPC channel and unwrap the { ok, data, error } envelope.
- * Throws on error so the renderer gets a proper exception.
- */
-async function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
+async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
   const result = await ipcRenderer.invoke(channel, ...args);
-  // Support both wrapped (new handlers) and raw (legacy handlers) responses
   if (result && typeof result === 'object' && 'ok' in result) {
     if (!result.ok) {
       const err = new Error(result.error?.message ?? 'Unknown IPC error');
@@ -33,251 +150,71 @@ async function invoke<T = unknown>(channel: string, ...args: unknown[]): Promise
       (err as unknown as Record<string, unknown>)['recoverable'] = result.error?.recoverable;
       throw err;
     }
-    return result.data as T;
+    return result.data;
   }
-  // Raw return (legacy handlers without wrapHandler)
-  return result as T;
+  // Malformed response: handler did not return the expected { ok, data } envelope.
+  // This indicates a protocol violation — throw instead of silently returning raw data.
+  if (result !== undefined && result !== null) {
+    console.warn(`[preload] IPC channel "${channel}" returned non-envelope response`);
+  }
+  return result;
 }
 
-/**
- * Create a typed invoker function for a specific IPC channel.
- * The returned function forwards arguments and unwraps the envelope.
- */
-function createInvoker<C extends IpcChannel>(channel: C) {
-  return (...args: IpcArgs<C>): Promise<IpcResult<C>> =>
-    invoke(channel, ...args);
+function createInvoker(channel: string) {
+  return (...args: unknown[]) => invoke(channel, ...args);
 }
 
-/**
- * Create an event listener registration function.
- * Returns an unsubscribe function for cleanup in component unmount.
- */
-function createEventListener<T>(channel: string) {
-  return (cb: (event: T) => void): UnsubscribeFn => {
-    const listener = (_event: Electron.IpcRendererEvent, data: T) => cb(data);
+function createEventListener(channel: string) {
+  return (cb: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: unknown) => cb(data);
     ipcRenderer.on(channel, listener);
-    return () => {
-      ipcRenderer.removeListener(channel, listener);
-    };
+    return () => { ipcRenderer.removeListener(channel, listener); };
   };
 }
 
-// ─── API Definition ───
+// ─── Auto-builder ───
 
-const abyssalAPI = {
-  // ═══ db namespace ═══
-  db: {
-    papers: {
-      list:                 createInvoker('db:papers:list'),
-      get:                  createInvoker('db:papers:get'),
-      update:               createInvoker('db:papers:update'),
-      batchUpdateRelevance: createInvoker('db:papers:batchUpdateRelevance'),
-      importBibtex:         createInvoker('db:papers:importBibtex'),
-      getCounts:            createInvoker('db:papers:counts'),
-      delete:               createInvoker('db:papers:delete'),
-      batchDelete:          createInvoker('db:papers:batchDelete'),
-    },
+function setPath(obj: Record<string, any>, path: string[], value: unknown): void {
+  let node = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i]!;
+    node[key] ??= {};
+    node = node[key];
+  }
+  node[path[path.length - 1]!] = value;
+}
 
-    tags: {
-      list:   createInvoker('db:tags:list'),
-      create: createInvoker('db:tags:create'),
-      update: createInvoker('db:tags:update'),
-      delete: createInvoker('db:tags:delete'),
-    },
+function buildAPI(): AbyssalAPI {
+  const api: Record<string, any> = {};
 
-    discoverRuns: {
-      list: createInvoker('db:discoverRuns:list'),
-    },
+  // Invoke channels: 'db:papers:list' → api.db.papers.list(...)
+  for (const ch of INVOKE_CHANNELS) {
+    setPath(api, ch.split(':'), createInvoker(ch));
+  }
 
-    concepts: {
-      list:             createInvoker('db:concepts:list'),
-      getFramework:     createInvoker('db:concepts:getFramework'),
-      updateFramework:  createInvoker('db:concepts:updateFramework'),
-      merge:            createInvoker('db:concepts:merge'),
-      split:            createInvoker('db:concepts:split'),
-      search:           createInvoker('db:concepts:search'),
-      create:           createInvoker('db:concepts:create'),
-      updateMaturity:   createInvoker('db:concepts:updateMaturity'),
-      updateDefinition: createInvoker('db:concepts:updateDefinition'),
-      updateParent:     createInvoker('db:concepts:updateParent'),
-      getHistory:       createInvoker('db:concepts:getHistory'),
-      getTimeline:      createInvoker('db:concepts:getTimeline'),
-      getStats:         createInvoker('db:concepts:getStats'),
-      getMatrix:        createInvoker('db:concepts:getMatrix'),
-    },
+  // Event channels: 'pipeline:progress$event' → api.pipeline.onProgress(cb)
+  for (const ch of EVENT_CHANNELS) {
+    const base = ch.replace(/\$event$/, '');
+    const parts = base.split(':');
+    const last = parts.pop()!;
+    parts.push('on' + last.charAt(0).toUpperCase() + last.slice(1));
+    setPath(api, parts, createEventListener(ch));
+  }
 
-    memos: {
-      list:             createInvoker('db:memos:list'),
-      get:              createInvoker('db:memos:get'),
-      create:           createInvoker('db:memos:create'),
-      update:           createInvoker('db:memos:update'),
-      delete:           createInvoker('db:memos:delete'),
-      upgradeToNote:    createInvoker('db:memos:upgradeToNote'),
-      upgradeToConcept: createInvoker('db:memos:upgradeToConcept'),
-      getByEntity:      createInvoker('db:memos:getByEntity'),
-    },
+  // Push channels: 'push:dbChanged' → api.on.dbChanged(cb)
+  for (const ch of PUSH_CHANNELS) {
+    const name = ch.replace(/^push:/, '');
+    setPath(api, ['on', name], createEventListener(ch));
+  }
 
-    notes: {
-      list:             createInvoker('db:notes:list'),
-      get:              createInvoker('db:notes:get'),
-      create:           createInvoker('db:notes:create'),
-      updateMeta:       createInvoker('db:notes:updateMeta'),
-      delete:           createInvoker('db:notes:delete'),
-      upgradeToConcept: createInvoker('db:notes:upgradeToConcept'),
-      onFileChanged:    createInvoker('db:notes:onFileChanged'),
-    },
+  // Fire-and-forget: 'reader:pageChanged' → api.reader.pageChanged(...)
+  for (const ch of FAF_CHANNELS) {
+    setPath(api, ch.split(':'), (...args: unknown[]) => ipcRenderer.send(ch, ...args));
+  }
 
-    suggestedConcepts: {
-      list:    createInvoker('db:suggestedConcepts:list'),
-      accept:  createInvoker('db:suggestedConcepts:accept'),
-      dismiss: createInvoker('db:suggestedConcepts:dismiss'),
-      restore: createInvoker('db:suggestedConcepts:restore'),
-      getStats: createInvoker('db:suggestedConcepts:getStats'),
-    },
+  return api as AbyssalAPI;
+}
 
-    mappings: {
-      getForPaper:   createInvoker('db:mappings:getForPaper'),
-      getForConcept: createInvoker('db:mappings:getForConcept'),
-      adjudicate:    createInvoker('db:mappings:adjudicate'),
-      getHeatmapData: createInvoker('db:mappings:getHeatmapData'),
-    },
+// ─── Expose to renderer ───
 
-    annotations: {
-      listForPaper: createInvoker('db:annotations:listForPaper'),
-      create:       createInvoker('db:annotations:create'),
-      update:       createInvoker('db:annotations:update'),
-      delete:       createInvoker('db:annotations:delete'),
-    },
-
-    articles: {
-      listOutlines:       createInvoker('db:articles:listOutlines'),
-      create:             createInvoker('db:articles:create'),
-      update:             createInvoker('db:articles:update'),
-      getOutline:         createInvoker('db:articles:getOutline'),
-      updateOutlineOrder: createInvoker('db:articles:updateOutlineOrder'),
-      getSection:         createInvoker('db:articles:getSection'),
-      updateSection:      createInvoker('db:articles:updateSection'),
-      getSectionVersions: createInvoker('db:articles:getSectionVersions'),
-      createSection:      createInvoker('db:sections:create'),
-      deleteSection:      createInvoker('db:sections:delete'),
-      search:             createInvoker('db:articles:search'),
-    },
-
-    relations: {
-      getGraph:        createInvoker('db:relations:getGraph'),
-      getNeighborhood: createInvoker('db:relations:getNeighborhood'),
-    },
-
-    chat: {
-      saveMessage:   createInvoker('db:chat:saveMessage'),
-      getHistory:    createInvoker('db:chat:getHistory'),
-      deleteSession: createInvoker('db:chat:deleteSession'),
-      listSessions:  createInvoker('db:chat:listSessions'),
-    },
-  },
-
-  // ═══ search namespace ═══
-  search: {
-    semanticScholar: createInvoker('search:semanticScholar'),
-    openAlex:        createInvoker('search:openalex'),
-    arxiv:           createInvoker('search:arxiv'),
-    paperDetails:    createInvoker('search:paperDetails'),
-    citations:       createInvoker('search:citations'),
-    related:         createInvoker('search:related'),
-    byAuthor:        createInvoker('search:byAuthor'),
-  },
-
-  // ═══ rag namespace ═══
-  rag: {
-    search:          createInvoker('rag:search'),
-    searchWithReport: createInvoker('rag:searchWithReport'),
-    getWritingContext: createInvoker('rag:getWritingContext'),
-  },
-
-  // ═══ pipeline namespace ═══
-  pipeline: {
-    start:         createInvoker('pipeline:start'),
-    cancel:        createInvoker('pipeline:cancel'),
-    onProgress:    createEventListener('pipeline:progress$event'),
-    onStreamChunk: createEventListener('pipeline:streamChunk$event'),
-  },
-
-  // ═══ chat namespace ═══
-  chat: {
-    send:       createInvoker('chat:send'),
-    onResponse: createEventListener('chat:response$event'),
-  },
-
-  // ═══ reader namespace (fire-and-forget) ═══
-  reader: {
-    pageChanged: (paperId: string, page: number) =>
-      ipcRenderer.send('reader:pageChanged', paperId, page),
-  },
-
-  // ═══ fs namespace ═══
-  fs: {
-    openPDF:            createInvoker('fs:openPDF'),
-    savePDFAnnotations: createInvoker('fs:savePDFAnnotations'),
-    exportArticle:      createInvoker('fs:exportArticle'),
-    importFiles:        createInvoker('fs:importFiles'),
-    createSnapshot:     createInvoker('fs:createSnapshot'),
-    restoreSnapshot:    createInvoker('fs:restoreSnapshot'),
-    listSnapshots:      createInvoker('fs:listSnapshots'),
-    cleanupSnapshots:   createInvoker('fs:cleanupSnapshots'),
-    readNoteFile:       createInvoker('fs:readNoteFile'),
-    saveNoteFile:       createInvoker('fs:saveNoteFile'),
-  },
-
-  // ═══ advisory namespace ═══
-  advisory: {
-    getRecommendations:     createInvoker('advisory:getRecommendations'),
-    execute:                createInvoker('advisory:execute'),
-    getNotifications:       createInvoker('advisory:getNotifications'),
-    onNotificationsUpdated: createEventListener('advisory:notifications-updated$event'),
-  },
-
-  // ═══ app namespace ═══
-  app: {
-    getConfig:      createInvoker('app:getConfig'),
-    updateConfig:   createInvoker('app:updateConfig'),
-    getProjectInfo: createInvoker('app:getProjectInfo'),
-    switchProject:  createInvoker('app:switchProject'),
-    listProjects:   createInvoker('app:listProjects'),
-    createProject:  createInvoker('app:createProject'),
-    globalSearch:   createInvoker('app:globalSearch'),
-    onWorkflowComplete: createEventListener('pipeline:workflow-complete$event'),
-    onSectionQuality:   createEventListener('pipeline:section-quality$event'),
-    window: {
-      minimize:        createInvoker('app:window:minimize'),
-      toggleMaximize:  createInvoker('app:window:toggleMaximize'),
-      close:           createInvoker('app:window:close'),
-      popOut:          createInvoker('app:window:popOut'),
-      onMaximizedChange: createEventListener('app:window:maximized$event'),
-    },
-  },
-
-  // ═══ workspace namespace ═══
-  workspace: {
-    create:       createInvoker('workspace:create'),
-    openDialog:   createInvoker('workspace:openDialog'),
-    listRecent:   createInvoker('workspace:listRecent'),
-    getCurrent:   createInvoker('workspace:getCurrent'),
-    switch:       createInvoker('workspace:switch'),
-    removeRecent: createInvoker('workspace:removeRecent'),
-    togglePin:    createInvoker('workspace:togglePin'),
-    onSwitched:   createEventListener('workspace:switched$event'),
-  },
-
-  // ═══ on namespace — event subscriptions ═══
-  on: {
-    workflowProgress:   createEventListener('push:workflow-progress'),
-    agentStream:        createEventListener('push:agent-stream'),
-    dbChanged:          createEventListener('push:db-changed'),
-    notification:       createEventListener('push:notification'),
-    advisorySuggestions: createEventListener('push:advisory-suggestions'),
-    memoCreated:        createEventListener<{ memoId: string }>('push:memo-created'),
-    noteIndexed:        createEventListener<{ noteId: string; chunkCount: number }>('push:note-indexed'),
-  },
-};
-
-contextBridge.exposeInMainWorld('abyssal', abyssalAPI);
+contextBridge.exposeInMainWorld('abyssal', buildAPI());

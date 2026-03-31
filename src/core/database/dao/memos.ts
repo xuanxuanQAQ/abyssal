@@ -2,11 +2,11 @@
 // §5: addMemo / updateMemo / getMemosByEntity / deleteMemo
 
 import type Database from 'better-sqlite3';
-import type { MemoId, PaperId, ConceptId, AnnotationId, OutlineEntryId, NoteId } from '../../types/common';
+import type { MemoId } from '../../types/common';
 import type { ResearchMemo } from '../../types/memo';
 import type { TextChunk } from '../../types/chunk';
 import { asMemoId, asChunkId } from '../../types/common';
-import { fromRow, now } from '../row-mapper';
+import { now } from '../row-mapper';
 import { safeFromRow, MemoRowSchema } from '../schemas';
 import { writeTransaction } from '../transaction-utils';
 import { insertChunk, insertChunkTextOnly, deleteChunksByPrefix } from './chunks';
@@ -278,7 +278,66 @@ export function getMemosByEntity(
   }
 
   const rows = db.prepare(sql).all(entityId) as Record<string, unknown>[];
-  return rows.map((r) => fromRow<ResearchMemo>(r));
+  return rows.map((r) => safeFromRow<ResearchMemo>(r, MemoRowSchema));
+}
+
+// ─── queryMemos (with filter + pagination) ───
+
+export function queryMemos(
+  db: Database.Database,
+  filter?: {
+    paperIds?: string[];
+    conceptIds?: string[];
+    tags?: string[];
+    searchText?: string;
+    limit?: number;
+    offset?: number;
+  },
+): ResearchMemo[] {
+  let sql = 'SELECT * FROM research_memos WHERE 1=1';
+  const params: unknown[] = [];
+
+  if (filter?.searchText) {
+    sql += ' AND text LIKE ?';
+    params.push(`%${filter.searchText}%`);
+  }
+
+  if (filter?.paperIds && filter.paperIds.length > 0) {
+    const placeholders = filter.paperIds.map(() => '?').join(',');
+    sql += ` AND EXISTS (
+      SELECT 1 FROM memo_paper_map mp
+      WHERE mp.memo_id = research_memos.id AND mp.paper_id IN (${placeholders})
+    )`;
+    params.push(...filter.paperIds);
+  }
+
+  if (filter?.conceptIds && filter.conceptIds.length > 0) {
+    const placeholders = filter.conceptIds.map(() => '?').join(',');
+    sql += ` AND EXISTS (
+      SELECT 1 FROM memo_concept_map mc
+      WHERE mc.memo_id = research_memos.id AND mc.concept_id IN (${placeholders})
+    )`;
+    params.push(...filter.conceptIds);
+  }
+
+  if (filter?.tags && filter.tags.length > 0) {
+    const placeholders = filter.tags.map(() => '?').join(',');
+    sql += ` AND EXISTS (
+      SELECT 1 FROM json_each(tags) je
+      WHERE je.value IN (${placeholders})
+    )`;
+    params.push(...filter.tags);
+  }
+
+  sql += ' ORDER BY created_at DESC';
+
+  const limit = filter?.limit ?? 50;
+  const offset = filter?.offset ?? 0;
+  sql += ' LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  return rows.map((r) => safeFromRow<ResearchMemo>(r, MemoRowSchema));
 }
 
 // ─── getMemo ───

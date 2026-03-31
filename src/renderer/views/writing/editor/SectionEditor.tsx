@@ -10,14 +10,16 @@
  * Responsibilities:
  *   - Reads the currently-selected section from store + TanStack Query.
  *   - Manages section-switch flow (save current -> load new).
- *   - Connects AI operations from toolbar buttons to useEditorStore.
+ *   - Connects AI operations from toolbar buttons to useAIOperations.
  *   - Shows an unsaved-changes indicator next to the title.
  */
 
-import React, { useRef, useCallback, useEffect } from 'react';
+import React, { useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAppStore } from '../../../core/store';
 import { useEditorStore } from '../../../core/store/useEditorStore';
 import { useSection, useUpdateSection } from '../../../core/ipc/hooks/useArticles';
+import { useOutlineData } from '../hooks/useOutlineData';
+import { useAIOperations } from '../ai/useAIOperations';
 import { SectionTitleInput } from './SectionTitleInput';
 import { EditorToolbar } from './EditorToolbar';
 import { TiptapEditor, type TiptapEditorHandle } from './TiptapEditor';
@@ -32,6 +34,7 @@ const AUTO_SAVE_DEBOUNCE_MS = 1_500;
 
 export function SectionEditor() {
   const selectedSectionId = useAppStore((s) => s.selectedSectionId);
+  const selectedArticleId = useAppStore((s) => s.selectedArticleId);
   const aiGenerating = useEditorStore((s) => s.aiGenerating);
   const unsavedChanges = useEditorStore((s) => s.unsavedChanges);
   const setUnsavedChanges = useEditorStore((s) => s.setUnsavedChanges);
@@ -44,11 +47,37 @@ export function SectionEditor() {
 
   const { data: sectionData } = useSection(selectedSectionId);
   const updateSection = useUpdateSection();
+  const outlineData = useOutlineData(selectedArticleId);
 
-  // Derive numbering. In a full implementation this comes from the outline
-  // tree walker. For now we use a placeholder that can be replaced when the
-  // outline context is wired up.
-  const numbering = ''; // TODO: derive from outline tree
+  // Derive numbering and title from outline data
+  const numbering = useMemo(() => {
+    if (!selectedSectionId) return '';
+    return outlineData.numbering[selectedSectionId] ?? '';
+  }, [selectedSectionId, outlineData.numbering]);
+
+  const sectionTitleFromOutline = useMemo(() => {
+    if (!selectedSectionId) return '';
+    function findTitle(nodes: typeof outlineData.sections): string {
+      for (const node of nodes) {
+        if (node.id === selectedSectionId) return node.title;
+        if (node.children.length > 0) {
+          const found = findTitle(node.children);
+          if (found) return found;
+        }
+      }
+      return '';
+    }
+    return findTitle(outlineData.sections);
+  }, [selectedSectionId, outlineData.sections]);
+
+  // ── AI Operations ──
+
+  const editor = editorRef.current?.getEditor() ?? null;
+
+  const aiOps = useAIOperations({
+    editor,
+    sectionId: selectedSectionId,
+  });
 
   // ── Auto-save flush ──
 
@@ -119,39 +148,57 @@ export function SectionEditor() {
     editorRef.current?.focus();
   }, []);
 
-  // ── AI operation stubs ──
+  // ── AI operation callbacks (wired to useAIOperations) ──
 
   const handleAIGenerate = useCallback(() => {
-    // TODO: wire to AI generate pipeline
-  }, []);
+    aiOps.generate();
+  }, [aiOps]);
 
   const handleAIRewrite = useCallback(() => {
-    // TODO: wire to AI rewrite pipeline
-  }, []);
+    aiOps.rewrite();
+  }, [aiOps]);
 
   const handleAIExpand = useCallback(() => {
-    // TODO: wire to AI expand pipeline
-  }, []);
+    aiOps.expand();
+  }, [aiOps]);
 
   const handleAICancel = useCallback(() => {
-    const taskId = useEditorStore.getState().aiGeneratingTaskId;
-    if (taskId !== null) {
-      // TODO: call pipeline cancel IPC
-    }
-    useEditorStore.getState().setAIGenerating(false);
-  }, []);
+    aiOps.cancel();
+  }, [aiOps]);
 
   const handleAICompress = useCallback(() => {
-    // TODO: wire to AI compress pipeline
-  }, []);
+    // Compress reuses rewrite with the full doc content as context
+    // For now, map to rewrite (selection-based compression)
+    aiOps.rewrite();
+  }, [aiOps]);
 
   const handleInsertCitation = useCallback(() => {
-    // TODO: open citation picker
-  }, []);
+    // Insert `[@` to trigger the CitationAutocomplete plugin
+    if (!editor) return;
+    editor.chain().focus().insertContent('[@').run();
+  }, [editor]);
 
   const handleInsertMath = useCallback(() => {
-    // TODO: open math input
-  }, []);
+    // Insert an inline math node placeholder
+    if (!editor) return;
+    const mathNodeType = editor.schema.nodes.mathInline;
+    if (mathNodeType) {
+      editor.chain().focus().command(({ tr, dispatch }) => {
+        if (dispatch) {
+          const node = mathNodeType.create({ latex: '' });
+          tr.replaceSelectionWith(node);
+        }
+        return true;
+      }).run();
+    } else {
+      // Fallback: insert LaTeX delimiters
+      editor.chain().focus().insertContent('$  $').run();
+      // Move cursor inside the delimiters
+      const { state } = editor;
+      const pos = state.selection.from - 2;
+      editor.commands.setTextSelection(pos);
+    }
+  }, [editor]);
 
   // ── No section selected ──
 
@@ -174,9 +221,7 @@ export function SectionEditor() {
   }
 
   const sectionContent = sectionData?.content ?? '';
-  const sectionTitle = '';
-
-  const editor = editorRef.current?.getEditor() ?? null;
+  const sectionTitle = sectionTitleFromOutline;
 
   return (
     <div

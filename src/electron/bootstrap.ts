@@ -32,8 +32,11 @@ import { loadGlobalConfig } from '../core/infra/global-config';
 import { isWorkspace, scaffoldWorkspace, getWorkspacePaths, WorkspaceManager } from '../core/workspace';
 import { createDbProxy, type DbProxyInstance } from '../db-process/db-proxy';
 import { createBibliographyService } from '../core/bibliography';
+import { createRagService, type RagService } from '../core/rag';
 import type { AbyssalConfig, GlobalConfig } from '../core/types/config';
+import { ConfigProvider } from '../core/infra/config-provider';
 import { createLlmClient, type LlmClient } from '../adapter/llm-client/llm-client';
+import { createEmbedFunction } from '../adapter/llm-client/embed-function-factory';
 import { RerankerScheduler } from '../adapter/llm-client/reranker';
 import { createContextBudgetManager } from '../adapter/context-budget/context-budget-manager';
 import { WorkflowRunner } from '../adapter/orchestrator/workflow-runner';
@@ -42,10 +45,22 @@ import { createSynthesizeWorkflow } from '../adapter/orchestrator/workflows/synt
 import { createBibliographyWorkflow } from '../adapter/orchestrator/workflows/bibliography';
 import { createDiscoverWorkflow } from '../adapter/orchestrator/workflows/discover';
 import { createAcquireWorkflow } from '../adapter/orchestrator/workflows/acquire';
+import { createAcquireService } from '../core/acquire';
+import { createProcessService } from '../core/process';
+import { createSearchService } from '../core/search';
+import { IdentifierResolver } from '../core/acquire/identifier-resolver';
+import { ContentSanityChecker } from '../core/acquire/content-sanity-checker';
+import { FailureMemory } from '../core/acquire/failure-memory';
+import { createRateLimiter } from '../core/infra/rate-limiter';
+import { HttpClient } from '../core/infra/http-client';
 import { createArticleWorkflow } from '../adapter/orchestrator/workflows/article';
 import { AgentLoop } from '../adapter/agent-loop/agent-loop';
-import { ToolRegistry } from '../adapter/agent-loop/tool-registry';
+import { ToolRegistry, type ToolServices } from '../adapter/agent-loop/tool-registry';
+import type { ActivePaperContext, ActiveConceptContext } from '../adapter/agent-loop/system-prompt-builder';
 import { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
+import type { ChatContext } from '../shared-types/ipc';
+import { CookieJar } from '../core/infra/cookie-jar';
+import { ReconCache, type ReconCacheDb } from '../core/acquire/recon-cache';
 
 // ─── ParsedArgs ───
 
@@ -62,8 +77,10 @@ interface BootstrapContext {
   lockHandle: LockHandle | null;
   globalConfig: GlobalConfig | null;
   config: AbyssalConfig | null;
+  configProvider: ConfigProvider | null;
   logger: Logger | null;
   dbProxy: DbProxyInstance | null;
+  vecEnabled: boolean;
   appContext: AppContext | null;
   frameworkState: FrameworkState | null;
 }
@@ -154,6 +171,11 @@ async function step3_loadConfig(ctx: BootstrapContext): Promise<void> {
       app.quit();
     }
   }
+
+  // Create ConfigProvider — the single source of truth for runtime config
+  if (ctx.config) {
+    ctx.configProvider = new ConfigProvider(ctx.config);
+  }
 }
 
 // ─── Step 4: Logger initialization ───
@@ -163,7 +185,11 @@ async function step4_initLogger(ctx: BootstrapContext): Promise<void> {
   const fs = require('node:fs') as typeof import('node:fs');
   fs.mkdirSync(wsPaths.logs, { recursive: true });
 
-  const logger = new FileLogger(wsPaths.logs, ctx.args.logLevel);
+  // CLI --log-level overrides config; otherwise use config.logging.level
+  const logLevel = ctx.args.logLevel !== 'info'
+    ? ctx.args.logLevel
+    : (ctx.config?.logging.level ?? 'info');
+  const logger = new FileLogger(wsPaths.logs, logLevel);
   logger.cleanupOldLogs();
   ctx.logger = logger;
 
@@ -176,7 +202,7 @@ async function step4_initLogger(ctx: BootstrapContext): Promise<void> {
   logger.info('Abyssal starting', {
     workspace: ctx.args.workspace,
     dev: ctx.args.dev,
-    logLevel: ctx.args.logLevel,
+    logLevel,
     electronVersion: process.versions['electron'] ?? 'N/A',
     nodeVersion: process.version,
     platform: process.platform,
@@ -191,16 +217,26 @@ async function step5_initDatabase(ctx: BootstrapContext): Promise<void> {
 
   try {
     const dbProcessPath = path.resolve(__dirname, '..', 'db-process', 'main.js');
-    const dbProxy = createDbProxy({ dbProcessPath });
+    const dbProxy = createDbProxy({
+      dbProcessPath,
+      onHealthStatus: (status) => {
+        // Push to renderer if PushManager is available (set up in Step 6)
+        ctx.appContext?.pushManager?.pushDbHealth({ status });
+      },
+    });
 
     await dbProxy.start({
       workspaceRoot: ctx.args.workspace,
       userDataPath: app.getPath('userData'),
-      skipVecExtension: true,
+      skipVecExtension: false,
     });
 
     ctx.dbProxy = dbProxy;
-    logger.info('DB subprocess started', { workspace: ctx.args.workspace });
+    ctx.vecEnabled = true;
+    logger.info('DB subprocess started', {
+      workspace: ctx.args.workspace,
+      vectorSearch: 'enabled',
+    });
   } catch (err) {
     const errMsg = (err as Error).message;
     logger.error('Database initialization failed', err as Error);
@@ -209,10 +245,7 @@ async function step5_initDatabase(ctx: BootstrapContext): Promise<void> {
     let title = 'Database Error';
     let detail = errMsg;
 
-    if (errMsg.includes('Extension') || errMsg.includes('sqlite-vec')) {
-      title = 'Database Extension Error';
-      detail = `sqlite-vec extension failed to load.\nPlatform: ${process.platform}/${process.arch}\n\n${errMsg}`;
-    } else if (errMsg.includes('migration') || errMsg.includes('Migration')) {
+    if (errMsg.includes('migration') || errMsg.includes('Migration')) {
       title = 'Database Migration Error';
       detail = `Schema migration failed. Consider restoring from a snapshot.\n\n${errMsg}`;
     }
@@ -228,28 +261,87 @@ async function step5_initDatabase(ctx: BootstrapContext): Promise<void> {
 async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   const config = ctx.config!;
   const logger = ctx.logger!;
+  const configProvider = ctx.configProvider!;
   const dbProxy = ctx.dbProxy!;
 
   // ── Layer 1: Core modules (no LLM dependency) ──
   const bibliographyModule = createBibliographyService(config, logger);
-  // TODO: wire up when fully integrated with IPC proxy pattern
-  // const searchModule = createSearchService(config, logger);
-  // const acquireModule = createAcquireService(config, logger);
-  // const processModule = createProcessService(config, null);
-
-  // ── Layer 2: Reranker (may start Worker Thread) ──
-  const reranker = new RerankerScheduler(config.rag, config.apiKeys, logger);
-  if (config.rag.rerankerBackend === 'local-bge') {
-    try {
-      await reranker.startWorker(config.rag.localRerankerModelPath ?? undefined);
-    } catch (err) {
-      logger.warn('Local ONNX reranker failed to start, falling back to vector score', {
-        error: (err as Error).message,
+  const acquireModule = createAcquireService(config, logger);
+  logger.info('AcquireService initialized', {
+    enableCnki: config.acquire.enableCnki,
+    enableWanfang: config.acquire.enableWanfang,
+    enableChinaInstitutional: config.acquire.enableChinaInstitutional,
+    chinaInstitutionId: config.acquire.chinaInstitutionId,
+    enabledSources: config.acquire.enabledSources,
+  });
+  // Keep AcquireService config in sync when user changes settings at runtime
+  configProvider.onChange((event) => {
+    if (event.changedSections.includes('acquire') || event.changedSections.includes('apiKeys')) {
+      acquireModule.updateConfig(event.current);
+      logger.info('AcquireService config updated at runtime', {
+        changedSections: event.changedSections,
+        enableCnki: event.current.acquire.enableCnki,
+        enableWanfang: event.current.acquire.enableWanfang,
       });
+    }
+  });
+  const processModule = createProcessService(config, null);
+  const searchModule = createSearchService(config, logger);
+
+  // ── Web Search Service (Tavily / SerpAPI / Bing) ──
+  const { createWebSearchService } = await import('../core/search/web-search');
+
+  /** 根据语言配置推导 Bing mkt 参数 */
+  function deriveBingMarket(cfg: AbyssalConfig): string {
+    const lang = cfg.language?.defaultOutputLanguage ?? 'en';
+    if (/^zh/i.test(lang)) return 'zh-CN';
+    if (/^ja/i.test(lang)) return 'ja-JP';
+    if (/^ko/i.test(lang)) return 'ko-KR';
+    if (/^de/i.test(lang)) return 'de-DE';
+    if (/^fr/i.test(lang)) return 'fr-FR';
+    if (/^es/i.test(lang)) return 'es-ES';
+    return 'en-US';
+  }
+
+  function buildWebSearchService(
+    cfg: AbyssalConfig,
+  ): import('../core/search/web-search').WebSearchService | null {
+    if (!cfg.webSearch?.enabled) return null;
+    if (!cfg.apiKeys.webSearchApiKey) return null;
+
+    try {
+      const svc = createWebSearchService(new HttpClient({ logger }), logger, {
+        backend: cfg.webSearch.backend ?? 'tavily',
+        apiKey: cfg.apiKeys.webSearchApiKey,
+        market: deriveBingMarket(cfg),
+      });
+      logger.info('WebSearchService initialized', { backend: cfg.webSearch.backend });
+      return svc;
+    } catch (err) {
+      logger.warn('Failed to create WebSearchService', { error: (err as Error).message });
+      return null;
     }
   }
 
-  // ── Layer 3: LlmClient (depends on reranker) ──
+  function getWebSearchDisabledReason(): string {
+    const cfg = configProvider.config;
+    if (!cfg.webSearch?.enabled) {
+      return 'Web search is disabled. Enable it in Settings → Web Search.';
+    }
+    if (!cfg.apiKeys.webSearchApiKey) {
+      return 'Web search API key not configured. Add it in Settings → API Keys.';
+    }
+    return 'Web search service failed to initialize. Check logs for details.';
+  }
+
+  let webSearchService = buildWebSearchService(config);
+
+  // ── Layer 2: Reranker (API backends) ──
+  const reranker = new RerankerScheduler(configProvider, logger);
+
+  // ── Layer 3: EmbedFunction + LlmClient ──
+  const embedFn = createEmbedFunction({ configProvider, logger });
+
   let llmClient: LlmClient | null = null;
   const hasAnyApiKey = !!(
     config.apiKeys.anthropicApiKey ||
@@ -259,13 +351,13 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   if (hasAnyApiKey) {
     try {
       llmClient = createLlmClient({
-        config,
+        configProvider,
         logger,
         reranker,
-        // TODO: inject EmbedFunction when embedder is wired up
-        embedFn: null,
+        embedFn,
       });
       logger.info('LlmClient initialized', {
+        embedding: embedFn.isAvailable ? 'enabled' : 'disabled',
         providers: [
           config.apiKeys.anthropicApiKey ? 'anthropic' : null,
           config.apiKeys.openaiApiKey ? 'openai' : null,
@@ -279,17 +371,32 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
     logger.info('No API keys configured — LlmClient disabled');
   }
 
+  // ── Layer 3.5: RagService (depends on EmbedFunction + DB) ──
+  let ragService: RagService | null = null;
+  if (embedFn.isAvailable) {
+    try {
+      ragService = createRagService(embedFn, dbProxy as any, config, logger);
+      logger.info('RagService initialized');
+    } catch (err) {
+      logger.warn('RagService initialization failed', { error: (err as Error).message });
+    }
+  }
+
   // ── Layer 4: Context Budget Manager ──
   const contextBudgetManager = createContextBudgetManager(logger);
 
   // ── Assemble AppContext ──
   ctx.appContext = createAppContext({
-    config,
+    configProvider,
     logger,
     dbProxy,
     lockHandle: ctx.lockHandle!,
     workspaceRoot: ctx.args.workspace,
+    acquireModule,
+    processModule,
     bibliographyModule,
+    ragModule: ragService,
+    searchModule,
   });
 
   // Inject adapter-layer modules
@@ -300,44 +407,157 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   const pushManager = new PushManager();
   ctx.appContext.pushManager = pushManager;
 
+  // ── CookieJar for institutional access ──
+  const userDataPath = app.getPath('userData');
+  const cookieJar = new CookieJar(userDataPath);
+  ctx.appContext.cookieJar = cookieJar;
+  acquireModule.setCookieJar(cookieJar);
+  logger.info('CookieJar initialized', {
+    hasExistingSession: cookieJar.getActiveDomains().length > 0,
+    institutionId: cookieJar.getInstitutionId(),
+  });
+
+  // ── BrowserWindow-based search for CNKI/Wanfang ──
+  const { createBrowserSearchFn } = await import('./browser-search');
+  const browserSearchFn = createBrowserSearchFn(
+    () => cookieJar.getInstitutionId(),
+    logger,
+  );
+  acquireModule.setBrowserSearch(browserSearchFn);
+
+  // ── ReconCache for acquire pipeline v2 ──
+  const reconCacheDb: ReconCacheDb = {
+    getRecon: (doi: string) => (dbProxy as any).getRecon(doi),
+    upsertRecon: (recon: any) => (dbProxy as any).upsertRecon(recon),
+  };
+  const reconCache = new ReconCache(reconCacheDb, logger);
+  acquireModule.setReconCache(reconCache);
+
   // ── Layer 5: WorkflowRunner + AgentLoop + AdvisoryAgent ──
   const workflowRunner = new WorkflowRunner(logger, pushManager);
 
   // Register all workflows
-  // TODO: Wire SearchService, AcquireService, ProcessService for Electron GUI.
-  // For now, discover/acquire are registered with placeholder services that
-  // will log warnings when invoked without proper configuration.
   workflowRunner.registerWorkflow('discover', createDiscoverWorkflow({
     dbProxy: dbProxy as any,
-    searchService: null as any, // TODO: createSearchService(config, logger)
+    searchService: searchModule,
     llmClient,
     logger,
     config: { discovery: config.discovery as any, project: config.project as any },
-    frameworkState: ctx.appContext.frameworkState,
+    frameworkState: () => ctx.appContext!.frameworkState,
   }));
+  // ── LLM-enhanced acquire services (Feature 1/2/3) ──
+  const llmCallFn = llmClient
+    ? async (systemPrompt: string, userPrompt: string, workflowId: string) => {
+        const result = await llmClient!.complete({
+          systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+          maxTokens: 200,
+          temperature: 0,
+          workflowId,
+        });
+        return result.text;
+      }
+    : null;
+
+  const resolverHttp = new HttpClient({ logger, userAgentEmail: config.apiKeys.openalexEmail ?? undefined });
+  const s2ApiKey = config.apiKeys.semanticScholarApiKey ?? null;
+  const identifierResolver = new IdentifierResolver(
+    resolverHttp,
+    createRateLimiter('crossRef'),
+    createRateLimiter(s2ApiKey ? 'semanticScholarWithKey' : 'semanticScholarNoKey'),
+    s2ApiKey,
+    llmCallFn,
+    logger,
+  );
+
+  const sanityChecker = new ContentSanityChecker(llmCallFn, logger);
+
+  // FailureMemory: uses in-memory cache (no direct DB dependency from main process)
+  const failureMemory = new FailureMemory(null, logger, config.acquire.failureMemoryWindowDays);
+  acquireModule.setFailureMemory(failureMemory);
+
   workflowRunner.registerWorkflow('acquire', createAcquireWorkflow({
     dbProxy: dbProxy as any,
-    acquireService: null as any, // TODO: new AcquireService(config, logger)
-    processService: null as any, // TODO: new ProcessService(config)
-    ragService: null,
+    acquireService: acquireModule,
+    processService: processModule,
+    ragService: ragService as any,
     bibliographyService: bibliographyModule as any,
+    identifierResolver,
+    sanityChecker,
+    failureMemory,
+    acquireConfig: config.acquire,
     logger,
     workspacePath: ctx.args.workspace,
+    // Hydrate pipeline services
+    hydrateConfig: {
+      enableLlmExtraction: !!llmCallFn,
+      enableApiLookup: true,
+    },
+    llmCallFn,
+    lookupService: {
+      getPaperDetails: (id: string) => searchModule.getPaperDetails(id).catch(() => null),
+      searchByTitle: (title: string) => searchModule.searchSemanticScholar(title, { limit: 3 }).catch(() => []),
+    },
+    enrichService: bibliographyModule ? {
+      enrichByDoi: async (doi: string) => {
+        try {
+          const result = await (bibliographyModule as any).enrichBibliography({ doi } as any);
+          return result?.metadata ?? null;
+        } catch { return null; }
+      },
+    } : null,
+    hydratePersist: {
+      upsertReferences: (paperId, refs) => {
+        (dbProxy as any).upsertReferences(paperId, refs);
+      },
+      insertHydrateLogs: (paperId, logs) => {
+        (dbProxy as any).insertHydrateLogs(paperId, logs);
+      },
+    },
   }));
   if (llmClient) {
     workflowRunner.registerWorkflow('analyze', createAnalyzeWorkflow({
       dbProxy: dbProxy as any, llmClient, contextBudgetManager, logger,
-      frameworkState: ctx.appContext.frameworkState,
+      frameworkState: () => ctx.appContext!.frameworkState,
       workspacePath: ctx.args.workspace,
+      outputLanguage: configProvider.config.language.defaultOutputLanguage,
+      ragService: ragService ? {
+        retrieve: async (query: string, options?: { paperId?: string; topK?: number }) => {
+          const result = await ragService!.retrieve({
+            queryText: query,
+            taskType: 'analyze',
+            conceptIds: [],
+            paperIds: options?.paperId ? [options.paperId as any] : [],
+            sectionTypeFilter: null,
+            sourceFilter: null,
+            budgetMode: 'focused',
+            maxTokens: 50_000,
+            modelContextWindow: 200_000,
+            enableCorrectiveRag: true,
+            relatedMemoIds: [],
+            skipReranker: false,
+            skipQueryExpansion: false,
+          });
+          return {
+            passages: result.chunks.map((c) => ({
+              text: c.text,
+              paperId: c.paperId as string,
+              score: c.score,
+              chunkId: c.chunkId as string,
+            })),
+            qualityReport: result.qualityReport,
+          };
+        },
+      } : null,
     }));
     workflowRunner.registerWorkflow('synthesize', createSynthesizeWorkflow({
       dbProxy: dbProxy as any, llmClient, contextBudgetManager, logger,
-      ragService: null, // TODO: wire RagService for Electron
+      ragService: ragService as any,
       workspacePath: ctx.args.workspace,
     }));
     workflowRunner.registerWorkflow('article', createArticleWorkflow({
       dbProxy: dbProxy as any, llmClient, contextBudgetManager, logger,
-      ragService: null, // TODO: wire RagService for Electron
+      ragService: ragService as any,
       workspacePath: ctx.args.workspace,
     }));
   }
@@ -352,39 +572,178 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
 
   // AgentLoop (requires LlmClient)
   if (llmClient) {
-    const toolRegistry = new ToolRegistry({
+    const toolServices: ToolServices = {
       dbProxy: dbProxy as any,
-      // TODO: wire searchService and ragService when available in Electron context
-      searchService: null,
-      ragService: null,
+      searchService: searchModule,
+      ragService: ragService as any,
+      webSearchService,
+      getWebSearchDisabledReason,
+      orchestrator: workflowRunner as any,
+      addPaper: async (paper) => {
+        const { generatePaperId } = await import('../core/search/paper-id');
+        const id = generatePaperId(
+          (paper['doi'] as string) ?? null,
+          null,
+          (paper['title'] as string) ?? '',
+        );
+        await dbProxy.addPaper({ ...paper, id } as any, { fulltextStatus: 'not_attempted' } as any);
+        return id;
+      },
+      updatePaper: async (id, fields) => {
+        await dbProxy.updatePaper(id as any, fields as any);
+      },
+    };
+
+    // Hot-reload WebSearchService when webSearch or apiKeys config changes
+    configProvider.onChange((event) => {
+      if (event.changedSections.includes('webSearch') || event.changedSections.includes('apiKeys')) {
+        toolServices.webSearchService = buildWebSearchService(event.current);
+        if (toolServices.webSearchService) {
+          logger.info('WebSearchService recreated after config change');
+        } else {
+          logger.info('WebSearchService disabled after config change');
+        }
+      }
     });
+
+    const toolRegistry = new ToolRegistry(toolServices);
     const agentLoop = new AgentLoop({
       llmClient,
       toolRegistry,
       pushManager,
-      getSystemPromptContext: async () => {
+      getSystemPromptContext: async (chatContext?: ChatContext) => {
         const stats = await ctx.appContext!.getStats();
         const allConcepts = (await dbProxy.getAllConcepts()) as unknown as Array<Record<string, unknown>>;
         const activeConcepts = allConcepts.filter((c) => !c['deprecated']);
-        // Fetch detailed stats via raw query
+        // Fetch detailed stats
         let analyzedPapers = 0;
         let acquiredPapers = 0;
         let memoCount = 0;
         let noteCount = 0;
-        let totalMappings = 0;
-        let reviewedMappings = 0;
         try {
           const detailedStats = await dbProxy.getStats() as unknown as Record<string, unknown>;
           analyzedPapers = (detailedStats['analyzedPapers'] as number) ?? 0;
           acquiredPapers = (detailedStats['acquiredPapers'] as number) ?? 0;
           memoCount = (detailedStats['memoCount'] as number) ?? 0;
           noteCount = (detailedStats['noteCount'] as number) ?? 0;
-          totalMappings = (detailedStats['totalMappings'] as number) ?? 0;
-          reviewedMappings = (detailedStats['reviewedMappings'] as number) ?? 0;
         } catch { /* use defaults */ }
 
+        // ── Resolve active paper(s) context from ChatContext ──
+        let activePaper: ActivePaperContext | undefined;
+        let activePapers: ActivePaperContext[] | undefined;
+        let activeConcept: ActiveConceptContext | undefined;
+
+        // Multi-paper context (Library multi-select)
+        if (chatContext?.selectedPaperIds && chatContext.selectedPaperIds.length > 1) {
+          try {
+            const papers: ActivePaperContext[] = [];
+            // Limit to 8 papers to keep prompt compact
+            for (const pid of chatContext.selectedPaperIds.slice(0, 8)) {
+              const paper = await dbProxy.getPaper(pid as any) as Record<string, unknown> | null;
+              if (!paper) continue;
+
+              let mappedConcepts: string[] | undefined;
+              try {
+                const mappings = await dbProxy.getRelationGraph({ centerId: pid as any, depth: 1 }) as Record<string, unknown>;
+                const nodes = (mappings['nodes'] ?? []) as Array<Record<string, unknown>>;
+                mappedConcepts = nodes
+                  .filter((n) => n['type'] === 'concept')
+                  .map((n) => (n['nameEn'] ?? n['name_en'] ?? n['label'] ?? '') as string)
+                  .filter(Boolean)
+                  .slice(0, 5);
+              } catch { /* ignore */ }
+
+              papers.push({
+                id: pid,
+                title: (paper['title'] as string) ?? 'Untitled',
+                authors: (paper['authors'] as string) ?? '',
+                year: (paper['year'] as number) ?? null,
+                abstract: ((paper['abstract'] as string) ?? '').slice(0, 500),
+                analysisStatus: (paper['analysisStatus'] ?? paper['analysis_status'] ?? 'pending') as string,
+                fulltextStatus: (paper['fulltextStatus'] ?? paper['fulltext_status'] ?? 'missing') as string,
+                ...(mappedConcepts && mappedConcepts.length > 0 ? { mappedConcepts } : {}),
+              });
+            }
+            if (papers.length > 1) {
+              activePapers = papers;
+            }
+          } catch (err) {
+            logger.warn('Failed to load multi-paper context', { error: (err as Error).message });
+          }
+        }
+
+        // Single paper context
+        if (!activePapers && chatContext?.selectedPaperId) {
+          try {
+            const paper = await dbProxy.getPaper(chatContext.selectedPaperId as any) as Record<string, unknown> | null;
+            if (paper) {
+              // Build authors string
+              const authors = (paper['authors'] as string) ?? '';
+
+              // Try to load analysis summary if analysis is completed
+              let analysisSummary: string | undefined;
+              if (paper['analysisStatus'] === 'completed' || paper['analysis_status'] === 'completed') {
+                try {
+                  const analysisPath = (paper['analysisPath'] ?? paper['analysis_path']) as string | undefined;
+                  if (analysisPath) {
+                    const fs = await import('node:fs/promises');
+                    const analysisText = await fs.readFile(analysisPath, 'utf-8');
+                    const analysisData = JSON.parse(analysisText);
+                    // Extract the summary section (keep it concise for context window)
+                    analysisSummary = (analysisData.summary ?? analysisData.overview ?? '').slice(0, 2000);
+                  }
+                } catch { /* analysis file not available */ }
+              }
+
+              // Get mapped concepts for this paper
+              let mappedConcepts: string[] | undefined;
+              try {
+                const mappings = await dbProxy.getRelationGraph({ centerId: chatContext.selectedPaperId as any, depth: 1 }) as Record<string, unknown>;
+                const nodes = (mappings['nodes'] ?? []) as Array<Record<string, unknown>>;
+                mappedConcepts = nodes
+                  .filter((n) => n['type'] === 'concept')
+                  .map((n) => (n['nameEn'] ?? n['name_en'] ?? n['label'] ?? '') as string)
+                  .filter(Boolean)
+                  .slice(0, 10);
+              } catch { /* ignore */ }
+
+              activePaper = {
+                id: chatContext.selectedPaperId,
+                title: (paper['title'] as string) ?? 'Untitled',
+                authors,
+                year: (paper['year'] as number) ?? null,
+                abstract: ((paper['abstract'] as string) ?? '').slice(0, 1500),
+                analysisStatus: (paper['analysisStatus'] ?? paper['analysis_status'] ?? 'pending') as string,
+                fulltextStatus: (paper['fulltextStatus'] ?? paper['fulltext_status'] ?? 'missing') as string,
+                ...(paper['doi'] ? { doi: paper['doi'] as string } : {}),
+                ...(analysisSummary ? { analysisSummary } : {}),
+                ...(mappedConcepts && mappedConcepts.length > 0 ? { mappedConcepts } : {}),
+              };
+            }
+          } catch (err) {
+            logger.warn('Failed to load active paper for system prompt', { paperId: chatContext.selectedPaperId, error: (err as Error).message });
+          }
+        }
+
+        if (chatContext?.selectedConceptId) {
+          try {
+            const concept = await dbProxy.getConcept(chatContext.selectedConceptId as any) as Record<string, unknown> | null;
+            if (concept) {
+              activeConcept = {
+                id: chatContext.selectedConceptId,
+                nameEn: (concept['nameEn'] ?? concept['name_en'] ?? '') as string,
+                definition: ((concept['definition'] as string) ?? '').slice(0, 1000),
+                maturity: (concept['maturity'] as string) ?? 'working',
+                mappedPaperCount: (concept['mappedPaperCount'] ?? concept['mapped_paper_count'] ?? 0) as number,
+              };
+            }
+          } catch (err) {
+            logger.warn('Failed to load active concept for system prompt', { conceptId: chatContext.selectedConceptId, error: (err as Error).message });
+          }
+        }
+
         return {
-          projectName: config.project.name,
+          projectName: configProvider.config.project.name,
           frameworkState: ctx.appContext!.frameworkState,
           conceptCount: activeConcepts.length,
           tentativeCount: activeConcepts.filter((c) => c['maturity'] === 'tentative').length,
@@ -398,14 +757,21 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
           topConcepts: activeConcepts.slice(0, 10).map((c) => ({
             nameEn: (c['nameEn'] ?? c['name_en']) as string ?? '',
             maturity: (c['maturity'] as string) ?? 'working',
-            mappedPapers: 0, // TODO: count per-concept mappings
+            mappedPapers: 0,
           })),
           advisorySuggestions: ctx.appContext!.advisoryAgent?.getLatestSuggestions() ?? [],
           toolCount: toolRegistry.toolCount,
+          activePaper,
+          activePapers,
+          activeConcept,
+          pdfPage: chatContext?.pdfPage,
+          defaultOutputLanguage: configProvider.config.language.defaultOutputLanguage,
         };
       },
     });
     ctx.appContext.agentLoop = agentLoop;
+  } else {
+    logger.warn('AgentLoop not created — no LLM client available');
   }
 
   // AdvisoryAgent — queryFn delegates to DbProxy for diagnostic SQL
@@ -516,6 +882,18 @@ async function step11_ready(ctx: BootstrapContext): Promise<void> {
   // Show window (deferred from Step 8)
   mainWindow?.show();
 
+  // Reset orphan 'pending' fulltext statuses from previous unclean shutdown.
+  // At startup no acquire workflow is running, so any 'pending' is stale.
+  try {
+    const pendingPapers = (await appCtx.dbProxy.queryPapers({ fulltextStatus: ['pending'] })) as unknown as { items: Array<Record<string, unknown>> };
+    for (const p of pendingPapers.items) {
+      await appCtx.dbProxy.updatePaper(p['id'] as any, { fulltextStatus: 'not_attempted' } as any);
+    }
+    if (pendingPapers.items.length > 0) {
+      logger.info('Reset orphan pending fulltext statuses', { count: pendingPapers.items.length });
+    }
+  } catch { /* non-critical */ }
+
   // Check pending concept suggestions
   try {
     const suggestions = (await appCtx.dbProxy.getSuggestedConcepts()) as unknown as Array<Record<string, unknown>>;
@@ -561,8 +939,10 @@ export async function bootstrap(): Promise<AppContext> {
     lockHandle: null,
     globalConfig: null,
     config: null,
+    configProvider: null,
     logger: null,
     dbProxy: null,
+    vecEnabled: false,
     appContext: null,
     frameworkState: null,
   };

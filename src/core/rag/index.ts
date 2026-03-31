@@ -3,14 +3,12 @@
 // 检索核心：嵌入生成 + chunk 索引 + 三阶段混合检索 + Corrective RAG + 上下文组装
 
 import type { AbyssalConfig } from '../types/config';
-import type { EmbedFunction, PaperId, ConceptId, ChunkId } from '../types/common';
+import type { EmbedFunction, PaperId, ConceptId } from '../types/common';
 import type { TextChunk, RankedChunk, ChunkSource, SectionType } from '../types/chunk';
-import type { RetrievalRequest, RetrievalResult, ContextBudgetMode } from '../types/retrieval';
+import type { RetrievalRequest, RetrievalResult } from '../types/retrieval';
 import type { Relevance } from '../types/paper';
 import type { Logger } from '../infra/logger';
 import type { DatabaseService } from '../database';
-import { l2DistanceToScore } from '../infra/vector-math';
-import { countTokens } from '../infra/token-counter';
 import * as vectorDiagnostics from '../database/vector-diagnostics';
 
 import { Embedder } from './embedder';
@@ -18,6 +16,8 @@ import { Reranker, type RerankFunction } from './reranker';
 import { indexChunks, type IndexResult } from './indexer';
 import { retrieve } from './retriever';
 import type { LlmCallFn } from './corrective-rag';
+import { checkEmbeddingConsistency } from '../database/embedding-migration';
+import { rowToRankedChunk, memoToRankedChunk } from './chunk-mappers';
 
 // ─── 类型重导出 ───
 
@@ -40,6 +40,12 @@ export interface MetadataFilters {
   relevance?: Relevance[] | null | undefined;
 }
 
+// ─── 高信息密度节类型（用于 searchByConcept 的 sectionType 偏好） ───
+
+const HIGH_INFO_SECTION_TYPES: ReadonlySet<string> = new Set([
+  'results', 'discussion', 'methods', 'conclusion',
+]);
+
 // ═══ RagService ═══
 
 export class RagService {
@@ -49,6 +55,13 @@ export class RagService {
   private readonly config: AbyssalConfig;
   private readonly logger: Logger;
   private readonly llmCall: LlmCallFn | null;
+
+  /**
+   * 当 DB 中已有 embedding 维度与当前配置不匹配时为 true。
+   * 此时检索结果不可靠——调用方应提示用户运行 embedding 迁移。
+   */
+  readonly degraded: boolean;
+  readonly degradedReason: string | null;
 
   constructor(
     embedFn: EmbedFunction,
@@ -66,11 +79,34 @@ export class RagService {
     this.llmCall = options?.llmCall ?? null;
 
     this.embedder = new Embedder(embedFn, config.rag, logger);
+
+    // Fix #7: 启动时校验 DB embedding 维度与当前配置一致性
+    let isDegraded = false;
+    let degradedMsg: string | null = null;
+    try {
+      const consistency = checkEmbeddingConsistency(dbService.raw, config);
+      if (!consistency.consistent) {
+        isDegraded = true;
+        degradedMsg = consistency.message ?? 'dimension mismatch';
+        logger.error(
+          `[RagService] EMBEDDING DIMENSION MISMATCH: ${consistency.message}. ` +
+          `Retrieval results will be unreliable until migration is run.`,
+          undefined,
+          { existingDim: consistency.existingDim, configDim: consistency.configDim },
+        );
+      }
+    } catch {
+      // 新项目或 _meta 表不存在——静默跳过
+    }
+    this.degraded = isDegraded;
+    this.degradedReason = degradedMsg;
+
     this.reranker = new Reranker(
       config.rag,
       {
         cohereApiKey: config.apiKeys.cohereApiKey ?? null,
         jinaApiKey: config.apiKeys.jinaApiKey ?? null,
+        siliconflowApiKey: config.apiKeys.siliconflowApiKey ?? null,
       },
       logger,
       options?.rerankFn,
@@ -95,7 +131,7 @@ export class RagService {
       embeddings,
       this.dbService,
       this.logger,
-      this.config.rag.embeddingBackend === 'api',
+      true, // API embedding backend
     );
   }
 
@@ -104,6 +140,12 @@ export class RagService {
   // ════════════════════════════════════════
 
   async retrieve(request: RetrievalRequest): Promise<RetrievalResult> {
+    if (this.degraded) {
+      this.logger.warn(
+        '[RagService] Retrieval invoked in degraded mode — results may be unreliable.',
+        { reason: this.degradedReason },
+      );
+    }
     return retrieve(
       request,
       this.embedder,
@@ -126,6 +168,14 @@ export class RagService {
     filters: MetadataFilters = {},
   ): Promise<RankedChunk[]> {
     const queryVec = await this.embedder.embedSingle(queryText);
+
+    // 防御：校验 embedding 维度与配置一致
+    if (queryVec.length !== this.config.rag.embeddingDimension) {
+      throw new Error(
+        `[searchSemantic] Embedding dimension mismatch: got ${queryVec.length}, expected ${this.config.rag.embeddingDimension}`,
+      );
+    }
+
     const queryBuf = Buffer.from(queryVec.buffer, queryVec.byteOffset, queryVec.byteLength);
     const db = this.dbService.raw;
 
@@ -143,8 +193,8 @@ export class RagService {
       params.push(...filters.sectionTypes);
     }
     if (filters.paperIds && filters.paperIds.length > 0) {
-      conditions.push(`c.paper_id IN (${filters.paperIds.map(() => '?').join(',')})`);
-      params.push(...filters.paperIds);
+      conditions.push(`c.paper_id IN (SELECT value FROM json_each(?))`);
+      params.push(JSON.stringify(filters.paperIds));
     }
 
     const whereExtra = conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : '';
@@ -158,26 +208,14 @@ export class RagService {
       ORDER BY v.distance ASC
     `).all(...params) as Array<Record<string, unknown>>;
 
-    return rows.slice(0, topK).map((row) => ({
-      chunkId: row['chunk_id'] as ChunkId,
-      paperId: (row['paper_id'] as string | null) as PaperId | null,
-      text: row['text'] as string,
-      tokenCount: row['token_count'] as number,
-      sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
-      sectionTitle: row['section_title'] as string | null,
-      sectionType: row['section_type'] as RankedChunk['sectionType'],
-      pageStart: row['page_start'] as number | null,
-      pageEnd: row['page_end'] as number | null,
-      source: row['source'] as ChunkSource,
-      positionRatio: row['position_ratio'] as number | null,
-      parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
-      chunkIndex: row['chunk_index'] as number | null,
-      contextBefore: row['context_before'] as string | null,
-      contextAfter: row['context_after'] as string | null,
-      score: l2DistanceToScore(row['distance'] as number),
-      rawL2Distance: row['distance'] as number,
-      displayTitle: '',
-      originPath: 'vector' as const,
+    return rows.slice(0, topK).map((row) =>
+      rowToRankedChunk(row, 0, 'vector', {
+        rawL2Distance: row['distance'] as number,
+        // rowToRankedChunk 不做 l2→score 转换，此处覆盖 score
+      }),
+    ).map((c) => ({
+      ...c,
+      score: c.rawL2Distance != null ? 1 / (1 + c.rawL2Distance) : 0,
     }));
   }
 
@@ -189,13 +227,18 @@ export class RagService {
     const concept = this.dbService.getConcept(conceptId);
     if (!concept) return [];
 
-    // 精确映射路径
+    // 精确映射路径——偏好高信息密度段落（results/discussion/methods/conclusion）
     const mappings = this.dbService.getMappingsByConcept(conceptId);
     const mappedChunks: RankedChunk[] = [];
 
     for (const m of mappings.slice(0, topK)) {
       const chunks = this.dbService.getChunksByPaper(m.paperId);
-      for (const c of chunks.slice(0, 3)) {
+      // 优先选择高信息密度段落，回退到前 3 个
+      const highInfo = chunks.filter((c) =>
+        c.sectionType != null && HIGH_INFO_SECTION_TYPES.has(c.sectionType),
+      );
+      const selected = highInfo.length > 0 ? highInfo.slice(0, 3) : chunks.slice(0, 3);
+      for (const c of selected) {
         mappedChunks.push({
           ...c,
           score: Math.min(1.0, m.confidence * 1.5),
@@ -210,29 +253,11 @@ export class RagService {
     const queryText = `${concept.definition} ${concept.searchKeywords.join(' ')}`;
     const vectorResults = await this.searchSemantic(queryText, topK);
 
-    // memo/note 路径
+    // memo 路径——使用共享 memoToRankedChunk
     const memos = this.dbService.getMemosByEntity('concept', conceptId);
-    const memoChunks: RankedChunk[] = memos.slice(0, 5).map((m) => ({
-      chunkId: `memo__${m.id}` as ChunkId,
-      paperId: null,
-      text: m.text,
-      tokenCount: Math.ceil(m.text.length / 4),
-      sectionLabel: null,
-      sectionTitle: null,
-      sectionType: null,
-      pageStart: null,
-      pageEnd: null,
-      source: 'memo' as const,
-      positionRatio: null,
-      parentChunkId: null,
-      chunkIndex: null,
-      contextBefore: null,
-      contextAfter: null,
-      score: 0.9,
-      rawL2Distance: null,
-      displayTitle: '研究者笔记',
-      originPath: 'memo' as const,
-    }));
+    const memoChunks: RankedChunk[] = memos.slice(0, 5).map((m) =>
+      memoToRankedChunk(m, 0.9),
+    );
 
     // 合并去重
     const seen = new Set<string>();
@@ -280,7 +305,8 @@ export class RagService {
    * 按纲要的引用论文列表拉取 chunk——不经过向量或概念映射。
    * score 固定 1.0——研究者在纲要中明确指定的论文具有最高优先级。
    *
-   * TODO: 与 article 工作流的 Orchestrator 集成
+   * article 工作流通过 structuredRecall (taskType='article') 自动走此路径的等价逻辑。
+   * 本方法保留供 UI 层独立调用（如大纲面板的快速预览）。
    */
   searchByOutlinePapers(
     paperIds: PaperId[],
@@ -289,8 +315,7 @@ export class RagService {
     if (paperIds.length === 0) return [];
     const db = this.dbService.raw;
 
-    const paperPlaceholders = paperIds.map(() => '?').join(',');
-    const params: unknown[] = [...paperIds];
+    const params: unknown[] = [JSON.stringify(paperIds)];
 
     let sectionFilter = '';
     if (sectionTypes && sectionTypes.length > 0) {
@@ -302,33 +327,13 @@ export class RagService {
       SELECT c.*, p.title AS paper_title, p.year AS paper_year
       FROM chunks c
       JOIN papers p ON p.id = c.paper_id
-      WHERE c.paper_id IN (${paperPlaceholders})
+      WHERE c.paper_id IN (SELECT value FROM json_each(?))
         AND c.source = 'paper'
         ${sectionFilter}
       ORDER BY c.paper_id, c.position_ratio ASC
     `).all(...params) as Array<Record<string, unknown>>;
 
-    return rows.map((row) => ({
-      chunkId: row['chunk_id'] as ChunkId,
-      paperId: (row['paper_id'] as string) as PaperId,
-      text: row['text'] as string,
-      tokenCount: row['token_count'] as number,
-      sectionLabel: row['section_label'] as RankedChunk['sectionLabel'],
-      sectionTitle: row['section_title'] as string | null,
-      sectionType: row['section_type'] as RankedChunk['sectionType'],
-      pageStart: row['page_start'] as number | null,
-      pageEnd: row['page_end'] as number | null,
-      source: row['source'] as ChunkSource,
-      positionRatio: row['position_ratio'] as number | null,
-      parentChunkId: (row['parent_chunk_id'] as string | null) as ChunkId | null,
-      chunkIndex: row['chunk_index'] as number | null,
-      contextBefore: row['context_before'] as string | null,
-      contextAfter: row['context_after'] as string | null,
-      score: 1.0,
-      rawL2Distance: null,
-      displayTitle: (row['paper_title'] as string) ?? '',
-      originPath: 'structured' as const,
-    }));
+    return rows.map((row) => rowToRankedChunk(row, 1.0, 'structured'));
   }
 
   /** §8.4 索引统计（含 §10 诊断） */
@@ -338,6 +343,7 @@ export class RagService {
     bySource: Record<string, number>;
     embeddingDimension: number;
     embeddingModel: string;
+    degraded: boolean;
   } {
     const stats = this.dbService.getStats();
     const indexStats = vectorDiagnostics.getChunkIndexStats(this.dbService.raw);
@@ -356,6 +362,7 @@ export class RagService {
       },
       embeddingDimension: this.config.rag.embeddingDimension,
       embeddingModel: this.config.rag.embeddingModel,
+      degraded: this.degraded,
     };
   }
 
@@ -382,7 +389,22 @@ export class RagService {
     return vectorDiagnostics.getChunkIndexStats(this.dbService.raw);
   }
 
-  // TODO: UI 仪表板集成——通过 IPC 暴露诊断结果
+  /** 诊断汇总——用于 IPC 暴露到 UI 仪表板 */
+  getDiagnosticsSummary(): {
+    vectorConsistency: vectorDiagnostics.RowidConsistencyResult;
+    vectorSamples: vectorDiagnostics.VectorLengthSample[];
+    chunkStats: vectorDiagnostics.ChunkIndexStats[];
+    degraded: boolean;
+    degradedReason: string | null;
+  } {
+    return {
+      vectorConsistency: this.checkVectorConsistency(),
+      vectorSamples: this.sampleVectorLengths(),
+      chunkStats: this.getChunkIndexStats(),
+      degraded: this.degraded,
+      degradedReason: this.degradedReason,
+    };
+  }
 }
 
 // ═══ 工厂函数 ═══

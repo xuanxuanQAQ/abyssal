@@ -62,16 +62,21 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
     const container = containerRef.current;
     if (!container) return;
 
+    let rafId = 0;
     const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        setContainerWidth(width);
-        setContainerHeight(height);
-      }
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const entry = entries[0];
+        if (entry) {
+          const { width, height } = entry.contentRect;
+          setContainerWidth(width);
+          setContainerHeight(height);
+        }
+      });
     });
 
     observer.observe(container);
-    return () => observer.disconnect();
+    return () => { cancelAnimationFrame(rafId); observer.disconnect(); };
   }, []);
 
   // useZoom needs an HTMLDivElement ref — get it from ScrollContainer handle
@@ -126,10 +131,13 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
       const transform: Transform6 = [scale, 0, 0, -scale, 0, metadata.baseHeight * scale];
       const inverseTransform = computeInverseTransform(transform);
 
-      // PageSlotRect is unavailable here (we don't have access to DOM rects).
-      // The useTextAnnotationPen hook should compute it differently.
-      // Provide a placeholder DOMRect — actual implementation would query the DOM.
-      const pageSlotRect = new DOMRect(0, 0, metadata.baseWidth * scale, metadata.baseHeight * scale);
+      // Query the actual page slot DOM element for its bounding rect.
+      // Falls back to a computed rect if the element isn't mounted.
+      const container = containerRef.current;
+      const pageSlotEl = container?.querySelector<HTMLElement>(`[data-page="${pageNumber}"]`);
+      const pageSlotRect = pageSlotEl
+        ? pageSlotEl.getBoundingClientRect()
+        : new DOMRect(0, 0, metadata.baseWidth * scale, metadata.baseHeight * scale);
 
       return {
         pageSlotRect,
@@ -140,7 +148,7 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
     [pageMetadataMap, manager, zoomLevel],
   );
 
-  const textAnnotationPen = useTextAnnotationPen(paperId, getPageContext);
+  const textAnnotationPen = useTextAnnotationPen();
 
   // State for flashing and hovered annotations
   const [flashingAnnotationId, setFlashingAnnotationId] = useState<
@@ -175,20 +183,32 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
       const page = await doc.getPage(pageNumber);
       const viewport = page.getViewport({ scale: renderScale });
 
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
+      // CanvasLayer already set canvas.width/height and style.width/height.
+      // Just render into the canvas using the viewport at the requested scale.
+      console.log(`[CanvasLayer] page=${pageNumber}`, {
+        renderScale,
+        dpr,
+        viewportSize: `${viewport.width}x${viewport.height}`,
+        canvasPixels: `${canvas.width}x${canvas.height}`,
+        canvasCss: `${canvas.style.width}x${canvas.style.height}`,
+      });
 
       const context = canvas.getContext('2d');
       if (!context) return;
 
       context.scale(dpr, dpr);
 
-      await page.render({
+      // §5.4: Track render task for cancellation on document switch/destroy
+      const renderTask = page.render({
         canvasContext: context,
         viewport,
-      }).promise;
+      });
+      manager.trackRenderTask(renderTask);
+      try {
+        await renderTask.promise;
+      } finally {
+        manager.untrackRenderTask(renderTask);
+      }
     },
     [manager],
   );
@@ -247,9 +267,76 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
     setTimeout(() => setFlashingAnnotationId(null), 1500);
   }, []);
 
-  // Show SelectionToolbar when no annotation tool is active and text is selected
+  // Acrobat-style: when a text tool is active, auto-apply on mouseup
+  const getPageContextRef = useRef(getPageContext);
+  getPageContextRef.current = getPageContext;
+
+  useEffect(() => {
+    const handleMouseUp = () => {
+      const tool = useReaderStore.getState().activeAnnotationTool;
+      const color = useReaderStore.getState().highlightColor;
+      if (tool !== 'textHighlight' && tool !== 'textNote' && tool !== 'textConceptTag') return;
+
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      const { anchorNode } = sel;
+      if (!anchorNode) return;
+
+      // Must be inside a .textLayer
+      let el: Element | null = anchorNode.nodeType === Node.ELEMENT_NODE
+        ? (anchorNode as Element) : anchorNode.parentElement;
+      let inTextLayer = false;
+      while (el) {
+        if (el.classList.contains('textLayer')) { inTextLayer = true; break; }
+        el = el.parentElement;
+      }
+      if (!inTextLayer) return;
+
+      // Find page number
+      el = anchorNode.nodeType === Node.ELEMENT_NODE
+        ? (anchorNode as Element) : anchorNode.parentElement;
+      let pageNumber: number | null = null;
+      while (el) {
+        const attr = el.getAttribute('data-page');
+        if (attr !== null) { const n = parseInt(attr, 10); if (Number.isFinite(n)) { pageNumber = n; break; } }
+        el = el.parentElement;
+      }
+      if (pageNumber === null) return;
+
+      const ctx = getPageContextRef.current(pageNumber);
+      if (!ctx) return;
+
+      const range = sel.getRangeAt(0);
+      const rects: DOMRect[] = [];
+      const clientRects = range.getClientRects();
+      for (let i = 0; i < clientRects.length; i++) rects.push(clientRects[i]!);
+      if (rects.length === 0) return;
+
+      const position = selectionToAnnotationPosition(rects, ctx.pageSlotRect, ctx.inverseTransform, ctx.cropBox);
+      const selectedText = sel.toString();
+
+      if (tool === 'textHighlight') {
+        annotationCRUD.createHighlight(pageNumber, position, selectedText, color);
+        sel.removeAllRanges();
+      } else if (tool === 'textNote') {
+        annotationCRUD.createHighlight(pageNumber, position, selectedText, color);
+        setPendingNotePosition({ page: pageNumber, position, selectedText });
+        sel.removeAllRanges();
+      } else if (tool === 'textConceptTag') {
+        annotationCRUD.createHighlight(pageNumber, position, selectedText, color);
+        setPendingConceptPosition({ page: pageNumber, position, selectedText });
+        sel.removeAllRanges();
+      }
+    };
+
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => document.removeEventListener('mouseup', handleMouseUp);
+  }, [annotationCRUD]);
+
+  // Acrobat-style: show SelectionToolbar when text is selected and NO tool is active
+  // (when tool is active, mouseup auto-applies the action above)
   const showSelectionToolbar =
-    activeAnnotationTool === null && textSelection.selectedText !== null;
+    textSelection.selectedText !== null && activeAnnotationTool === null;
 
   // SelectionToolbar position from selection rects
   const selectionToolbarPosition = useMemo(() => {

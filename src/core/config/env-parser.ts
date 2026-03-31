@@ -5,7 +5,6 @@ import type { ApiKeysConfig } from '../types/config';
 import type { FieldDefinition } from './config-schema';
 import { CONFIG_FIELD_DEFS, coerceToSchemaType, getNestedValue } from './config-schema';
 
-// TODO — Logger 注入由调用方决定；此处使用可选 warn 回调
 export type WarnFn = (message: string, ctx?: Record<string, unknown>) => void;
 
 // ─── 常量 ───
@@ -164,6 +163,8 @@ export function resolveApiKeys(
     unpaywallEmail: existingKeys.unpaywallEmail ?? null,
     cohereApiKey: existingKeys.cohereApiKey ?? null,
     jinaApiKey: existingKeys.jinaApiKey ?? null,
+    siliconflowApiKey: existingKeys.siliconflowApiKey ?? null,
+    webSearchApiKey: existingKeys.webSearchApiKey ?? null,
   };
 
   // 非 ABYSSAL_ 前缀的特殊映射（优先级最高）
@@ -180,7 +181,9 @@ export function resolveApiKeys(
     ABYSSAL_UNPAYWALL_EMAIL: 'unpaywallEmail',
     ABYSSAL_COHERE_API_KEY: 'cohereApiKey',
     ABYSSAL_JINA_API_KEY: 'jinaApiKey',
+    ABYSSAL_SILICONFLOW_API_KEY: 'siliconflowApiKey',
     ABYSSAL_OPENALEX_EMAIL: 'openalexEmail',
+    ABYSSAL_WEB_SEARCH_API_KEY: 'webSearchApiKey',
   };
 
   for (const [envVar, configKey] of Object.entries(abyssalMappings)) {

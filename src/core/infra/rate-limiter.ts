@@ -150,6 +150,7 @@ export const API_RATE_LIMITS = {
   arxiv: { capacity: 1, refillRate: 1 / 3000 },
   crossRef: { capacity: 50, refillRate: 50 / 1000 },
   unpaywall: { capacity: 10, refillRate: 10 / 1000 },
+  webSearch: { capacity: 5, refillRate: 1 / 1000 },
 } as const;
 
 export function createRateLimiter(

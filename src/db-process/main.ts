@@ -42,12 +42,12 @@ function initDatabase(payload: DbInitPayload): void {
 
   const wsPaths = getWorkspacePaths(workspaceRoot);
 
-  // Logger
-  logger = new FileLogger(wsPaths.logs, 'info');
-
-  // 加载配置
+  // 加载配置（先于 Logger，以获取 logging.level）
   const globalConfig = loadGlobalConfig(userDataPath);
   const config = ConfigLoader.loadFromWorkspace(workspaceRoot, globalConfig);
+
+  // Logger
+  logger = new FileLogger(wsPaths.logs, config.logging.level);
 
   // 数据库初始化
   const dbPath = wsPaths.db;
@@ -56,21 +56,31 @@ function initDatabase(payload: DbInitPayload): void {
   try {
     dbService = createDatabaseService({
       dbPath, config, logger,
-      skipVecExtension: skipVecExtension ?? true,
+      skipVecExtension: skipVecExtension ?? false,
       migrationsDir,
     });
     logger.info('DB subprocess: database initialized', { dbPath });
   } catch (err) {
     logger.error('DB subprocess: init failed, retrying with fresh DB', err as Error);
+
+    // Close any partially-opened connection before deleting files,
+    // otherwise the DB file is still locked and unlink fails with EBUSY.
+    if (dbService) {
+      try { dbService.close(); } catch { /* ignore */ }
+      dbService = null;
+    }
+
     // 删除损坏的数据库文件后重试
     const fs = require('node:fs');
     for (const suffix of ['', '-wal', '-shm']) {
       const f = dbPath + suffix;
-      if (fs.existsSync(f)) fs.unlinkSync(f);
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch { /* ignore unlink errors */ }
     }
     dbService = createDatabaseService({
       dbPath, config, logger,
-      skipVecExtension: skipVecExtension ?? true,
+      skipVecExtension: skipVecExtension ?? false,
       migrationsDir,
     });
     logger.info('DB subprocess: database initialized (fresh)', { dbPath });

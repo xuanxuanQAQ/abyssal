@@ -5,6 +5,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { useTagList } from '../../../core/ipc/hooks/useTags';
 import { TagTreeItem } from './TagTreeItem';
@@ -12,6 +13,7 @@ import { NewTagInput } from './NewTagInput';
 import type { Tag } from '../../../../shared-types/models';
 
 export function TagTree() {
+  const { t } = useTranslation();
   const { data: tags } = useTagList();
   const [showNewTag, setShowNewTag] = React.useState(false);
 
@@ -28,7 +30,7 @@ export function TagTree() {
       .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <div role="tree" aria-label="标签">
+    <div role="tree" aria-label={t('library.sidebar.tags')}>
       {topLevel.map((tag) => (
         <TagTreeItem key={tag.id} tag={tag} children={childrenOf(tag.id)} />
       ))}
@@ -53,7 +55,7 @@ export function TagTree() {
           }}
         >
           <Plus size={12} />
-          新建标签
+          {t('library.sidebar.newTag')}
         </button>
       )}
     </div>

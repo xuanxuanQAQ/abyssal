@@ -1,0 +1,147 @@
+/* AnalysisReport — Markdown rendering styles */
+
+.analysis-report-content {
+  padding: var(--space-5);
+  background-color: var(--bg-surface-low);
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--text-primary);
+  overflow-wrap: break-word;
+}
+
+/* Headings */
+.analysis-report-content h1,
+.analysis-report-content h2,
+.analysis-report-content h3,
+.analysis-report-content h4 {
+  margin: 0;
+  padding: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.analysis-report-content h1 {
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-3);
+}
+
+.analysis-report-content h2 {
+  font-size: var(--text-md);
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.analysis-report-content h3 {
+  font-size: var(--text-base);
+  margin-top: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+/* Paragraphs & text */
+.analysis-report-content p {
+  margin: 0 0 var(--space-3);
+}
+
+.analysis-report-content p:last-child {
+  margin-bottom: 0;
+}
+
+.analysis-report-content strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Lists */
+.analysis-report-content ul,
+.analysis-report-content ol {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+}
+
+.analysis-report-content li {
+  margin-bottom: var(--space-1);
+}
+
+.analysis-report-content li::marker {
+  color: var(--text-muted);
+}
+
+/* Inline code */
+.analysis-report-content code {
+  padding: 1px 5px;
+  background-color: var(--bg-surface);
+  border-radius: 3px;
+  font-size: 0.92em;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+/* Block code */
+.analysis-report-content pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  background-color: var(--bg-surface-lowest);
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+
+.analysis-report-content pre code {
+  padding: 0;
+  background: none;
+}
+
+/* Blockquote */
+.analysis-report-content blockquote {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--accent-color);
+  background-color: var(--bg-surface-lowest);
+  border-radius: 0 var(--radius-sm, 6px) var(--radius-sm, 6px) 0;
+  color: var(--text-secondary);
+}
+
+.analysis-report-content blockquote p {
+  margin-bottom: 0;
+}
+
+/* Table */
+.analysis-report-content table {
+  width: 100%;
+  margin: 0 0 var(--space-3);
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.analysis-report-content th,
+.analysis-report-content td {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.analysis-report-content th {
+  background-color: var(--bg-surface);
+  font-weight: 600;
+}
+
+/* Horizontal rule */
+.analysis-report-content hr {
+  margin: var(--space-4) 0;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Links */
+.analysis-report-content a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.analysis-report-content a:hover {
+  text-decoration: underline;
+}

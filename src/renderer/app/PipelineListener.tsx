@@ -31,12 +31,10 @@ function invalidateCacheForWorkflow(
       queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
       break;
     case 'acquire':
-      if (entityId) {
-        queryClient.invalidateQueries({
-          queryKey: ['papers', 'detail', entityId],
-        });
-      }
+      // entityId 可能未传递，统一刷新所有 paper detail 缓存
+      queryClient.invalidateQueries({ queryKey: ['papers', 'detail'] });
       queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
       break;
     case 'analyze':
       if (entityId) {
@@ -108,6 +106,7 @@ export function PipelineListener() {
   const queryClient = useQueryClient();
   const updateTask = useAppStore((s) => s.updateTask);
   const removeTask = useAppStore((s) => s.removeTask);
+  const pushTaskHistory = useAppStore((s) => s.pushTaskHistory);
 
   // 持有节流函数引用 — 在 useRef 初始值中创建，避免 render phase 副作用
   const throttledUpdateRef = useRef(
@@ -130,9 +129,11 @@ export function PipelineListener() {
       pendingTimersRef.current.add(timer);
     };
 
-    // 进度事件监听
-    const unsubProgress = api.pipeline.onProgress(
+    // 进度事件监听 — push:workflowProgress channel
+    console.log('[PipelineListener] Subscribing to api.on.workflowProgress');
+    const unsubProgress = api.on.workflowProgress(
       (event: PipelineProgressEvent) => {
+        console.log('[PipelineListener] Received event:', JSON.stringify(event));
         const label = WORKFLOW_LABELS[event.workflow] ?? event.workflow;
 
         if (event.status === 'running') {
@@ -140,6 +141,17 @@ export function PipelineListener() {
         } else {
           // 终态事件：立即处理
           updateTask(event);
+
+          // 写入历史记录
+          const historyEntry: import('../../shared-types/models').TaskHistoryEntry = {
+            taskId: event.taskId,
+            workflow: event.workflow,
+            status: event.status as 'completed' | 'failed' | 'cancelled',
+            completedAt: new Date().toISOString(),
+            progress: event.progress,
+            ...(event.error ? { error: event.error } : {}),
+          };
+          pushTaskHistory(historyEntry);
 
           if (event.status === 'completed') {
             toast.success(`${label} 完成`);
@@ -202,7 +214,7 @@ export function PipelineListener() {
       }
       pendingTimersRef.current.clear();
     };
-  }, [queryClient, updateTask, removeTask]);
+  }, [queryClient, updateTask, removeTask, pushTaskHistory]);
 
   return null;
 }

@@ -5,6 +5,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Tabs from '@radix-ui/react-tabs';
 import { X } from 'lucide-react';
@@ -20,6 +21,8 @@ interface ImportDialogProps {
 }
 
 export function ImportDialog({ open, onOpenChange, defaultTab }: ImportDialogProps) {
+  const { t } = useTranslation();
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -61,7 +64,7 @@ export function ImportDialog({ open, onOpenChange, defaultTab }: ImportDialogPro
             }}
           >
             <Dialog.Title style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>
-              导入文献
+              {t('library.import.title')}
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -89,13 +92,13 @@ export function ImportDialog({ open, onOpenChange, defaultTab }: ImportDialogPro
               }}
             >
               <Tabs.Trigger value="file" style={tabTriggerStyle}>
-                文件导入
+                {t('library.import.tabs.file')}
               </Tabs.Trigger>
               <Tabs.Trigger value="text" style={tabTriggerStyle}>
-                文本粘贴
+                {t('library.import.tabs.text')}
               </Tabs.Trigger>
               <Tabs.Trigger value="doi" style={tabTriggerStyle}>
-                DOI 导入
+                {t('library.import.tabs.doi')}
               </Tabs.Trigger>
             </Tabs.List>
 

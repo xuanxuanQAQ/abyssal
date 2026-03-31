@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   BookOpen,
@@ -38,6 +39,7 @@ export function ProjectSetupWizard({
   onOpenChange,
   onComplete,
 }: ProjectSetupWizardProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<WizardStep>('mode');
   const [name, setName] = useState('');
   const [startMode, setStartMode] = useState<ProjectStartMode>('exploration');
@@ -68,7 +70,7 @@ export function ProjectSetupWizard({
 
   const handleCreate = useCallback(async () => {
     if (!name.trim()) {
-      setError('请输入项目名称');
+      setError(t('wizard.projectNameRequired'));
       return;
     }
     setStep('creating');
@@ -98,7 +100,7 @@ export function ProjectSetupWizard({
       setError(err instanceof Error ? err.message : '创建失败');
       setStep(startMode === 'framework' ? 'framework' : 'exploration');
     }
-  }, [name, startMode, embeddingModel, concepts, onComplete, onOpenChange]);
+  }, [name, startMode, embeddingModel, concepts, onComplete, onOpenChange, t]);
 
   const goBack = useCallback(() => {
     setStep('mode');
@@ -144,7 +146,7 @@ export function ProjectSetupWizard({
                 margin: 0,
               }}
             >
-              创建新项目
+              {t('wizard.title')}
             </Dialog.Title>
             {step === 'mode' && (
               <Dialog.Description
@@ -154,7 +156,7 @@ export function ProjectSetupWizard({
                   marginTop: 4,
                 }}
               >
-                选择您的研究起点
+                {t('wizard.subtitle')}
               </Dialog.Description>
             )}
           </div>
@@ -174,12 +176,12 @@ export function ProjectSetupWizard({
                   marginBottom: 4,
                 }}
               >
-                项目名称
+                {t('wizard.projectName')}
               </label>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="我的研究项目"
+                placeholder={t('wizard.projectNamePlaceholder')}
                 style={{
                   width: '100%',
                   padding: '8px 12px',
@@ -215,14 +217,14 @@ export function ProjectSetupWizard({
               <div style={{ display: 'flex', gap: 12 }}>
                 <ModeCard
                   icon={<BookOpen size={24} />}
-                  title="理论框架驱动"
-                  description="我已有明确的理论框架，需要系统性地验证和扩展"
+                  title={t('wizard.anchored')}
+                  description={t('wizard.anchoredDesc')}
                   onClick={() => handleModeSelect('framework')}
                 />
                 <ModeCard
                   icon={<Compass size={24} />}
-                  title="探索模式"
-                  description="我还在探索阶段，从文献中发现和构建概念框架"
+                  title={t('wizard.exploratory')}
+                  description={t('wizard.exploratoryDesc')}
                   onClick={() => handleModeSelect('exploration')}
                 />
               </div>
@@ -253,7 +255,7 @@ export function ProjectSetupWizard({
                       marginTop: 1,
                     }}
                   />
-                  <span>嵌入模型一经选择不可更改，请谨慎选择。</span>
+                  <span>{t('wizard.embeddingWarning')}</span>
                 </div>
 
                 {/* Embedding model */}
@@ -267,7 +269,7 @@ export function ProjectSetupWizard({
                       marginBottom: 4,
                     }}
                   >
-                    嵌入模型
+                    {t('wizard.embeddingModel')}
                   </label>
                   <select
                     value={embeddingModel}
@@ -284,12 +286,11 @@ export function ProjectSetupWizard({
                     }}
                   >
                     <option value="text-embedding-3-small">
-                      text-embedding-3-small (推荐)
+                      {t('wizard.embeddingSmall')}
                     </option>
                     <option value="text-embedding-3-large">
-                      text-embedding-3-large
+                      {t('wizard.embeddingLarge')}
                     </option>
-                    <option value="local-bge-m3">BGE-M3 (本地)</option>
                   </select>
                 </div>
 
@@ -304,7 +305,7 @@ export function ProjectSetupWizard({
                       marginBottom: 4,
                     }}
                   >
-                    初始概念（可选）
+                    {t('wizard.initialConcepts')}
                   </label>
                   <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                     <input
@@ -316,7 +317,7 @@ export function ProjectSetupWizard({
                           addConcept();
                         }
                       }}
-                      placeholder="输入概念名称"
+                      placeholder={t('wizard.addConceptPlaceholder')}
                       style={{
                         flex: 1,
                         padding: '6px 10px',
@@ -400,8 +401,8 @@ export function ProjectSetupWizard({
                   size={32}
                   style={{ color: 'var(--accent-color)', marginBottom: 12 }}
                 />
-                <p>探索模式将跳过概念框架配置。</p>
-                <p>您可以随时在 Settings 中添加概念框架。</p>
+                <p>{t('wizard.exploratorySkip')}</p>
+                <p>{t('wizard.addConceptsLater')}</p>
               </div>
             )}
 
@@ -421,7 +422,7 @@ export function ProjectSetupWizard({
                     marginBottom: 8,
                   }}
                 />
-                <p style={{ fontSize: 13 }}>正在创建项目…</p>
+                <p style={{ fontSize: 13 }}>{t('wizard.creating')}</p>
               </div>
             )}
           </div>
@@ -453,7 +454,7 @@ export function ProjectSetupWizard({
                     gap: 4,
                   }}
                 >
-                  <ArrowLeft size={14} /> 返回
+                  <ArrowLeft size={14} /> {t('common.back')}
                 </button>
               ) : (
                 <div />
@@ -477,7 +478,7 @@ export function ProjectSetupWizard({
                     gap: 4,
                   }}
                 >
-                  创建项目 <ArrowRight size={14} />
+                  {t('wizard.createProject')} <ArrowRight size={14} />
                 </button>
               )}
             </div>

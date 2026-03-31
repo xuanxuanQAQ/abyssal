@@ -1,11 +1,19 @@
 /**
  * UpgradeToConceptDialog — 升级为 Tentative Concept 对话框（§3.5）
+ *
+ * Supports two paths:
+ * - From memo: pass memoId → uses db:memos:upgradeToConcept
+ * - From note: pass noteId → uses db:notes:upgradeToConcept
+ * - Standalone: no memoId/noteId → uses db:concepts:create
  */
 
 import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, Lightbulb } from 'lucide-react';
 import { useCreateConcept } from '../../../core/ipc/hooks/useConcepts';
+import { useUpgradeMemoToConcept } from '../../../core/ipc/hooks/useMemos';
+import { useUpgradeNoteToConcept } from '../../../core/ipc/hooks/useNotes';
 
 interface UpgradeToConceptDialogProps {
   open: boolean;
@@ -14,35 +22,48 @@ interface UpgradeToConceptDialogProps {
   prefillNameZh?: string;
   prefillDefinition?: string;
   prefillKeywords?: string[];
+  /** When upgrading from a memo */
+  memoId?: string;
+  /** When upgrading from a note */
+  noteId?: string;
 }
 
 export function UpgradeToConceptDialog({
   open, onOpenChange,
   prefillNameEn, prefillNameZh, prefillDefinition, prefillKeywords,
+  memoId, noteId,
 }: UpgradeToConceptDialogProps) {
+  const { t } = useTranslation();
   const [nameEn, setNameEn] = useState(prefillNameEn ?? '');
   const [nameZh, setNameZh] = useState(prefillNameZh ?? '');
   const [definition, setDefinition] = useState(prefillDefinition ?? '');
   const [keywordsStr, setKeywordsStr] = useState((prefillKeywords ?? []).join(', '));
   const createConcept = useCreateConcept();
+  const upgradeMemo = useUpgradeMemoToConcept();
+  const upgradeNote = useUpgradeNoteToConcept();
+
+  const isPending = createConcept.isPending || upgradeMemo.isPending || upgradeNote.isPending;
 
   const handleCreate = useCallback(() => {
     if (!nameEn.trim()) return;
-    createConcept.mutate(
-      {
-        nameEn: nameEn.trim(),
-        nameZh: nameZh.trim(),
-        definition: definition.trim(),
-        keywords: keywordsStr.split(',').map((k) => k.trim()).filter(Boolean),
-        parentId: null,
-      },
-      {
-        onSuccess: () => {
-          onOpenChange(false);
-        },
-      },
-    );
-  }, [nameEn, nameZh, definition, keywordsStr, createConcept, onOpenChange]);
+    const draft = {
+      nameEn: nameEn.trim(),
+      nameZh: nameZh.trim(),
+      definition: definition.trim(),
+      keywords: keywordsStr.split(',').map((k) => k.trim()).filter(Boolean),
+      parentId: null,
+    };
+
+    const onSuccess = () => { onOpenChange(false); };
+
+    if (memoId) {
+      upgradeMemo.mutate({ memoId, draft }, { onSuccess });
+    } else if (noteId) {
+      upgradeNote.mutate({ noteId, draft }, { onSuccess });
+    } else {
+      createConcept.mutate(draft, { onSuccess });
+    }
+  }, [nameEn, nameZh, definition, keywordsStr, memoId, noteId, createConcept, upgradeMemo, upgradeNote, onOpenChange]);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -54,14 +75,14 @@ export function UpgradeToConceptDialog({
           padding: 24, zIndex: 1001, boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
         }}>
           <Dialog.Title style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
-            <Lightbulb size={16} /> 升级为 Tentative 概念
+            <Lightbulb size={16} /> {t('notes.note.upgradeToConcept')}
           </Dialog.Title>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Field label="英文名 (name_en)" value={nameEn} onChange={setNameEn} autoFocus />
-            <Field label="中文名 (name_zh)" value={nameZh} onChange={setNameZh} />
+            <Field label={t('notes.note.nameEn')} value={nameEn} onChange={setNameEn} autoFocus />
+            <Field label={t('notes.note.nameZh')} value={nameZh} onChange={setNameZh} />
             <label style={{ display: 'block' }}>
-              <span style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>定义</span>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('notes.note.definition')}</span>
               <textarea
                 value={definition}
                 onChange={(e) => setDefinition(e.target.value)}
@@ -76,25 +97,25 @@ export function UpgradeToConceptDialog({
               />
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{definition.length}/500</span>
             </label>
-            <Field label="关键词 (逗号分隔)" value={keywordsStr} onChange={setKeywordsStr} />
+            <Field label={t('notes.note.keywords')} value={keywordsStr} onChange={setKeywordsStr} />
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
             <Dialog.Close asChild>
               <button style={{ padding: '6px 16px', border: '1px solid var(--border-subtle)', borderRadius: 4, background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, cursor: 'pointer' }}>
-                取消
+                {t('common.cancel')}
               </button>
             </Dialog.Close>
             <button
               onClick={handleCreate}
-              disabled={!nameEn.trim() || createConcept.isPending}
+              disabled={!nameEn.trim() || isPending}
               style={{
                 padding: '6px 16px', border: 'none', borderRadius: 4,
                 backgroundColor: 'var(--accent-color)', color: '#fff', fontSize: 13,
                 cursor: nameEn.trim() ? 'pointer' : 'default', opacity: nameEn.trim() ? 1 : 0.5,
               }}
             >
-              {createConcept.isPending ? '创建中...' : '创建概念'}
+              {isPending ? t('notes.note.creating') : t('notes.note.createConcept')}
             </button>
           </div>
 

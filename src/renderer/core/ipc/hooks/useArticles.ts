@@ -193,3 +193,12 @@ export function useDeleteSection() {
     onError: (err) => handleError(err),
   });
 }
+
+export function useAllCitedPaperIds() {
+  return useQuery({
+    queryKey: ['articles', 'allCitedPaperIds'],
+    queryFn: () => getAPI().db.articles.getAllCitedPaperIds(),
+    staleTime: 60_000,
+    gcTime: 300_000,
+  });
+}

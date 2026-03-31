@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../../../core/store';
 import { LayerCheckbox } from './LayerCheckbox';
 import { SimilaritySlider } from './SimilaritySlider';
@@ -10,6 +11,7 @@ export interface LayerControlsProps {
 }
 
 export function LayerControls({ semanticNeighborCount, onRelayout }: LayerControlsProps) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
 
   const layerVisibility = useAppStore((s) => s.layerVisibility);
@@ -50,7 +52,7 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
           borderBottom: collapsed ? 'none' : '1px solid var(--border-subtle)',
         }}
       >
-        <span>Layer Controls</span>
+        <span>{t('graph.layerControls')}</span>
         <span style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>
           ▾
         </span>
@@ -61,28 +63,28 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
         <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {/* Layer checkboxes */}
           <LayerCheckbox
-            label="Citation"
+            label={t('graph.layers.citation')}
             checked={layerVisibility.citation}
             onChange={() => toggleLayer('citation')}
             color="#4A90D9"
             lineStyle="solid"
           />
           <LayerCheckbox
-            label="Concept Agree"
+            label={t('graph.layers.conceptAgree')}
             checked={layerVisibility.conceptAgree}
             onChange={() => toggleLayer('conceptAgree')}
             color="#7ED321"
             lineStyle="solid"
           />
           <LayerCheckbox
-            label="Concept Conflict"
+            label={t('graph.layers.conceptConflict')}
             checked={layerVisibility.conceptConflict}
             onChange={() => toggleLayer('conceptConflict')}
             color="#D0021B"
             lineStyle="dashed"
           />
           <LayerCheckbox
-            label="Semantic Neighbor"
+            label={t('graph.layers.semanticNeighbor')}
             checked={layerVisibility.semanticNeighbor}
             onChange={() => toggleLayer('semanticNeighbor')}
             color="#F5A623"
@@ -109,7 +111,7 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
               onChange={(e) => setShowConceptNodes(e.target.checked)}
               style={{ width: 16, height: 16, margin: 0 }}
             />
-            Show Concept Nodes
+            {t('graph.showConceptNodes')}
           </label>
 
           {/* Show Note Nodes */}
@@ -129,7 +131,7 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
               onChange={(e) => setShowNoteNodes(e.target.checked)}
               style={{ width: 16, height: 16, margin: 0 }}
             />
-            Show Note Nodes
+            {t('graph.showNoteNodes')}
           </label>
 
           {/* Divider */}
@@ -161,7 +163,7 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
               cursor: 'pointer',
             }}
           >
-            🔄 重新布局
+            {t('graph.reLayout')}
           </button>
         </div>
       )}

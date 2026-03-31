@@ -24,7 +24,9 @@ import { acquireLock, type LockHandle } from '../electron/lock';
 import { deriveFrameworkState, type FrameworkState } from '../core/config/framework-state';
 import { validateConfig } from '../core/config/config-validator';
 import { createLlmClient, type LlmClient } from '../adapter/llm-client/llm-client';
+import { createEmbedFunction } from '../adapter/llm-client/embed-function-factory';
 import { RerankerScheduler } from '../adapter/llm-client/reranker';
+import { createRagService, type RagService } from '../core/rag';
 import { createContextBudgetManager } from '../adapter/context-budget/context-budget-manager';
 import { WorkflowRunner, type WorkflowType } from '../adapter/orchestrator/workflow-runner';
 import { createDiscoverWorkflow } from '../adapter/orchestrator/workflows/discover';
@@ -64,9 +66,10 @@ export async function batchRun(args: CliArgs): Promise<void> {
 
     // ── 3. Logger (stderr + file, stdout reserved for progress) ──
     const wsPaths = getWorkspacePaths(workspacePath);
-    const logger: Logger = args.verbose
-      ? new ConsoleLogger('debug')
-      : new FileLogger(wsPaths.logs, 'info');
+    const logLevel = args.verbose ? 'debug' as const : config.logging.level;
+    const logger: Logger = logLevel === 'debug'
+      ? new ConsoleLogger(logLevel)
+      : new FileLogger(wsPaths.logs, logLevel);
 
     // ── 3.5 Configuration validation (10-level chain) ──
     logger.info('Validating configuration...');
@@ -96,12 +99,23 @@ export async function batchRun(args: CliArgs): Promise<void> {
     const acquireService = new AcquireService(config, logger);
     const processService = new ProcessService(config);
 
-    const reranker = new RerankerScheduler(config.rag, config.apiKeys, logger);
+    const { ConfigProvider } = await import('../core/infra/config-provider');
+    const configProvider = new ConfigProvider(config);
+
+    const reranker = new RerankerScheduler(configProvider, logger);
+    const embedFn = createEmbedFunction({ configProvider, logger });
+
     let llmClient: LlmClient | null = null;
     const hasKey = !!(config.apiKeys.anthropicApiKey || config.apiKeys.openaiApiKey || config.apiKeys.deepseekApiKey);
     if (hasKey) {
-      llmClient = createLlmClient({ config, logger, reranker, embedFn: null });
+      llmClient = createLlmClient({ configProvider, logger, reranker, embedFn });
     }
+
+    let ragService: RagService | null = null;
+    if (embedFn.isAvailable) {
+      ragService = createRagService(embedFn, dbService, config, logger);
+    }
+
     const cbm = createContextBudgetManager(logger);
 
     // ── 6. Framework state (§8.6) ──
@@ -140,10 +154,19 @@ export async function batchRun(args: CliArgs): Promise<void> {
       dbProxy: dbProxy as any,
       acquireService,
       processService,
-      ragService: null, // TODO: wire RagService when embedding model is configured
+      ragService: ragService as any,
       bibliographyService: bibliographyModule as any,
+      identifierResolver: null,
+      sanityChecker: null,
+      failureMemory: null,
+      acquireConfig: config.acquire,
       logger,
       workspacePath,
+      hydrateConfig: { enableLlmExtraction: false, enableApiLookup: false },
+      llmCallFn: null,
+      lookupService: null,
+      enrichService: null,
+      hydratePersist: null,
     }));
 
     // Register analyze (requires LLM)
@@ -155,13 +178,40 @@ export async function batchRun(args: CliArgs): Promise<void> {
         logger,
         frameworkState,
         workspacePath,
+        outputLanguage: config.language.defaultOutputLanguage,
+        ragService: ragService ? {
+          retrieve: async (query: string, options?: { paperId?: string; topK?: number }) => {
+            const result = await ragService!.retrieve({
+              queryText: query,
+              taskType: 'analyze',
+              conceptIds: [],
+              paperIds: options?.paperId ? [options.paperId as any] : [],
+              sectionTypeFilter: null,
+              sourceFilter: null,
+              budgetMode: 'focused',
+              maxTokens: 50_000,
+              modelContextWindow: 200_000,
+              enableCorrectiveRag: true,
+              relatedMemoIds: [],
+            });
+            return {
+              passages: result.chunks.map((c: any) => ({
+                text: c.text,
+                paperId: c.paperId as string,
+                score: c.score,
+                chunkId: c.chunkId as string,
+              })),
+              qualityReport: result.qualityReport,
+            };
+          },
+        } : null,
       }));
 
       runner.registerWorkflow('synthesize', createSynthesizeWorkflow({
         dbProxy: dbProxy as any,
         llmClient,
         contextBudgetManager: cbm,
-        ragService: null, // TODO: wire RagService when embedding model configured
+        ragService: ragService as any,
         logger,
         workspacePath,
       }));

@@ -50,7 +50,7 @@ export interface SelectionSlice {
   selectConcept: (id: string | null) => void;
   selectMapping: (id: string | null, paperId?: string, conceptId?: string) => void;
   selectSection: (id: string | null, articleId?: string) => void;
-  focusGraphNode: (id: string | null) => void;
+  focusGraphNode: (id: string | null, nodeType?: 'paper' | 'concept' | 'memo' | 'note') => void;
   /** v2.0 选中碎片笔记 */
   selectMemo: (id: string | null) => void;
   /** v2.0 选中结构化笔记 */
@@ -148,6 +148,7 @@ export const createSelectionSlice: StateCreator<
       state.selectionMode = 'allExcept';
       state.excludedIds = {};
       state.explicitIds = {};
+      // 保留 selectedPaperId，使 ContextSource 派生不会因 null 而跌入 empty
     }),
 
   /** 取消全选 */
@@ -168,19 +169,23 @@ export const createSelectionSlice: StateCreator<
   selectMapping: (id, paperId, conceptId) =>
     set((state) => {
       state.selectedMappingId = id;
-      state.selectedMappingPaperId = paperId ?? null;
-      state.selectedMappingConceptId = conceptId ?? null;
+      // 清空 mapping 时同步清空伴生字段
+      state.selectedMappingPaperId = id ? (paperId ?? null) : null;
+      state.selectedMappingConceptId = id ? (conceptId ?? null) : null;
     }),
 
   selectSection: (id, articleId) =>
     set((state) => {
       state.selectedSectionId = id;
-      state.selectedArticleId = articleId ?? state.selectedArticleId;
+      // 清空 section 时同步清空 articleId；设置 section 时必须提供 articleId
+      state.selectedArticleId = id ? (articleId ?? state.selectedArticleId) : null;
     }),
 
-  focusGraphNode: (id) =>
+  focusGraphNode: (id, nodeType) =>
     set((state) => {
       state.focusedGraphNodeId = id;
+      // 同步设置节点类型；清空时一并重置
+      state.focusedGraphNodeType = id ? (nodeType ?? state.focusedGraphNodeType ?? 'paper') : null;
     }),
 
   selectMemo: (id) =>
@@ -209,5 +214,11 @@ export const createSelectionSlice: StateCreator<
       state.focusedGraphNodeId = null;
       state.selectedMemoId = null;
       state.selectedNoteId = null;
+      // 同步清理 PanelSlice 中依赖选中实体的引用
+      state.pinnedSource = null;
+      state.peekSource = null;
+      state.contextPanelPinned = false;
+      // 同步清理 GraphSlice 中的焦点节点类型
+      state.focusedGraphNodeType = null;
     }),
 });

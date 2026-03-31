@@ -78,6 +78,18 @@ export function preloadView(viewType: ViewType): void {
   VIEW_CONFIG[viewType]?.preload?.();
 }
 
+/**
+ * 空闲预加载：首屏渲染后利用 idle 时间预加载全部 lazy 视图的 JS chunk。
+ * Electron 从本地磁盘加载，lazy split 的网络收益不存在，
+ * 提前加载可消除首次切换时的 Suspense fallback 闪烁。
+ */
+export function preloadAllViews(): void {
+  const entries = Object.entries(VIEW_CONFIG) as [ViewType, ViewConfig][];
+  for (const [, config] of entries) {
+    config.preload?.();
+  }
+}
+
 // ═══ Suspense fallback ═══
 
 function ViewLoading() {

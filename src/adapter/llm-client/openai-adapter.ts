@@ -13,7 +13,6 @@
  */
 
 import OpenAI from 'openai';
-import { jsonrepair } from 'jsonrepair';
 import type {
   Message,
   ContentBlock,
@@ -24,9 +23,12 @@ import type {
   TokenUsage,
   FinishReason,
   LlmAdapter,
+  AdapterCallParams,
+  ResponseFormat,
 } from './llm-client';
 import { getReasoningEffort, getModelContextWindow } from './model-router';
 import { countTokens } from './token-counter';
+import { mapFinishReason, safeParseJson } from './shared';
 
 // ─── Backend configuration ───
 
@@ -52,16 +54,7 @@ export class OpenAIAdapter implements LlmAdapter {
 
   // ─── complete (§3.2-3.3) ───
 
-  async complete(params: {
-    model: string;
-    systemPrompt: string;
-    messages: Message[];
-    tools?: ToolDefinition[];
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    workflowId?: string;
-  }): Promise<CompletionResult> {
+  async complete(params: AdapterCallParams): Promise<CompletionResult> {
     this.checkContextOverflow(params.model, params.systemPrompt, params.messages);
 
     const requestParams = this.buildRequest(params);
@@ -76,16 +69,7 @@ export class OpenAIAdapter implements LlmAdapter {
 
   // ─── completeStream (§3.5) ───
 
-  async *completeStream(params: {
-    model: string;
-    systemPrompt: string;
-    messages: Message[];
-    tools?: ToolDefinition[];
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    workflowId?: string;
-  }): AsyncIterable<StreamChunk> {
+  async *completeStream(params: AdapterCallParams): AsyncIterable<StreamChunk> {
     this.checkContextOverflow(params.model, params.systemPrompt, params.messages);
 
     const requestParams = this.buildRequest(params);
@@ -201,10 +185,11 @@ export class OpenAIAdapter implements LlmAdapter {
     maxTokens?: number;
     temperature?: number;
     workflowId?: string;
+    responseFormat?: ResponseFormat;
   }): Record<string, unknown> {
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: params.systemPrompt },
-      ...params.messages.map(convertMessage),
+      ...params.messages.flatMap(convertMessages),
     ];
 
     const req: Record<string, unknown> = {
@@ -224,6 +209,22 @@ export class OpenAIAdapter implements LlmAdapter {
 
     if (params.tools && params.tools.length > 0) {
       req['tools'] = params.tools.map(toOpenAITool);
+    }
+
+    // Structured output: response_format support
+    if (params.responseFormat) {
+      if (params.responseFormat.type === 'json_object') {
+        req['response_format'] = { type: 'json_object' };
+      } else if (params.responseFormat.type === 'json_schema') {
+        req['response_format'] = {
+          type: 'json_schema',
+          json_schema: {
+            name: params.responseFormat.name,
+            schema: params.responseFormat.schema,
+            ...(params.responseFormat.strict != null && { strict: params.responseFormat.strict }),
+          },
+        };
+      }
     }
 
     return req;
@@ -294,27 +295,60 @@ export class OpenAIAdapter implements LlmAdapter {
 
 // ─── Helpers ───
 
-function convertMessage(msg: Message): OpenAI.ChatCompletionMessageParam {
+/**
+ * Convert a single Anthropic-format Message into one or more OpenAI-format messages.
+ *
+ * OpenAI requires:
+ * - Assistant tool calls as `role:'assistant'` with `tool_calls` array
+ * - Tool results as separate `role:'tool'` messages (one per tool result)
+ *
+ * Returns an array because a single Anthropic message with N tool_result blocks
+ * must expand to N separate OpenAI tool messages.
+ */
+function convertMessages(msg: Message): OpenAI.ChatCompletionMessageParam[] {
   if (typeof msg.content === 'string') {
-    return { role: msg.role, content: msg.content } as OpenAI.ChatCompletionMessageParam;
+    return [{ role: msg.role, content: msg.content } as OpenAI.ChatCompletionMessageParam];
   }
-  // Multi-part content (text + images + tool results)
-  const parts: OpenAI.ChatCompletionContentPart[] = msg.content.map(convertContentPart);
-  return { role: msg.role, content: parts } as unknown as OpenAI.ChatCompletionMessageParam;
-}
 
-function convertContentPart(block: ContentBlock): OpenAI.ChatCompletionContentPart {
-  if (block.type === 'text') {
-    return { type: 'text', text: block.text! };
+  const blocks = msg.content;
+
+  // ── Assistant message with tool_use blocks → OpenAI tool_calls format ──
+  const toolUseBlocks = blocks.filter((b) => b.type === 'tool_use');
+  if (toolUseBlocks.length > 0 && msg.role === 'assistant') {
+    const textParts = blocks.filter((b) => b.type === 'text');
+    const text = textParts.map((b) => b.text ?? '').join('') || null;
+    const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = toolUseBlocks.map((b) => ({
+      id: b.id!,
+      type: 'function' as const,
+      function: {
+        name: b.name!,
+        arguments: JSON.stringify(b.input ?? {}),
+      },
+    }));
+    return [{ role: 'assistant', content: text, tool_calls: toolCalls } as OpenAI.ChatCompletionAssistantMessageParam];
   }
-  if (block.type === 'image') {
-    return {
-      type: 'image_url',
-      image_url: { url: `data:${block.mediaType};base64,${block.data}` },
-    };
+
+  // ── User message with tool_result blocks → OpenAI role:'tool' messages ──
+  const toolResultBlocks = blocks.filter((b) => b.type === 'tool_result');
+  if (toolResultBlocks.length > 0) {
+    return toolResultBlocks.map((b) => ({
+      role: 'tool' as const,
+      tool_call_id: b.toolUseId!,
+      content: b.content ?? '',
+    }));
   }
-  // tool_use and tool_result are handled at the message level by OpenAI
-  return { type: 'text', text: block.text ?? '' };
+
+  // ── Regular multi-part content (text + images) ──
+  const parts: OpenAI.ChatCompletionContentPart[] = blocks.map((block) => {
+    if (block.type === 'image') {
+      return {
+        type: 'image_url' as const,
+        image_url: { url: `data:${block.mediaType};base64,${block.data}` },
+      };
+    }
+    return { type: 'text' as const, text: block.text ?? '' };
+  });
+  return [{ role: msg.role, content: parts } as unknown as OpenAI.ChatCompletionMessageParam];
 }
 
 function toOpenAITool(tool: ToolDefinition): OpenAI.ChatCompletionTool {
@@ -326,34 +360,4 @@ function toOpenAITool(tool: ToolDefinition): OpenAI.ChatCompletionTool {
       parameters: tool.inputSchema as Record<string, unknown>,
     },
   };
-}
-
-/**
- * Parse JSON with error recovery for malformed tool call arguments.
- *
- * Uses jsonrepair (FSM-based) instead of fragile regex heuristics.
- * Handles: trailing commas, missing brackets, unquoted keys,
- * truncated strings, escaped character issues, and more.
- */
-function safeParseJson(json: string): Record<string, unknown> {
-  try {
-    return JSON.parse(json);
-  } catch {
-    try {
-      const repaired = jsonrepair(json);
-      return JSON.parse(repaired);
-    } catch {
-      return {};
-    }
-  }
-}
-
-function mapFinishReason(reason: string): FinishReason {
-  const map: Record<string, FinishReason> = {
-    'stop': 'end_turn',
-    'tool_calls': 'tool_use',
-    'length': 'max_tokens',
-    'content_filter': 'content_filter',
-  };
-  return map[reason] ?? 'end_turn';
 }

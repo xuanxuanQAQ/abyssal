@@ -83,8 +83,13 @@ function getCjkDiscount(model: string, text: string): number {
 const CACHE_MAX_SIZE = 1000;
 
 function cacheKey(text: string): string {
-  // Key = first 100 chars + text length — avoids long text as key
-  return text.slice(0, 100) + '|' + text.length;
+  // FNV-1a hash + length for collision resistance (replaces prefix-only key)
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36) + '|' + text.length;
 }
 
 class LRUCache<V> {

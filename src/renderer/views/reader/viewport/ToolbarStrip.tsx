@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import * as ToggleGroup from '@radix-ui/react-toggle-group';
+import { useTranslation } from 'react-i18next';
 import {
   ChevronLeft,
   ChevronRight,
   ZoomIn,
   ZoomOut,
+  Hand,
   Highlighter,
   StickyNote,
   Tag,
@@ -18,8 +19,8 @@ export interface ToolbarStripProps {
 }
 
 const ZOOM_PRESETS = [
-  { label: 'Fit Width', value: 'fitWidth' },
-  { label: 'Fit Page', value: 'fitPage' },
+  { labelKey: 'reader.toolbar.fitWidth', value: 'fitWidth' },
+  { labelKey: 'reader.toolbar.fitPage', value: 'fitPage' },
   { label: '75%', value: '0.75' },
   { label: '100%', value: '1' },
   { label: '125%', value: '1.25' },
@@ -27,26 +28,11 @@ const ZOOM_PRESETS = [
   { label: '200%', value: '2' },
 ] as const;
 
-const buttonStyle: React.CSSProperties = {
-  height: 28,
-  padding: '0 8px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border-subtle)',
-  background: 'transparent',
-  color: 'var(--text-primary)',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: 'var(--text-sm)',
-};
-
-const toggleItemStyle: React.CSSProperties = {
-  ...buttonStyle,
-  border: 'none',
-};
+const ACTIVE_BG = 'var(--accent-color, #2563eb)';
+const ACTIVE_COLOR = '#fff';
 
 function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
+  const { t } = useTranslation();
   const currentPage = useReaderStore((s) => s.currentPage);
   const totalPages = useReaderStore((s) => s.totalPages);
   const zoomLevel = useReaderStore((s) => s.zoomLevel);
@@ -58,7 +44,6 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
   const [pageInputValue, setPageInputValue] = useState(String(currentPage));
   const [isPageInputFocused, setIsPageInputFocused] = useState(false);
 
-  // Keep input in sync when page changes externally (only when not focused)
   React.useEffect(() => {
     if (!isPageInputFocused) {
       setPageInputValue(String(currentPage));
@@ -97,15 +82,11 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
   }, [currentPage]);
 
   const handlePrevPage = useCallback(() => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1);
-    }
+    if (currentPage > 1) setCurrentPage(currentPage - 1);
   }, [currentPage, setCurrentPage]);
 
   const handleNextPage = useCallback(() => {
-    if (currentPage < totalPages) {
-      setCurrentPage(currentPage + 1);
-    }
+    if (currentPage < totalPages) setCurrentPage(currentPage + 1);
   }, [currentPage, totalPages, setCurrentPage]);
 
   const handleZoomModeChange = useCallback(
@@ -115,45 +96,20 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
         zoomActions.setZoomPreset(value);
       } else {
         const level = parseFloat(value);
-        if (!isNaN(level)) {
-          zoomActions.setZoomPreset(level);
-        }
+        if (!isNaN(level)) zoomActions.setZoomPreset(level);
       }
     },
     [zoomActions],
   );
 
-  // Text annotation tools toggle group
-  const textToolValue =
-    activeAnnotationTool === 'textHighlight' ||
-    activeAnnotationTool === 'textNote' ||
-    activeAnnotationTool === 'textConceptTag'
-      ? activeAnnotationTool
-      : '';
-
-  const handleTextToolChange = useCallback(
-    (value: string) => {
-      if (value === '') {
-        // Deselected
-        setActiveAnnotationTool(null);
-      } else {
-        setActiveAnnotationTool(
-          value as 'textHighlight' | 'textNote' | 'textConceptTag',
-        );
-      }
+  // Toggle: click active tool again → deselect (back to null / default select mode)
+  const toggleTool = useCallback(
+    (tool: 'hand' | 'textHighlight' | 'textNote' | 'textConceptTag' | 'areaHighlight') => {
+      setActiveAnnotationTool(activeAnnotationTool === tool ? null : tool);
     },
-    [setActiveAnnotationTool],
+    [activeAnnotationTool, setActiveAnnotationTool],
   );
 
-  const handleAreaHighlightToggle = useCallback(() => {
-    if (activeAnnotationTool === 'areaHighlight') {
-      setActiveAnnotationTool(null);
-    } else {
-      setActiveAnnotationTool('areaHighlight');
-    }
-  }, [activeAnnotationTool, setActiveAnnotationTool]);
-
-  // Determine current select value
   const selectValue =
     zoomMode === 'fitWidth' || zoomMode === 'fitPage'
       ? zoomMode
@@ -161,10 +117,43 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
 
   const zoomPercentage = `${Math.round(zoomLevel * 100)}%`;
 
+  const btnBase: React.CSSProperties = {
+    height: 28,
+    width: 28,
+    padding: 0,
+    borderRadius: 'var(--radius-sm)',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-primary)',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'background 0.15s, color 0.15s',
+  };
+
+  const navBtnStyle: React.CSSProperties = {
+    ...btnBase,
+    border: '1px solid var(--border-subtle)',
+    padding: '0 8px',
+    width: 'auto',
+    fontSize: 'var(--text-sm)',
+  };
+
+  function toolBtnStyle(tool: string): React.CSSProperties {
+    const isActive = activeAnnotationTool === tool;
+    return {
+      ...btnBase,
+      background: isActive ? ACTIVE_BG : 'transparent',
+      color: isActive ? ACTIVE_COLOR : 'var(--text-primary)',
+      borderRadius: 6,
+    };
+  }
+
   return (
     <div
       style={{
-        height: 32,
+        height: 36,
         display: 'flex',
         flexDirection: 'row',
         alignItems: 'center',
@@ -176,15 +165,9 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
         flexShrink: 0,
       }}
     >
-      {/* Left group: page navigation */}
+      {/* Page navigation */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <button
-          type="button"
-          style={buttonStyle}
-          onClick={handlePrevPage}
-          disabled={currentPage <= 1}
-          aria-label="Previous page"
-        >
+        <button type="button" style={navBtnStyle} onClick={handlePrevPage} disabled={currentPage <= 1}>
           <ChevronLeft size={14} />
         </button>
         <input
@@ -195,8 +178,8 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
           onFocus={handlePageInputFocus}
           onBlur={handlePageInputBlur}
           style={{
-            width: 30,
-            height: 28,
+            width: 32,
+            height: 26,
             textAlign: 'center',
             border: '1px solid var(--border-subtle)',
             borderRadius: 'var(--radius-sm)',
@@ -206,30 +189,21 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
             padding: 0,
           }}
         />
-        <span style={{ color: 'var(--text-muted)', userSelect: 'none' }}>
-          / {totalPages}
-        </span>
-        <button
-          type="button"
-          style={buttonStyle}
-          onClick={handleNextPage}
-          disabled={currentPage >= totalPages}
-          aria-label="Next page"
-        >
+        <span style={{ color: 'var(--text-muted)', userSelect: 'none' }}>/ {totalPages}</span>
+        <button type="button" style={navBtnStyle} onClick={handleNextPage} disabled={currentPage >= totalPages}>
           <ChevronRight size={14} />
         </button>
       </div>
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Center group: zoom controls */}
+      {/* Zoom controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <select
           value={selectValue}
           onChange={handleZoomModeChange}
           style={{
-            height: 28,
+            height: 26,
             borderRadius: 'var(--radius-sm)',
             border: '1px solid var(--border-subtle)',
             background: 'transparent',
@@ -240,7 +214,7 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
         >
           {ZOOM_PRESETS.map((preset) => (
             <option key={preset.value} value={preset.value}>
-              {preset.label}
+              {'labelKey' in preset ? t(preset.labelKey) : preset.label}
             </option>
           ))}
         </select>
@@ -254,91 +228,74 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
         >
           {zoomPercentage}
         </span>
-        <button
-          type="button"
-          style={buttonStyle}
-          onClick={zoomActions.zoomOut}
-          aria-label="Zoom out"
-        >
+        <button type="button" style={navBtnStyle} onClick={zoomActions.zoomOut}>
           <ZoomOut size={14} />
         </button>
-        <button
-          type="button"
-          style={buttonStyle}
-          onClick={zoomActions.zoomIn}
-          aria-label="Zoom in"
-        >
+        <button type="button" style={navBtnStyle} onClick={zoomActions.zoomIn}>
           <ZoomIn size={14} />
         </button>
       </div>
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Right group A: text annotation tools */}
-      <ToggleGroup.Root
-        type="single"
-        value={textToolValue}
-        onValueChange={handleTextToolChange}
-        style={{ display: 'flex', alignItems: 'center', gap: 2 }}
-      >
-        <ToggleGroup.Item
-          value="textHighlight"
-          style={{
-            ...toggleItemStyle,
-            background:
-              activeAnnotationTool === 'textHighlight'
-                ? 'var(--bg-elevated)'
-                : 'transparent',
-          }}
-          aria-label="Text highlight"
-        >
-          <Highlighter size={14} />
-        </ToggleGroup.Item>
-        <ToggleGroup.Item
-          value="textNote"
-          style={{
-            ...toggleItemStyle,
-            background:
-              activeAnnotationTool === 'textNote'
-                ? 'var(--bg-elevated)'
-                : 'transparent',
-          }}
-          aria-label="Text note"
-        >
-          <StickyNote size={14} />
-        </ToggleGroup.Item>
-        <ToggleGroup.Item
-          value="textConceptTag"
-          style={{
-            ...toggleItemStyle,
-            background:
-              activeAnnotationTool === 'textConceptTag'
-                ? 'var(--bg-elevated)'
-                : 'transparent',
-          }}
-          aria-label="Concept tag"
-        >
-          <Tag size={14} />
-        </ToggleGroup.Item>
-      </ToggleGroup.Root>
-
-      {/* Right group B: area highlight toggle */}
-      <button
-        type="button"
+      {/* Tool buttons — Acrobat-style toggle */}
+      <div
         style={{
-          ...buttonStyle,
-          background:
-            activeAnnotationTool === 'areaHighlight'
-              ? 'var(--bg-elevated)'
-              : 'transparent',
-          border: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          padding: '0 2px',
+          borderRadius: 8,
+          background: 'var(--bg-surface-low, transparent)',
         }}
-        onClick={handleAreaHighlightToggle}
-        aria-label="Area highlight"
       >
-        <Square size={14} />
-      </button>
+        <button
+          type="button"
+          style={toolBtnStyle('hand')}
+          onClick={() => toggleTool('hand')}
+          title={t('reader.toolbar.hand', '抓手工具')}
+        >
+          <Hand size={15} />
+        </button>
+
+        <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 2px' }} />
+
+        <button
+          type="button"
+          style={toolBtnStyle('textHighlight')}
+          onClick={() => toggleTool('textHighlight')}
+          title={t('reader.toolbar.textHighlight', '高亮')}
+        >
+          <Highlighter size={15} />
+        </button>
+        <button
+          type="button"
+          style={toolBtnStyle('textNote')}
+          onClick={() => toggleTool('textNote')}
+          title={t('reader.toolbar.textNote', '笔记')}
+        >
+          <StickyNote size={15} />
+        </button>
+        <button
+          type="button"
+          style={toolBtnStyle('textConceptTag')}
+          onClick={() => toggleTool('textConceptTag')}
+          title={t('reader.toolbar.conceptTag', '概念标签')}
+        >
+          <Tag size={15} />
+        </button>
+
+        <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 2px' }} />
+
+        <button
+          type="button"
+          style={toolBtnStyle('areaHighlight')}
+          onClick={() => toggleTool('areaHighlight')}
+          title={t('reader.toolbar.areaHighlight', '区域高亮')}
+        >
+          <Square size={15} />
+        </button>
+      </div>
     </div>
   );
 }

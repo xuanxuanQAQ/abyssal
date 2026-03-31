@@ -7,13 +7,13 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { GlobalConfig, ApiKeysConfig, LlmConfig, RagConfig, AcquireConfig } from '../types/config';
+import type { GlobalConfig, ApiKeysConfig, LlmConfig, RagConfig, AcquireConfig, WebSearchConfig } from '../types/config';
 import {
   DEFAULT_API_KEYS,
   DEFAULT_LLM,
   DEFAULT_RAG,
   DEFAULT_ACQUIRE,
-} from './config';
+} from '../config/config-loader';
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   apiKeys: DEFAULT_API_KEYS,
@@ -38,16 +38,17 @@ function defaultGlobalToml(): string {
 # unpaywallEmail = ""
 # cohereApiKey = ""
 # jinaApiKey = ""
+# siliconflowApiKey = "sk-..."
+# webSearchApiKey = ""  # Tavily / SerpAPI / Bing API key
 
 [llm]
 defaultProvider = "anthropic"
 defaultModel = "claude-sonnet-4-20250514"
 
 [rag]
-embeddingBackend = "api"
 embeddingModel = "text-embedding-3-small"
 embeddingDimension = 1536
-rerankerBackend = "local-bge"
+rerankerBackend = "cohere"
 correctiveRagEnabled = true
 
 [acquire]
@@ -87,6 +88,9 @@ export function loadGlobalConfig(appDataDir: string): GlobalConfig {
     return applyEnvOverrides({ ...DEFAULT_GLOBAL_CONFIG });
   }
 
+  const rawWebSearch = (raw['webSearch'] ?? raw['web_search'] ?? {}) as Record<string, unknown>;
+  const hasWebSearch = Object.keys(rawWebSearch).length > 0;
+
   const config: GlobalConfig = {
     apiKeys: {
       ...DEFAULT_API_KEYS,
@@ -108,6 +112,9 @@ export function loadGlobalConfig(appDataDir: string): GlobalConfig {
       ...DEFAULT_ACQUIRE,
       ...((raw['acquire'] ?? {}) as Record<string, unknown>),
     } as AcquireConfig,
+    ...(hasWebSearch ? {
+      webSearch: { enabled: false, backend: 'tavily' as const, ...rawWebSearch } as WebSearchConfig,
+    } : {}),
   };
 
   return applyEnvOverrides(config);
@@ -129,6 +136,12 @@ export function saveGlobalConfig(
     llm: updates.llm ? { ...current.llm, ...updates.llm } : current.llm,
     rag: updates.rag ? { ...current.rag, ...updates.rag } : current.rag,
     acquire: updates.acquire ? { ...current.acquire, ...updates.acquire } : current.acquire,
+    ...(updates.webSearch || current.webSearch ? {
+      webSearch: {
+        ...(current.webSearch ?? { enabled: false, backend: 'tavily' as const }),
+        ...(updates.webSearch ?? {}),
+      } as WebSearchConfig,
+    } : {}),
   };
 
   // 写回 TOML（简化版：写 JSON 注释 + 关键字段）
@@ -152,7 +165,6 @@ export function saveGlobalConfig(
   lines.push(`defaultModel = ${JSON.stringify(merged.llm.defaultModel)}`);
 
   lines.push('', '[rag]');
-  lines.push(`embeddingBackend = ${JSON.stringify(merged.rag.embeddingBackend)}`);
   lines.push(`embeddingModel = ${JSON.stringify(merged.rag.embeddingModel)}`);
   lines.push(`embeddingDimension = ${merged.rag.embeddingDimension}`);
   lines.push(`rerankerBackend = ${JSON.stringify(merged.rag.rerankerBackend)}`);
@@ -162,6 +174,36 @@ export function saveGlobalConfig(
   lines.push(`enabledSources = ${JSON.stringify(merged.acquire.enabledSources)}`);
   lines.push(`enableScihub = ${merged.acquire.enableScihub}`);
   lines.push(`perSourceTimeoutMs = ${merged.acquire.perSourceTimeoutMs}`);
+  lines.push(`maxRedirects = ${merged.acquire.maxRedirects}`);
+  lines.push(`maxRetries = ${merged.acquire.maxRetries}`);
+  lines.push(`retryDelayMs = ${merged.acquire.retryDelayMs}`);
+  lines.push(`enableChinaInstitutional = ${merged.acquire.enableChinaInstitutional}`);
+  if (merged.acquire.chinaInstitutionId) {
+    lines.push(`chinaInstitutionId = ${JSON.stringify(merged.acquire.chinaInstitutionId)}`);
+  }
+  if (merged.acquire.chinaCustomIdpEntityId) {
+    lines.push(`chinaCustomIdpEntityId = ${JSON.stringify(merged.acquire.chinaCustomIdpEntityId)}`);
+  }
+  if (merged.acquire.scihubDomain) {
+    lines.push(`scihubDomain = ${JSON.stringify(merged.acquire.scihubDomain)}`);
+  }
+  if (merged.acquire.institutionalProxyUrl) {
+    lines.push(`institutionalProxyUrl = ${JSON.stringify(merged.acquire.institutionalProxyUrl)}`);
+  }
+  lines.push(`enableCnki = ${merged.acquire.enableCnki}`);
+  lines.push(`enableWanfang = ${merged.acquire.enableWanfang}`);
+  if (merged.acquire.proxyEnabled) {
+    lines.push(`proxyEnabled = ${merged.acquire.proxyEnabled}`);
+    if (merged.acquire.proxyUrl) lines.push(`proxyUrl = ${JSON.stringify(merged.acquire.proxyUrl)}`);
+    if (merged.acquire.proxyMode) lines.push(`proxyMode = ${JSON.stringify(merged.acquire.proxyMode)}`);
+  }
+
+  if (merged.webSearch) {
+    lines.push('', '[webSearch]');
+    lines.push(`enabled = ${merged.webSearch.enabled}`);
+    lines.push(`backend = ${JSON.stringify(merged.webSearch.backend)}`);
+  }
+
   lines.push('');
 
   fs.writeFileSync(configPath, lines.join('\n'), 'utf-8');
@@ -178,6 +220,8 @@ const ENV_MAP: Record<string, [keyof GlobalConfig, string]> = {
   ABYSSAL_UNPAYWALL_EMAIL: ['apiKeys', 'unpaywallEmail'],
   ABYSSAL_COHERE_API_KEY: ['apiKeys', 'cohereApiKey'],
   ABYSSAL_JINA_API_KEY: ['apiKeys', 'jinaApiKey'],
+  ABYSSAL_SILICONFLOW_API_KEY: ['apiKeys', 'siliconflowApiKey'],
+  ABYSSAL_WEB_SEARCH_API_KEY: ['apiKeys', 'webSearchApiKey'],
   ABYSSAL_LLM_PROVIDER: ['llm', 'defaultProvider'],
   ABYSSAL_LLM_MODEL: ['llm', 'defaultModel'],
 };

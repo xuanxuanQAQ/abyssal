@@ -6,7 +6,7 @@
  * Step 3: Confirm -- summary + execute split.
  */
 
-import React, { useReducer, useCallback, useMemo } from 'react';
+import React, { useReducer, useCallback, useMemo, useRef, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   X,
@@ -173,6 +173,9 @@ export function ConceptSplitWizard({
   conceptId,
 }: ConceptSplitWizardProps) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const { data: conceptListData } = useConceptList();
   const concepts: Concept[] = conceptListData ?? [];
 
@@ -191,12 +194,26 @@ export function ConceptSplitWizard({
     [onOpenChange, reset]
   );
 
-  // Validation: both drafts must have name and definition.
+  // Validation: both drafts must have name and definition, names must differ and be unique.
+  const draft1NameTrimmed = state.draft1.name.trim();
+  const draft2NameTrimmed = state.draft2.name.trim();
+  const namesAreDifferent = draft1NameTrimmed.toLowerCase() !== draft2NameTrimmed.toLowerCase();
+  const namesAreUnique = !concepts.some(
+    (c) =>
+      c.id !== conceptId &&
+      (c.name.toLowerCase() === draft1NameTrimmed.toLowerCase() ||
+        c.name.toLowerCase() === draft2NameTrimmed.toLowerCase() ||
+        c.nameZh.toLowerCase() === draft1NameTrimmed.toLowerCase() ||
+        c.nameZh.toLowerCase() === draft2NameTrimmed.toLowerCase()),
+  );
+
   const draftsValid =
-    state.draft1.name.trim().length > 0 &&
+    draft1NameTrimmed.length > 0 &&
     state.draft1.definition.trim().length > 0 &&
-    state.draft2.name.trim().length > 0 &&
-    state.draft2.definition.trim().length > 0;
+    draft2NameTrimmed.length > 0 &&
+    state.draft2.definition.trim().length > 0 &&
+    namesAreDifferent &&
+    namesAreUnique;
 
   // ── Step transitions ──
 
@@ -244,26 +261,104 @@ export function ConceptSplitWizard({
   // ── AI pre-assignment (placeholder) ──
 
   const handleAIPreAssign = useCallback(async () => {
+    if (!mountedRef.current) return;
     dispatch({ type: 'SET_AI_LOADING', loading: true });
     dispatch({ type: 'SET_ERROR', error: null });
 
     try {
-      // TODO: Call LLM to auto-assign mappings based on concept definitions.
-      // For now, simulate a basic heuristic: alternate between a1 and a2.
-      const newAssignments: Record<string, AssignTarget> = {};
-      state.mappings.forEach((m, idx) => {
-        newAssignments[m.id] = idx % 2 === 0 ? 'a1' : 'a2';
-      });
-      dispatch({ type: 'BULK_ASSIGN', assignments: newAssignments });
+      const api = getAPI();
+      // Use LLM to classify mappings based on semantic similarity to each draft's definition
+      const prompt = `Given two new concept definitions:
+Concept A1: "${state.draft1.name}" - ${state.draft1.definition}
+Concept A2: "${state.draft2.name}" - ${state.draft2.definition}
+
+For each of the following paper-concept mappings, classify which concept (a1, a2, or both) the mapping best fits. Return a JSON object mapping mappingId to "a1", "a2", or "both".
+
+Mappings:
+${state.mappings.map((m) => `- ${m.id}: ${m.relationType} (confidence: ${m.confidence.toFixed(2)}) evidence: "${(m.evidenceText ?? '').slice(0, 100)}"`).join('\n')}
+
+Respond ONLY with a JSON object, no other text.`;
+
+      const result = await api.chat.send(prompt);
+
+      // Parse the LLM response as JSON — use non-greedy match to avoid spanning multiple objects
+      const jsonMatch = result.match(/\{[\s\S]*?\}/);
+      if (!jsonMatch) {
+        throw new Error('Failed to parse AI response');
+      }
+
+      const assignments: Record<string, AssignTarget> = {};
+      const parsed = JSON.parse(jsonMatch[0]) as Record<string, string>;
+
+      for (const [mappingId, target] of Object.entries(parsed)) {
+        const normalized = (target as string).toLowerCase().trim();
+        if (normalized === 'a1' || normalized === 'a2' || normalized === 'both') {
+          assignments[mappingId] = normalized;
+        }
+      }
+
+      // Only apply assignments for mappings we actually have
+      const validAssignments: Record<string, AssignTarget> = {};
+      for (const m of state.mappings) {
+        validAssignments[m.id] = assignments[m.id] ?? state.assignments[m.id] ?? 'a1';
+      }
+
+      dispatch({ type: 'BULK_ASSIGN', assignments: validAssignments });
     } catch (err) {
-      dispatch({
-        type: 'SET_ERROR',
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // Fallback to heuristic if LLM fails: use character n-gram similarity
+      // Works for both CJK (no spaces) and Latin (space-delimited) text
+      try {
+        const newAssignments: Record<string, AssignTarget> = {};
+        const d1Lower = state.draft1.definition.toLowerCase();
+        const d2Lower = state.draft2.definition.toLowerCase();
+
+        // Extract tokens: split on whitespace for Latin, then add character bigrams for CJK
+        function tokenize(text: string): Set<string> {
+          const tokens = new Set<string>();
+          // Whitespace-delimited words (Latin/mixed)
+          for (const w of text.split(/\s+/)) {
+            if (w.length > 2) tokens.add(w);
+          }
+          // Character bigrams (effective for CJK where no spaces exist)
+          for (let i = 0; i < text.length - 1; i++) {
+            tokens.add(text.slice(i, i + 2));
+          }
+          return tokens;
+        }
+
+        const d1Tokens = tokenize(d1Lower);
+        const d2Tokens = tokenize(d2Lower);
+
+        for (const m of state.mappings) {
+          const evidence = (m.evidenceText ?? '').toLowerCase();
+          const evidenceTokens = tokenize(evidence);
+
+          let score1 = 0;
+          let score2 = 0;
+          for (const token of evidenceTokens) {
+            if (d1Tokens.has(token)) score1++;
+            if (d2Tokens.has(token)) score2++;
+          }
+
+          if (score1 > score2 * 1.5) {
+            newAssignments[m.id] = 'a1';
+          } else if (score2 > score1 * 1.5) {
+            newAssignments[m.id] = 'a2';
+          } else {
+            newAssignments[m.id] = 'both';
+          }
+        }
+        dispatch({ type: 'BULK_ASSIGN', assignments: newAssignments });
+      } catch {
+        dispatch({
+          type: 'SET_ERROR',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     } finally {
-      dispatch({ type: 'SET_AI_LOADING', loading: false });
+      if (mountedRef.current) dispatch({ type: 'SET_AI_LOADING', loading: false });
     }
-  }, [state.mappings]);
+  }, [state.mappings, state.draft1, state.draft2, state.assignments]);
 
   // ── Execute split ──
 
@@ -506,6 +601,17 @@ export function ConceptSplitWizard({
                   {originalConcept.description.length > 120 ? '...' : ''}
                 </div>
               </div>
+
+              {draft1NameTrimmed.length > 0 && draft2NameTrimmed.length > 0 && !namesAreDifferent && (
+                <div style={{ fontSize: 12, color: 'var(--danger, #e53e3e)', marginTop: 4 }}>
+                  Two concepts must have different names.
+                </div>
+              )}
+              {draft1NameTrimmed.length > 0 && draft2NameTrimmed.length > 0 && !namesAreUnique && namesAreDifferent && (
+                <div style={{ fontSize: 12, color: 'var(--danger, #e53e3e)', marginTop: 4 }}>
+                  A concept with this name already exists.
+                </div>
+              )}
 
               <div style={buttonRowStyle}>
                 <Dialog.Close asChild>

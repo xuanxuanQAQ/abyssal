@@ -5,6 +5,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { SmartGroups } from './SmartGroups';
 import { TagTree } from './TagTree';
@@ -56,10 +57,12 @@ function CollapsibleSection({
 }
 
 export function LibrarySidebar({ counts }: LibrarySidebarProps) {
+  const { t } = useTranslation();
+
   return (
     <nav
       role="navigation"
-      aria-label="文献库导航"
+      aria-label={t('library.sidebar.navigation')}
       style={{
         height: '100%',
         overflowY: 'auto',
@@ -68,19 +71,19 @@ export function LibrarySidebar({ counts }: LibrarySidebarProps) {
         fontSize: 'var(--text-sm)',
       }}
     >
-      <CollapsibleSection title="智能分组">
+      <CollapsibleSection title={t('library.sidebar.smartGroups')}>
         <SmartGroups counts={counts} />
       </CollapsibleSection>
 
       <div style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
 
-      <CollapsibleSection title="标签">
+      <CollapsibleSection title={t('library.sidebar.tags')}>
         <TagTree />
       </CollapsibleSection>
 
       <div style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
 
-      <CollapsibleSection title="搜索历史" defaultOpen={false}>
+      <CollapsibleSection title={t('library.sidebar.searchHistory')} defaultOpen={false}>
         <SearchHistory />
       </CollapsibleSection>
     </nav>

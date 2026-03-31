@@ -5,6 +5,7 @@ import React, {
   useMemo,
   forwardRef,
   useImperativeHandle,
+  useState,
 } from 'react';
 import { PageSlot } from './PageSlot';
 import type { PageMetadataMap } from '../core/pageMetadataPreloader';
@@ -12,6 +13,7 @@ import type { RenderWindowResult } from '../core/renderWindow';
 import type { Annotation } from '../../../../shared-types/models';
 import type { Transform6 } from '../math/coordinateTransform';
 import { useCurrentPage } from '../hooks/useCurrentPage';
+import { useReaderStore } from '../../../core/store/useReaderStore';
 
 const PAGE_GAP = 8;
 
@@ -61,6 +63,48 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
     } = props;
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const activeAnnotationTool = useReaderStore((s) => s.activeAnnotationTool);
+    const isHandTool = activeAnnotationTool === 'hand';
+
+    // Hand tool: drag-to-scroll
+    const isDraggingRef = useRef(false);
+    const lastPosRef = useRef({ x: 0, y: 0 });
+
+    useEffect(() => {
+      if (!isHandTool) return;
+      const container = scrollContainerRef.current;
+      if (!container) return;
+
+      const onMouseDown = (e: MouseEvent) => {
+        if (e.button !== 0) return;
+        isDraggingRef.current = true;
+        lastPosRef.current = { x: e.clientX, y: e.clientY };
+        container.style.cursor = 'grabbing';
+        e.preventDefault();
+      };
+      const onMouseMove = (e: MouseEvent) => {
+        if (!isDraggingRef.current) return;
+        const dx = e.clientX - lastPosRef.current.x;
+        const dy = e.clientY - lastPosRef.current.y;
+        container.scrollLeft -= dx;
+        container.scrollTop -= dy;
+        lastPosRef.current = { x: e.clientX, y: e.clientY };
+      };
+      const onMouseUp = () => {
+        isDraggingRef.current = false;
+        container.style.cursor = 'grab';
+      };
+
+      container.addEventListener('mousedown', onMouseDown);
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+      return () => {
+        container.removeEventListener('mousedown', onMouseDown);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        container.style.cursor = '';
+      };
+    }, [isHandTool]);
 
     // Track current page based on scroll position
     useCurrentPage(scrollContainerRef, totalPages);
@@ -157,8 +201,10 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
         ref={scrollContainerRef}
         style={{
           overflowY: 'auto',
+          overflowX: isHandTool ? 'auto' : undefined,
           height: '100%',
           flex: 1,
+          cursor: isHandTool ? 'grab' : undefined,
         }}
       >
         <div

@@ -1,4 +1,5 @@
-import React from 'react';
+import { useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { HeatmapTab } from './tabs/heatmap/HeatmapTab';
 import { PaperReviewTab } from './tabs/review/PaperReviewTab';
 import { CoverageTab } from './tabs/coverage/CoverageTab';
@@ -6,23 +7,30 @@ import { ConceptsTab } from './tabs/concepts/ConceptsTab';
 import { useActiveTab, type AnalysisTabType } from './hooks/useActiveTab';
 import { useAnalysisNavigation } from './hooks/useAnalysisNavigation';
 
-const TAB_LABELS: Record<AnalysisTabType, string> = {
-  heatmap: 'Heatmap',
-  review: 'Paper Review',
-  coverage: 'Coverage',
-  concepts: 'Concepts',
-};
-
 const TAB_KEYS: readonly AnalysisTabType[] = ['heatmap', 'review', 'coverage', 'concepts'] as const;
 
+const TAB_I18N_KEYS: Record<AnalysisTabType, string> = {
+  heatmap: 'analysis.tabs.heatmap',
+  review: 'analysis.tabs.review',
+  coverage: 'analysis.tabs.coverage',
+  concepts: 'analysis.tabs.concepts',
+};
+
 export function AnalysisView() {
+  const { t } = useTranslation();
   const { activeTab, switchTab } = useActiveTab();
   useAnalysisNavigation({ switchTab });
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const setTabRef = useCallback((tab: AnalysisTabType) => (el: HTMLButtonElement | null) => {
+    tabRefs.current[tab] = el;
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
       {/* Tab bar */}
       <div
+        role="tablist"
+        aria-label={t('analysis.tabBar', { defaultValue: 'Analysis views' })}
         style={{
           display: 'flex',
           alignItems: 'stretch',
@@ -35,7 +43,27 @@ export function AnalysisView() {
           <button
             key={tab}
             type="button"
+            role="tab"
+            ref={setTabRef(tab)}
+            id={`analysis-tab-${tab}`}
+            aria-selected={activeTab === tab}
+            aria-controls={`analysis-tabpanel-${tab}`}
+            tabIndex={activeTab === tab ? 0 : -1}
             onClick={() => switchTab(tab)}
+            onKeyDown={(e) => {
+              const idx = TAB_KEYS.indexOf(tab);
+              if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                const next = TAB_KEYS[(idx + 1) % TAB_KEYS.length]!;
+                switchTab(next);
+                tabRefs.current[next]?.focus();
+              } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                const prev = TAB_KEYS[(idx - 1 + TAB_KEYS.length) % TAB_KEYS.length]!;
+                switchTab(prev);
+                tabRefs.current[prev]?.focus();
+              }
+            }}
             style={{
               padding: '8px 16px',
               background: 'none',
@@ -51,15 +79,19 @@ export function AnalysisView() {
               lineHeight: '20px',
             }}
           >
-            {TAB_LABELS[tab]}
+            {t(TAB_I18N_KEYS[tab])}
           </button>
         ))}
       </div>
 
       {/* Tab content */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {/* Heatmap uses keep-alive: always mounted, hidden via display */}
+        {/* Heatmap uses keep-alive: always mounted, hidden via display + aria-hidden */}
         <div
+          role="tabpanel"
+          id="analysis-tabpanel-heatmap"
+          aria-labelledby="analysis-tab-heatmap"
+          aria-hidden={activeTab !== 'heatmap'}
           style={{
             display: activeTab === 'heatmap' ? 'block' : 'none',
             height: '100%',
@@ -68,10 +100,36 @@ export function AnalysisView() {
           <HeatmapTab />
         </div>
 
-        {/* Paper Review and Coverage unmount/remount on switch */}
-        {activeTab === 'review' && <PaperReviewTab />}
-        {activeTab === 'coverage' && <CoverageTab />}
-        {activeTab === 'concepts' && <ConceptsTab />}
+        {activeTab === 'review' && (
+          <div
+            role="tabpanel"
+            id="analysis-tabpanel-review"
+            aria-labelledby="analysis-tab-review"
+            style={{ height: '100%' }}
+          >
+            <PaperReviewTab />
+          </div>
+        )}
+        {activeTab === 'coverage' && (
+          <div
+            role="tabpanel"
+            id="analysis-tabpanel-coverage"
+            aria-labelledby="analysis-tab-coverage"
+            style={{ height: '100%' }}
+          >
+            <CoverageTab />
+          </div>
+        )}
+        {activeTab === 'concepts' && (
+          <div
+            role="tabpanel"
+            id="analysis-tabpanel-concepts"
+            aria-labelledby="analysis-tab-concepts"
+            style={{ height: '100%' }}
+          >
+            <ConceptsTab />
+          </div>
+        )}
       </div>
     </div>
   );

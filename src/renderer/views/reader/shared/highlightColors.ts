@@ -7,12 +7,12 @@
 
 import type { HighlightColor } from '../../../../shared-types/enums';
 
-/** 高亮背景色 */
+/** 高亮背景色（半透明，叠加在白底 canvas 上不遮挡文字） */
 export const HIGHLIGHT_COLOR_MAP: Record<HighlightColor, string> = {
-  yellow: 'rgb(255, 237, 120)',
-  green: 'rgb(144, 238, 170)',
-  red: 'rgb(255, 160, 160)',
-  blue: 'rgb(160, 200, 255)',
+  yellow: 'rgba(255, 237, 0, 0.30)',
+  green: 'rgba(0, 200, 80, 0.25)',
+  red: 'rgba(255, 80, 80, 0.25)',
+  blue: 'rgba(80, 160, 255, 0.25)',
 };
 
 /** 高亮边框色（用于 ColorPicker 选中态） */

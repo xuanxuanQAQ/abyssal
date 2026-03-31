@@ -1,4 +1,5 @@
 import React, { useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAnnotations, useDeleteAnnotation, useUpdateAnnotation } from '../../../core/ipc/hooks/useAnnotations';
 import { AnnotationCard } from './AnnotationCard';
 import type { Annotation } from '../../../../shared-types/models';
@@ -11,6 +12,7 @@ export function AnnotationList({
   paperId: string | null;
   onScrollToAnnotation: (page: number, annotationId: string) => void;
 }) {
+  const { t } = useTranslation();
   const { data: annotations = [] } = useAnnotations(paperId);
   const deleteAnnotation = useDeleteAnnotation();
   const updateAnnotation = useUpdateAnnotation();
@@ -83,7 +85,7 @@ export function AnnotationList({
           fontSize: 'var(--text-sm)',
         }}
       >
-        暂无标注
+        {t('reader.annotations.noAnnotations')}
       </div>
     );
   }
@@ -106,7 +108,7 @@ export function AnnotationList({
           borderBottom: '1px solid var(--border-subtle)',
         }}
       >
-        标注总计: {counts.total} (🟡 {counts.highlights} 📝 {counts.notes} 🏷 {counts.concepts})
+        {t('reader.annotations.total')} {counts.total} (🟡 {counts.highlights} 📝 {counts.notes} 🏷 {counts.concepts})
       </div>
 
       {/* Grouped annotation list */}
@@ -122,7 +124,7 @@ export function AnnotationList({
                 textTransform: 'uppercase',
               }}
             >
-              Page {group.page}
+              {t('reader.annotations.page', { page: group.page })}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {group.items.map((annotation) => (

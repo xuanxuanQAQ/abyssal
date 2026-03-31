@@ -52,12 +52,29 @@ export interface CompleteResult {
   toolCalls?: ToolCall[];
 }
 
+/** 结构化失败分类——供 FailureMemory 精确归因 */
+export type FailureCategory =
+  | 'timeout'
+  | 'dns_error'
+  | 'connection_reset'
+  | 'ssl_error'
+  | 'http_4xx'
+  | 'http_5xx'
+  | 'rate_limited'
+  | 'invalid_pdf'
+  | 'parse_error'
+  | 'no_pdf_url'
+  | 'no_identifier'
+  | 'session_expired'
+  | 'unknown';
+
 /** 全文获取尝试记录 */
 export interface AcquireAttempt {
   source: string;
-  status: 'success' | 'failed' | 'skipped';
+  status: 'success' | 'failed' | 'skipped' | 'timeout';
   durationMs: number;
   failureReason: string | null;
+  failureCategory: FailureCategory | null;
   httpStatus: number | null;
 }
 
@@ -109,6 +126,27 @@ export interface StyledLine {
   pageIndex: number;
 }
 
+/** PDF 内嵌元数据（从 PDF metadata dict 提取） */
+export interface PdfEmbeddedMetadata {
+  title: string | null;
+  author: string | null;
+  subject: string | null;
+  keywords: string | null;
+  creator: string | null;
+  producer: string | null;
+  creationDate: string | null;
+}
+
+/** 首页启发式提取的元数据 */
+export interface FirstPageMetadata {
+  /** 首页最大字号文本 → 标题候选 */
+  titleCandidate: string | null;
+  /** 标题下方文本 → 作者候选 */
+  authorCandidates: string[];
+  /** 首页文本前 2000 字符（供 LLM 提取用） */
+  firstPageText: string;
+}
+
 /** 文本提取结果 */
 export interface TextExtractionResult {
   fullText: string;
@@ -121,6 +159,10 @@ export interface TextExtractionResult {
   scannedPageIndices: number[];
   /** 带字体元数据的行列表（供 extractSections 使用以提高节标题识别精度） */
   styledLines: StyledLine[];
+  /** PDF 内嵌元数据 */
+  pdfMetadata: PdfEmbeddedMetadata;
+  /** 首页启发式提取结果 */
+  firstPage: FirstPageMetadata;
 }
 
 /** 提取的参考文献条目 */

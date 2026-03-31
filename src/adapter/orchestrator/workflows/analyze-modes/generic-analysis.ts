@@ -50,6 +50,8 @@ export async function runGenericAnalysis(
   llmClient: LlmClient,
   logger: Logger,
   workspacePath: string,
+  outputLanguage?: string,
+  signal?: AbortSignal,
 ): Promise<GenericAnalysisResult> {
   const tokenCounter = { count: (text: string) => countTokens(text) };
   const assembler = createPromptAssembler(tokenCounter, logger);
@@ -81,6 +83,7 @@ export async function runGenericAnalysis(
     }),
     paperContent: fullText,
     ragPassages: [],
+    outputLanguage,
   });
 
   // LLM call
@@ -88,6 +91,7 @@ export async function runGenericAnalysis(
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
     workflowId: 'analyze',
+    ...(signal && { signal }),
   });
 
   // Parse with validation — no conceptLookup (no concepts exist)

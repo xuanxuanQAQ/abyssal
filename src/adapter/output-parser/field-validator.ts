@@ -8,6 +8,8 @@
  * See spec: §9
  */
 
+import { normalizeEvidence as normalizeEvidenceShared } from './evidence-normalizer';
+
 // ─── Types ───
 
 export interface RawConceptMapping {
@@ -187,6 +189,7 @@ function normalizeConfidence(raw: unknown): number {
   }
 
   if (typeof raw === 'number') {
+    if (isNaN(raw) || !isFinite(raw)) return 0.50;
     // §8.4: Percentage detection — value in (1, 100] treated as percentage
     if (raw > 1 && raw <= 100) {
       return Math.round((raw / 100) * 100) / 100;
@@ -215,32 +218,9 @@ function normalizeConfidence(raw: unknown): number {
 // ─── Evidence bilingual structure completion (§9.2) ───
 
 function normalizeEvidence(evidence: unknown): BilingualEvidence {
-  if (evidence == null) {
-    return { en: '', original: '', original_lang: 'unknown' };
-  }
-
-  if (typeof evidence === 'string') {
-    const lang = detectLanguage(evidence);
-    return {
-      en: evidence,
-      original: evidence,
-      original_lang: lang,
-    };
-  }
-
-  if (typeof evidence === 'object' && !Array.isArray(evidence)) {
-    const e = evidence as Record<string, unknown>;
-    return {
-      en: asString(e['en'] ?? e['original'] ?? ''),
-      original: asString(e['original'] ?? e['en'] ?? ''),
-      original_lang: asString(e['original_lang'] ?? e['originalLang'] ?? 'unknown'),
-      chunk_id: asStringOrNull(e['chunk_id'] ?? e['chunkId']),
-      page: asNumberOrNull(e['page']),
-      annotation_id: asStringOrNull(e['annotation_id'] ?? e['annotationId']),
-    };
-  }
-
-  return { en: String(evidence), original: String(evidence), original_lang: 'unknown' };
+  // Delegate to shared normalizer (evidence-normalizer.ts) to avoid duplicate logic.
+  // NormalizedEvidence is structurally identical to BilingualEvidence.
+  return normalizeEvidenceShared(evidence) as BilingualEvidence;
 }
 
 // ─── Language detection heuristic (§9.2) ───
@@ -248,22 +228,26 @@ function normalizeEvidence(evidence: unknown): BilingualEvidence {
 /**
  * Simple heuristic language detection.
  * - CJK character ratio > 30% → zh-CN
- * - Japanese kana > 10 chars → ja
+ * - Japanese kana (ratio > 10% or > 10 chars) → ja
+ * - Korean Hangul (ratio > 10% or > 10 chars) → ko
  * - Default → en
+ *
+ * Aligned with evidence-normalizer.ts detectLanguage.
  */
 export function detectLanguage(text: string): string {
-  if (!text || text.length === 0) return 'en';
+  if (!text || text.length === 0) return 'unknown';
 
-  const cjkPattern = /[\u4e00-\u9fff\u3400-\u4dbf]/g;
-  const cjkMatches = text.match(cjkPattern);
-  const cjkRatio = (cjkMatches?.length ?? 0) / text.length;
-
+  const cjkChars = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) ?? []).length;
+  const cjkRatio = cjkChars / text.length;
   if (cjkRatio > 0.3) return 'zh-CN';
 
-  // Japanese detection (hiragana/katakana)
-  const jpPattern = /[\u3040-\u30ff]/g;
-  const jpMatches = text.match(jpPattern);
-  if ((jpMatches?.length ?? 0) > 10) return 'ja';
+  // Japanese (Hiragana + Katakana)
+  const jpChars = (text.match(/[\u3040-\u309f\u30a0-\u30ff]/g) ?? []).length;
+  if (jpChars > 0 && (jpChars / text.length > 0.1 || jpChars > 10)) return 'ja';
+
+  // Korean (Hangul)
+  const krChars = (text.match(/[\uac00-\ud7af]/g) ?? []).length;
+  if (krChars > 0 && (krChars / text.length > 0.1 || krChars > 10)) return 'ko';
 
   return 'en';
 }
@@ -277,7 +261,10 @@ function asString(v: unknown): string {
 }
 
 function asStringOrNull(v: unknown): string | null {
-  if (typeof v === 'string') return v;
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
   return null;
 }
 

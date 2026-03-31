@@ -184,10 +184,11 @@ async function resolveByDoi(
   searchModule: SearchModule,
 ): Promise<ResolvedSeed | null> {
   // 尝试 Semantic Scholar
-  let paper = await searchModule.getPaperByDoi(seed.doi!);
+  const doi = seed.doi!;
+  let paper = await searchModule.getPaperByDoi(doi);
   if (paper) {
     return {
-      doi: seed.doi,
+      doi,
       title: (paper['title'] as string) ?? '',
       authors: (paper['authors'] as string) ?? '',
       year: (paper['year'] as number) ?? 0,
@@ -198,10 +199,10 @@ async function resolveByDoi(
   }
 
   // 回退到 CrossRef
-  paper = await searchModule.crossrefLookup(seed.doi!);
+  paper = await searchModule.crossrefLookup(doi);
   if (paper) {
     return {
-      doi: seed.doi,
+      doi,
       title: (paper['title'] as string) ?? '',
       authors: (paper['authors'] as string) ?? '',
       year: (paper['year'] as number) ?? 0,

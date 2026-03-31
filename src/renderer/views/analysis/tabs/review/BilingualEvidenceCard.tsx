@@ -8,6 +8,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, Pencil, X as XIcon } from 'lucide-react';
 import type { BilingualEvidence } from '../../../../../shared-types/models';
 import type { RelationType, AdjudicationDecision } from '../../../../../shared-types/enums';
@@ -42,6 +43,7 @@ export function BilingualEvidenceCard({
   onAdjudicate,
   onPageClick,
 }: BilingualEvidenceCardProps) {
+  const { t } = useTranslation();
   const [reviseMode, setReviseMode] = useState(false);
   const [reviseRelation, setReviseRelation] = useState<RelationType>('supports');
   const [reviseConfidence, setReviseConfidence] = useState(0.5);
@@ -72,7 +74,7 @@ export function BilingualEvidenceCard({
                 cursor: 'pointer', fontSize: 10, textDecoration: 'underline', padding: 0,
               }}
             >
-              p.{page}
+              {t('analysis.review.pageNum', { page })}
             </button>
           )}
         </div>
@@ -82,7 +84,7 @@ export function BilingualEvidenceCard({
       {!evidence || isSameLanguage ? (
         <div style={singleColumnStyle}>
           <div style={labelRowStyle}>
-            <span style={langLabelStyle}>Evidence</span>
+            <span style={langLabelStyle}>{t('analysis.review.evidence')}</span>
           </div>
           <div style={textStyle}>{evidence?.en ?? fallbackText}</div>
         </div>
@@ -97,7 +99,7 @@ export function BilingualEvidenceCard({
           <div style={dividerStyle} />
           <div style={columnStyle}>
             <div style={labelRowStyle}>
-              <span style={langLabelStyle}>EN</span>
+              <span style={langLabelStyle}>{t('analysis.review.en')}</span>
             </div>
             <div style={textStyle}>{evidence.en}</div>
           </div>
@@ -112,13 +114,13 @@ export function BilingualEvidenceCard({
           backgroundColor: 'var(--bg-surface)',
         }}>
           <button onClick={() => onAdjudicate('accept')} style={adjBtnStyle('#10B981')}>
-            <Check size={11} /> Accept
+            <Check size={11} /> {t('common.accept')}
           </button>
           <button onClick={() => setReviseMode(!reviseMode)} style={adjBtnStyle('#F59E0B')}>
-            <Pencil size={11} /> Revise
+            <Pencil size={11} /> {t('common.revise')}
           </button>
           <button onClick={() => onAdjudicate('reject')} style={adjBtnStyle('#EF4444')}>
-            <XIcon size={11} /> Reject
+            <XIcon size={11} /> {t('common.reject')}
           </button>
         </div>
       )}
@@ -127,20 +129,20 @@ export function BilingualEvidenceCard({
       {reviseMode && (
         <div style={{ padding: '8px 10px', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            Relation:
+            {t('analysis.review.relation')}
             <select
               value={reviseRelation}
               onChange={(e) => setReviseRelation(e.target.value as RelationType)}
               style={{ fontSize: 11, padding: '2px 4px', border: '1px solid var(--border-subtle)', borderRadius: 3 }}
             >
-              <option value="supports">supports</option>
-              <option value="challenges">challenges</option>
-              <option value="extends">extends</option>
-              <option value="operationalizes">operationalizes</option>
+              <option value="supports">{t('analysis.review.relations.supports')}</option>
+              <option value="challenges">{t('analysis.review.relations.challenges')}</option>
+              <option value="extends">{t('analysis.review.relations.extends')}</option>
+              <option value="operationalizes">{t('analysis.review.relations.operationalizes')}</option>
             </select>
           </label>
           <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            Confidence: {reviseConfidence.toFixed(2)}
+            {t('analysis.review.confidence', { value: reviseConfidence.toFixed(2) })}
             <input
               type="range" min={0} max={1} step={0.05}
               value={reviseConfidence}
@@ -151,16 +153,16 @@ export function BilingualEvidenceCard({
           <textarea
             value={reviseReason}
             onChange={(e) => setReviseReason(e.target.value)}
-            placeholder="修改原因..."
+            placeholder={t('analysis.review.reviseReason')}
             rows={2}
             style={{ fontSize: 11, padding: '4px 6px', border: '1px solid var(--border-subtle)', borderRadius: 3, resize: 'vertical', fontFamily: 'inherit' }}
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
             <button onClick={() => setReviseMode(false)} style={{ fontSize: 11, padding: '2px 8px', border: '1px solid var(--border-subtle)', borderRadius: 3, background: 'transparent', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-              取消
+              {t('common.cancel')}
             </button>
             <button onClick={handleReviseSubmit} style={{ fontSize: 11, padding: '2px 8px', border: 'none', borderRadius: 3, backgroundColor: 'var(--accent-color)', color: '#fff', cursor: 'pointer' }}>
-              确认
+              {t('common.confirm')}
             </button>
           </div>
         </div>

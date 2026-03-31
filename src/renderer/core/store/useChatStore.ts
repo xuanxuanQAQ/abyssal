@@ -56,6 +56,36 @@ interface ChatState {
   clearChatHistory: () => void;
 }
 
+/** 确保 state.sessions[key] 存在，不存在时创建空会话（含 LRU 淘汰） */
+function ensureSessionInState(state: ChatState, key: string): void {
+  if (state.sessions[key]) {
+    state.sessions[key]!.lastActiveAt = Date.now();
+    return;
+  }
+  const keys = Object.keys(state.sessions);
+  if (keys.length >= MAX_CACHED_SESSIONS) {
+    let oldestKey = keys[0]!;
+    let oldestTime = state.sessions[oldestKey]!.lastActiveAt;
+    for (const k of keys) {
+      if (k === state.activeSessionKey) continue;
+      const session = state.sessions[k];
+      if (session && session.lastActiveAt < oldestTime) {
+        oldestKey = k;
+        oldestTime = session.lastActiveAt;
+      }
+    }
+    if (oldestKey !== state.activeSessionKey) {
+      delete state.sessions[oldestKey];
+    }
+  }
+  state.sessions[key] = {
+    contextSourceKey: key,
+    messages: [],
+    lastActiveAt: Date.now(),
+    fullyLoaded: true, // default true; loadSessionMessages sets to false when DB has more pages
+  };
+}
+
 export const useChatStore = create<ChatState>()(
   devtools(
     subscribeWithSelector(
@@ -88,33 +118,7 @@ export const useChatStore = create<ChatState>()(
 
         ensureSession: (key) =>
           set((state) => {
-            if (!state.sessions[key]) {
-              // LRU 淘汰：超过上限时移除最久未访问的会话
-              const keys = Object.keys(state.sessions);
-              if (keys.length >= MAX_CACHED_SESSIONS) {
-                let oldestKey = keys[0]!;
-                let oldestTime = state.sessions[oldestKey]!.lastActiveAt;
-                for (const k of keys) {
-                  if (k === state.activeSessionKey) continue;
-                  const session = state.sessions[k];
-                  if (session && session.lastActiveAt < oldestTime) {
-                    oldestKey = k;
-                    oldestTime = session.lastActiveAt;
-                  }
-                }
-                if (oldestKey !== state.activeSessionKey) {
-                  delete state.sessions[oldestKey];
-                }
-              }
-              state.sessions[key] = {
-                contextSourceKey: key,
-                messages: [],
-                lastActiveAt: Date.now(),
-                fullyLoaded: false,
-              };
-            } else {
-              state.sessions[key]!.lastActiveAt = Date.now();
-            }
+            ensureSessionInState(state, key);
           }),
 
         loadSessionMessages: (key, messages, fullyLoaded) =>
@@ -137,11 +141,10 @@ export const useChatStore = create<ChatState>()(
 
         addMessage: (message) =>
           set((state) => {
-            const session = state.sessions[state.activeSessionKey];
-            if (session) {
-              session.messages.push(message);
-              session.lastActiveAt = Date.now();
-            }
+            ensureSessionInState(state, state.activeSessionKey);
+            const session = state.sessions[state.activeSessionKey]!;
+            session.messages.push(message);
+            session.lastActiveAt = Date.now();
           }),
 
         updateMessage: (messageId, updater) =>

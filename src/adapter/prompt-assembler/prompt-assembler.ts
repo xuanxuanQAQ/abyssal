@@ -22,6 +22,7 @@ import {
   type TemplateVariables,
   type TemplateId,
 } from './template-loader';
+import { loadFile as loadFragment } from './variable-injector';
 import {
   formatSectionBlock,
   formatAnnotations,
@@ -90,6 +91,9 @@ export interface AssemblyRequest {
   articleStyle?: string;
   qualityReport?: { coverage?: string; sufficiency?: string };
   sectionMap?: Array<{ sectionType: string; title: string; startOffset: number; endOffset: number }>;
+
+  /** Language for LLM output (e.g. "English", "中文"). Injected as {output_language} in templates. */
+  outputLanguage?: string | undefined;
 }
 
 export interface AssemblyResult {
@@ -446,6 +450,9 @@ export class PromptAssembler {
           .filter((b) => b.sourceType === 'rag_passages')
           .map((b) => b.content)
           .join('\n\n'),
+        output_language: request.outputLanguage ?? '',
+        language_instruction: loadFragment('fragments/language_instruction.md')
+          .replace(/\{output_language\}/g, request.outputLanguage ?? ''),
       };
       renderedTemplate = injectVariables(rawTemplate, vars);
     }

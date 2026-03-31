@@ -60,6 +60,7 @@ copyMigrations();
 const externalModules = [
   'electron',
   'better-sqlite3',
+  'sqlite-vec',
   'mupdf',
   'tesseract.js',
   'onnxruntime-node',

@@ -17,6 +17,7 @@ import type { ConceptDefinition } from '../../core/types/concept';
 import { asConceptId } from '../../core/types/common';
 import type { UpdateConceptFields, ConflictResolution } from '../../core/database/dao/concepts';
 import type { Concept } from '../../shared-types/models';
+import { buildHeatmapMatrix } from './shared/build-heatmap-matrix';
 
 /** Convert backend ConceptDefinition to frontend Concept shape */
 function conceptToFrontend(c: ConceptDefinition): Concept {
@@ -35,7 +36,7 @@ function conceptToFrontend(c: ConceptDefinition): Concept {
 }
 
 export function registerConceptsHandlers(ctx: AppContext): void {
-  const { logger, dbProxy } = ctx;
+  const { logger } = ctx;
 
   // Helper: refresh framework state after concept mutations
   const afterMutation = async (tables: string[], op: 'insert' | 'update' | 'delete') => {
@@ -45,12 +46,12 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:list ──
   typedHandler('db:concepts:list', logger, async () => {
-    return ((await dbProxy.getAllConcepts()) as ConceptDefinition[]).map(conceptToFrontend);
+    return ((await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[]).map(conceptToFrontend);
   });
 
   // ── db:concepts:getFramework ──
   typedHandler('db:concepts:getFramework', logger, async () => {
-    const all = (await dbProxy.getAllConcepts()) as ConceptDefinition[];
+    const all = (await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[];
     const rootIds = all.filter((c) => !c.parentId).map((c) => c.id);
     return { concepts: all.map(conceptToFrontend), rootIds };
   });
@@ -58,14 +59,14 @@ export function registerConceptsHandlers(ctx: AppContext): void {
   // ── db:concepts:updateFramework ──
   typedHandler('db:concepts:updateFramework', logger, async (_e, fw) => {
     const concepts = fw.concepts as unknown as ConceptDefinition[];
-    const result = (await dbProxy.syncConcepts(concepts, 'merge')) as any;
+    const result = (await ctx.dbProxy.syncConcepts(concepts, 'merge')) as any;
     await afterMutation(['concepts', 'paper_concept_map'], 'update');
     return { affected: result['affectedMappingCount'] ?? [] };
   });
 
   // ── db:concepts:search ──
   typedHandler('db:concepts:search', logger, async (_e, query) => {
-    const all = (await dbProxy.getAllConcepts()) as ConceptDefinition[];
+    const all = (await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[];
     const q = query.toLowerCase();
     return all
       .filter((c) =>
@@ -79,15 +80,15 @@ export function registerConceptsHandlers(ctx: AppContext): void {
   // ── db:concepts:create ──
   typedHandler('db:concepts:create', logger, async (_e, draft) => {
     const d = draft as unknown as ConceptDefinition;
-    await dbProxy.addConcept(d);
+    await ctx.dbProxy.addConcept(d);
     await afterMutation(['concepts'], 'insert');
-    const created = (await dbProxy.getConcept(d.id)) as ConceptDefinition | null;
+    const created = (await ctx.dbProxy.getConcept(d.id)) as ConceptDefinition | null;
     return created ? conceptToFrontend(created) : null;
   });
 
   // ── db:concepts:updateMaturity ──
   typedHandler('db:concepts:updateMaturity', logger, async (_e, conceptId, maturity) => {
-    await dbProxy.updateConcept(
+    await ctx.dbProxy.updateConcept(
       asConceptId(conceptId),
       { maturity } as UpdateConceptFields,
     );
@@ -97,7 +98,7 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:updateDefinition ──
   typedHandler('db:concepts:updateDefinition', logger, async (_e, conceptId, newDef) => {
-    const result = (await dbProxy.updateConcept(
+    const result = (await ctx.dbProxy.updateConcept(
       asConceptId(conceptId),
       { definition: newDef } as UpdateConceptFields,
     )) as any;
@@ -105,9 +106,26 @@ export function registerConceptsHandlers(ctx: AppContext): void {
     return { updated: true, semanticDrift: result?.['requiresSynthesizeRefresh'] } as any;
   });
 
+  // ── db:concepts:updateKeywords ──
+  typedHandler('db:concepts:updateKeywords', logger, async (_e, conceptId, keywords) => {
+    // Input validation
+    if (!Array.isArray(keywords)) throw new Error('keywords must be an array');
+    if (keywords.length > 50) throw new Error('Too many keywords (max 50)');
+    const sanitized = keywords
+      .map((k) => (typeof k === 'string' ? k.trim() : ''))
+      .filter((k) => k.length > 0 && k.length <= 100);
+
+    await ctx.dbProxy.updateConcept(
+      asConceptId(conceptId),
+      { searchKeywords: sanitized } as UpdateConceptFields,
+    );
+    await afterMutation(['concepts'], 'update');
+    return { updated: true };
+  });
+
   // ── db:concepts:updateParent ──
   typedHandler('db:concepts:updateParent', logger, async (_e, conceptId, newParentId) => {
-    await dbProxy.updateConcept(
+    await ctx.dbProxy.updateConcept(
       asConceptId(conceptId),
       { parentId: newParentId ? asConceptId(newParentId) : null } as UpdateConceptFields,
     );
@@ -117,13 +135,13 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:getHistory ──
   typedHandler('db:concepts:getHistory', logger, async (_e, conceptId) => {
-    const concept = (await dbProxy.getConcept(asConceptId(conceptId))) as Record<string, unknown> | null;
+    const concept = (await ctx.dbProxy.getConcept(asConceptId(conceptId))) as Record<string, unknown> | null;
     return ((concept?.['history'] as unknown[]) ?? []) as any;
   });
 
   // ── db:concepts:merge ──
   typedHandler('db:concepts:merge', logger, async (_e, retainId, mergeId) => {
-    const result = (await dbProxy.mergeConcepts(
+    const result = (await ctx.dbProxy.mergeConcepts(
       asConceptId(retainId),
       asConceptId(mergeId),
       'max_confidence' as ConflictResolution,
@@ -134,7 +152,7 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:split ──
   typedHandler('db:concepts:split', logger, async (_e, originalId, c1, c2) => {
-    const result = (await dbProxy.splitConcept(
+    const result = (await ctx.dbProxy.splitConcept(
       asConceptId(originalId),
       c1 as unknown as ConceptDefinition,
       c2 as unknown as ConceptDefinition,
@@ -146,28 +164,48 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:getTimeline ──
   typedHandler('db:concepts:getTimeline', logger, async () => {
-    // TODO: implement timeline aggregation across concept_history table
-    return [];
+    // 聚合所有概念的 history 条目，按时间倒序排列
+    const all = (await ctx.dbProxy.getAllConcepts(true)) as ConceptDefinition[];
+    const timeline: Array<{
+      conceptId: string; conceptName: string;
+      timestamp: string; changeType: string; reason: string | null;
+      isBreaking: boolean;
+    }> = [];
+
+    for (const c of all) {
+      if (!Array.isArray(c.history)) continue;
+      for (const h of c.history) {
+        timeline.push({
+          conceptId: c.id,
+          conceptName: c.nameEn,
+          timestamp: h.timestamp,
+          changeType: h.changeType,
+          reason: h.reason,
+          isBreaking: h.isBreaking,
+        });
+      }
+    }
+
+    timeline.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return timeline.slice(0, 200) as any;
   });
 
   // ── db:concepts:getStats ──
   typedHandler('db:concepts:getStats', logger, async (_e, conceptId) => {
-    // TODO: implement per-concept statistics (mapping count, paper count, etc.)
-    return { conceptId, mappingCount: 0, paperCount: 0 };
+    const stats = (await ctx.dbProxy.getConceptMappingStats(asConceptId(conceptId))) as any;
+    return {
+      conceptId,
+      mappingCount: stats.mappingCount ?? 0,
+      paperCount: stats.paperCount ?? 0,
+      avgConfidence: stats.avgConfidence ?? 0,
+      relationDistribution: stats.relationDistribution ?? {},
+      reviewedCount: stats.reviewedCount ?? 0,
+      unreviewedCount: stats.unreviewedCount ?? 0,
+    } as any;
   });
 
   // ── db:concepts:getMatrix ──
   typedHandler('db:concepts:getMatrix', logger, async () => {
-    const entries = await dbProxy.getConceptMatrix();
-    const conceptIds = [...new Set(entries.map((e) => e['conceptId'] as string))];
-    const paperIds = [...new Set(entries.map((e) => e['paperId'] as string))];
-    const cells = entries.map((e) => ({
-      paperId: e['paperId'],
-      conceptId: e['conceptId'],
-      relation: e['relation'],
-      confidence: e['confidence'],
-      reviewed: e['reviewed'],
-    }));
-    return { conceptIds, paperIds, cells } as any;
+    return await buildHeatmapMatrix(ctx.dbProxy) as any;
   });
 }

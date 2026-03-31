@@ -8,7 +8,8 @@
  */
 
 import React, { useCallback } from 'react';
-import { Pin, PinOff, Eye, FileText, Lightbulb, PenTool, Network, MoreVertical, Trash2, PanelRightClose } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Pin, PinOff, Eye, FileText, Lightbulb, PenTool, Network, MoreVertical, Trash2, PanelRightClose, Library } from 'lucide-react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useAppStore } from '../../core/store';
 import { useChatStore } from '../../core/store/useChatStore';
@@ -21,12 +22,17 @@ import { Z_INDEX } from '../../styles/zIndex';
 /**
  * §4.4 实体名称解析
  */
-function resolveEntityName(source: ContextSource): { icon: React.ReactNode; name: string } {
+function resolveEntityName(source: ContextSource, t: ReturnType<typeof import('react-i18next').useTranslation>['t']): { icon: React.ReactNode; name: string } {
   switch (source.type) {
     case 'paper':
       return {
         icon: <FileText size={14} />,
-        name: `论文 ${source.paperId.slice(0, 12)}…`,
+        name: t('context.header.paper', { id: source.paperId.slice(0, 12) }),
+      };
+    case 'papers':
+      return {
+        icon: <FileText size={14} />,
+        name: t('context.header.papers', { count: source.paperIds.length }),
       };
     case 'concept':
       return {
@@ -36,7 +42,7 @@ function resolveEntityName(source: ContextSource): { icon: React.ReactNode; name
     case 'mapping':
       return {
         icon: <Network size={14} />,
-        name: `映射 ${source.mappingId.slice(0, 12)}…`,
+        name: t('context.header.mapping', { id: source.mappingId.slice(0, 12) }),
       };
     case 'section':
       return {
@@ -51,17 +57,22 @@ function resolveEntityName(source: ContextSource): { icon: React.ReactNode; name
     case 'memo':
       return {
         icon: <PenTool size={14} />,
-        name: `备忘 ${source.memoId.slice(0, 12)}…`,
+        name: t('context.header.memo', { id: source.memoId.slice(0, 12) }),
       };
     case 'note':
       return {
         icon: <FileText size={14} />,
-        name: `笔记 ${source.noteId.slice(0, 12)}…`,
+        name: t('context.header.note', { id: source.noteId.slice(0, 12) }),
+      };
+    case 'allSelected':
+      return {
+        icon: <Library size={14} />,
+        name: t('context.header.allSelected'),
       };
     case 'empty':
       return {
         icon: null,
-        name: '上下文面板',
+        name: t('context.title'),
       };
   }
 }
@@ -77,10 +88,11 @@ const iconBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
   borderRadius: 'var(--radius-sm)',
   flexShrink: 0,
-  transition: 'background-color 150ms ease',
+  transition: 'background-color var(--duration-fast) var(--easing-default)',
 };
 
 export function ContextHeader() {
+  const { t } = useTranslation();
   const contextPanelPinned = useAppStore((s) => s.contextPanelPinned);
   const peekSource = useAppStore((s) => s.peekSource);
   const pinContextPanel = useAppStore((s) => s.pinContextPanel);
@@ -92,19 +104,17 @@ export function ContextHeader() {
   const derivedSource = useDerivedContextSource();
   const isPeeking = peekSource !== null && contextPanelPinned;
 
-  const { icon, name } = resolveEntityName(effectiveSource);
+  const { icon, name } = resolveEntityName(effectiveSource, t);
 
   const handlePinClick = useCallback(() => {
     if (isPeeking) {
       if (peekSource) {
-        const key = contextSourceKey(peekSource);
-        pinContextPanel(peekSource, key);
+        pinContextPanel(peekSource);
       }
     } else if (contextPanelPinned) {
       unpinContextPanel();
     } else {
-      const key = contextSourceKey(derivedSource);
-      pinContextPanel(derivedSource, key);
+      pinContextPanel(derivedSource);
     }
   }, [isPeeking, contextPanelPinned, peekSource, derivedSource, pinContextPanel, unpinContextPanel]);
 
@@ -117,10 +127,10 @@ export function ContextHeader() {
   );
 
   const pinTooltip = isPeeking
-    ? '正在预览 — 点击钉住此内容'
+    ? t('context.preview')
     : contextPanelPinned
-      ? '取消钉住'
-      : '钉住上下文面板';
+      ? t('context.unpin')
+      : t('context.pin');
 
   return (
     <div
@@ -200,7 +210,7 @@ export function ContextHeader() {
           }}
         >
           {isPeeking && (
-            <span style={{ color: 'var(--info, #a855f7)', marginRight: 4, fontWeight: 500 }}>预览:</span>
+            <span style={{ color: 'var(--info, #a855f7)', marginRight: 4, fontWeight: 500 }}>{t('context.preview')}:</span>
           )}
           {name}
         </span>
@@ -246,7 +256,7 @@ export function ContextHeader() {
                 className="ghost-btn"
               >
                 <FileText size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                在 Reader 中打开
+                {t('context.openInReader')}
               </DropdownMenu.Item>
             )}
 
@@ -262,7 +272,7 @@ export function ContextHeader() {
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                 </svg>
-                复制引用
+                {t('context.copyCitation')}
               </DropdownMenu.Item>
             )}
 
@@ -280,7 +290,7 @@ export function ContextHeader() {
                   className="ghost-btn"
                 >
                   <Lightbulb size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                  查看分析报告
+                  {t('context.viewAnalysisReport')}
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator style={separatorStyle} />
               </>
@@ -295,7 +305,7 @@ export function ContextHeader() {
               className="ghost-btn"
             >
               <Trash2 size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              清除聊天记录
+              {t('context.clearChat')}
             </DropdownMenu.Item>
 
             <DropdownMenu.Item
@@ -304,7 +314,7 @@ export function ContextHeader() {
               className="ghost-btn"
             >
               <PanelRightClose size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              关闭面板
+              {t('context.closePanel')}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
@@ -323,7 +333,7 @@ const menuItemStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  transition: 'background-color 100ms ease',
+  transition: 'background-color var(--duration-fast) var(--easing-default)',
 };
 
 const separatorStyle: React.CSSProperties = {

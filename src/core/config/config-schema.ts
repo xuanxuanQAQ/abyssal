@@ -97,14 +97,175 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
       return Array.isArray(sources) && sources.includes('institutional');
     },
   },
+  'acquire.maxRetries': {
+    type: 'integer',
+    default: 1,
+    required: false,
+    constraints: { min: 0, max: 3 },
+  },
+  'acquire.retryDelayMs': {
+    type: 'integer',
+    default: 2000,
+    required: false,
+    constraints: { min: 500, max: 10_000 },
+  },
+  'acquire.scihubMaxTotalMs': {
+    type: 'integer',
+    default: 60_000,
+    required: false,
+    constraints: { min: 15_000, max: 180_000 },
+  },
+  'acquire.tarMaxExtractBytes': {
+    type: 'integer',
+    default: 200 * 1024 * 1024,
+    required: false,
+    constraints: { min: 10 * 1024 * 1024, max: 500 * 1024 * 1024 },
+  },
+  'acquire.enableContentSanityCheck': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+  'acquire.sanityCheckMaxChars': {
+    type: 'integer',
+    default: 2000,
+    required: false,
+    constraints: { min: 500, max: 5000 },
+  },
+  'acquire.sanityCheckConfidenceThreshold': {
+    type: 'float',
+    default: 0.85,
+    required: false,
+    constraints: { min: 0.5, max: 1.0 },
+  },
+  'acquire.enableFailureMemory': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'acquire.failureMemoryWindowDays': {
+    type: 'integer',
+    default: 90,
+    required: false,
+    constraints: { min: 7, max: 365 },
+  },
+  'acquire.enableFuzzyResolve': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'acquire.fuzzyResolveConfidenceThreshold': {
+    type: 'float',
+    default: 0.8,
+    required: false,
+    constraints: { min: 0.5, max: 1.0 },
+  },
+  'acquire.enableChinaInstitutional': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+  'acquire.chinaInstitutionId': {
+    type: 'string',
+    default: null,
+    required: false,
+  },
+  'acquire.chinaCustomIdpEntityId': {
+    type: 'string',
+    default: null,
+    required: false,
+  },
+  'acquire.enableCnki': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+  'acquire.enableWanfang': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+  // ── Pipeline v2: 4-Layer Intelligent Acquire ──
+  'acquire.enableFastPath': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'acquire.enableRecon': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'acquire.reconCacheTtlDays': {
+    type: 'integer',
+    default: 30,
+    required: false,
+    constraints: { min: 1, max: 365 },
+  },
+  'acquire.oaCacheRefreshDays': {
+    type: 'integer',
+    default: 7,
+    required: false,
+    constraints: { min: 1, max: 90 },
+  },
+  'acquire.reconTimeoutMs': {
+    type: 'integer',
+    default: 10_000,
+    required: false,
+    constraints: { min: 3_000, max: 30_000 },
+  },
+  'acquire.enablePreflight': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'acquire.preflightTimeoutMs': {
+    type: 'integer',
+    default: 5_000,
+    required: false,
+    constraints: { min: 2_000, max: 15_000 },
+  },
+  'acquire.enableSpeculativeExecution': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'acquire.maxSpeculativeParallel': {
+    type: 'integer',
+    default: 3,
+    required: false,
+    constraints: { min: 1, max: 6 },
+  },
+  'acquire.speculativeTotalTimeoutMs': {
+    type: 'integer',
+    default: 45_000,
+    required: false,
+    constraints: { min: 15_000, max: 120_000 },
+  },
+  'acquire.ezproxyUrlTemplate': {
+    type: 'string',
+    default: null,
+    required: false,
+  },
+  'acquire.proxyEnabled': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+  'acquire.proxyUrl': {
+    type: 'string',
+    default: 'http://127.0.0.1:7890',
+    required: false,
+    sensitive: true, // 可能包含认证信息
+  },
+  'acquire.proxyMode': {
+    type: 'enum',
+    default: 'blocked-only',
+    required: false,
+    constraints: { enum: ['all', 'blocked-only'] },
+  },
 
   // ── rag ──
-  'rag.embeddingBackend': {
-    type: 'enum',
-    default: 'api',
-    required: false,
-    constraints: { enum: ['api', 'local-onnx'] },
-  },
   'rag.embeddingModel': {
     type: 'string',
     default: 'text-embedding-3-small',
@@ -133,9 +294,15 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
   },
   'rag.rerankerBackend': {
     type: 'enum',
-    default: 'local-bge',
+    default: 'cohere',
     required: false,
-    constraints: { enum: ['api-cohere', 'api-jina', 'local-bge'] },
+    constraints: { enum: ['cohere', 'jina', 'siliconflow'] },
+  },
+  'rag.embeddingProvider': {
+    type: 'enum',
+    default: 'openai',
+    required: false,
+    constraints: { enum: ['openai', 'siliconflow'] },
   },
   'rag.correctiveRagEnabled': {
     type: 'boolean',
@@ -147,6 +314,12 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     default: 2,
     required: false,
     constraints: { min: 0, max: 5 },
+  },
+  'rag.crossConceptBoostFactor': {
+    type: 'float',
+    default: 1.5,
+    required: false,
+    constraints: { min: 1.0, max: 3.0 },
   },
   'rag.tentativeExpandFactorMultiplier': {
     type: 'float',
@@ -276,13 +449,19 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     required: false,
     constraints: { enum: ['en', 'zh-CN'] },
   },
+  'language.uiLocale': {
+    type: 'enum',
+    default: 'en',
+    required: false,
+    constraints: { enum: ['en', 'zh-CN'] },
+  },
 
   // ── llm ──
   'llm.defaultProvider': {
     type: 'enum',
     default: 'anthropic',
     required: false,
-    constraints: { enum: ['claude', 'anthropic', 'openai', 'deepseek', 'ollama'] },
+    constraints: { enum: ['claude', 'anthropic', 'openai', 'deepseek', 'ollama', 'siliconflow'] },
     cliFlag: '--provider',
     envVar: 'ABYSSAL_LLM_DEFAULT_PROVIDER',
   },
@@ -340,7 +519,7 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     required: false,
     sensitive: true,
     envVar: 'ABYSSAL_COHERE_API_KEY',
-    requiredWhen: (c) => getNestedValue(c, 'rag.rerankerBackend') === 'api-cohere',
+    requiredWhen: (c) => getNestedValue(c, 'rag.rerankerBackend') === 'cohere',
   },
   'apiKeys.jinaApiKey': {
     type: 'string',
@@ -348,7 +527,27 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     required: false,
     sensitive: true,
     envVar: 'ABYSSAL_JINA_API_KEY',
-    requiredWhen: (c) => getNestedValue(c, 'rag.rerankerBackend') === 'api-jina',
+    requiredWhen: (c) => getNestedValue(c, 'rag.rerankerBackend') === 'jina',
+  },
+  'apiKeys.siliconflowApiKey': {
+    type: 'string',
+    default: null,
+    required: false,
+    sensitive: true,
+    envVar: 'ABYSSAL_SILICONFLOW_API_KEY',
+    requiredWhen: (c) =>
+      usesProvider(c, 'siliconflow') ||
+      getNestedValue(c, 'rag.rerankerBackend') === 'siliconflow' ||
+      getNestedValue(c, 'rag.embeddingProvider') === 'siliconflow',
+  },
+
+  'apiKeys.webSearchApiKey': {
+    type: 'string',
+    default: null,
+    required: false,
+    sensitive: true,
+    envVar: 'ABYSSAL_WEB_SEARCH_API_KEY',
+    requiredWhen: (c) => getNestedValue(c, 'webSearch.enabled') === true,
   },
 
   // ── concepts ──
@@ -363,6 +562,31 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     default: 3,
     required: false,
     constraints: { min: 1, max: 20 },
+  },
+
+  // ── webSearch ──
+  'webSearch.enabled': {
+    type: 'boolean',
+    default: false,
+    required: false,
+    envVar: 'ABYSSAL_WEB_SEARCH_ENABLED',
+  },
+  'webSearch.backend': {
+    type: 'enum',
+    default: 'tavily',
+    required: false,
+    constraints: { enum: ['tavily', 'serpapi', 'bing'] },
+    envVar: 'ABYSSAL_WEB_SEARCH_BACKEND',
+  },
+
+  // ── logging ──
+  'logging.level': {
+    type: 'enum',
+    default: 'info',
+    required: false,
+    constraints: { enum: ['debug', 'info', 'warn', 'error'] },
+    cliFlag: '--log-level',
+    envVar: 'ABYSSAL_LOGGING_LEVEL',
   },
 
   // ── notes (v1.3) ──

@@ -6,70 +6,48 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Lightbulb } from 'lucide-react';
 import { useConceptFramework } from '../../../core/ipc/hooks/useConcepts';
+
+const containerStyle: React.CSSProperties = { padding: 12, borderBottom: '1px solid var(--border-subtle)' };
+const headerRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 };
+const accentIconStyle: React.CSSProperties = { color: 'var(--accent-color)' };
+const nameStyle: React.CSSProperties = { fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' };
+const mutedSmallStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+const dangerSmallStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', color: 'var(--danger)' };
+const descriptionStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 'var(--leading-sm)', marginTop: 4 };
+const parentIdStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 6 };
 
 interface ConceptDetailCardProps {
   conceptId: string;
 }
 
-export function ConceptDetailCard({ conceptId }: ConceptDetailCardProps) {
+export const ConceptDetailCard = React.memo(function ConceptDetailCard({ conceptId }: ConceptDetailCardProps) {
+  const { t } = useTranslation();
   const { data: framework, isLoading, isError } = useConceptFramework();
-
-  const concept = framework?.concepts?.find(
-    (c) => c.id === conceptId
-  );
+  const concept = framework?.concepts?.find((c) => c.id === conceptId);
 
   return (
-    <div style={{ padding: 12, borderBottom: '1px solid var(--border-subtle)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        <Lightbulb size={14} style={{ color: 'var(--accent-color)' }} />
-        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
-          {concept?.name ?? conceptId}
-        </span>
+    <div style={containerStyle}>
+      <div style={headerRowStyle}>
+        <Lightbulb size={14} style={accentIconStyle} />
+        <span style={nameStyle}>{concept?.name ?? conceptId}</span>
       </div>
 
-      {isLoading && (
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          加载概念信息…
-        </div>
-      )}
-
-      {isError && (
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>
-          加载概念信息失败
-        </div>
-      )}
+      {isLoading && <div style={mutedSmallStyle}>{t('context.conceptDetail.loading')}</div>}
+      {isError && <div style={dangerSmallStyle}>{t('context.conceptDetail.loadError')}</div>}
 
       {concept && (
         <>
-          {concept.description && (
-            <p style={{
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-secondary)',
-              lineHeight: 'var(--leading-sm)',
-              marginTop: 4,
-            }}>
-              {concept.description}
-            </p>
-          )}
-          {concept.parentId && (
-            <div style={{
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-muted)',
-              marginTop: 6,
-            }}>
-              父概念: {concept.parentId}
-            </div>
-          )}
+          {concept.description && <p style={descriptionStyle}>{concept.description}</p>}
+          {concept.parentId && <div style={parentIdStyle}>{t('context.conceptDetail.parent')}: {concept.parentId}</div>}
         </>
       )}
 
       {!isLoading && !isError && !concept && (
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          概念框架中未找到此概念
-        </div>
+        <div style={mutedSmallStyle}>{t('context.conceptDetail.notFound')}</div>
       )}
     </div>
   );
-}
+});

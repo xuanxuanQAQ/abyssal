@@ -1,12 +1,12 @@
 // ═══ 统一 HTTP 客户端 ═══
-// §0.2: 原生 https/http 模块，AbortController 超时，流式下载
+// §0.2: 原生 https/http 模块，AbortController 超时，流式下载，代理支持
 
 import * as https from 'node:https';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { URL } from 'node:url';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, Agent } from 'node:http';
 import {
   NetworkError,
   ServerError,
@@ -26,11 +26,14 @@ const USER_AGENT = 'Abyssal/1.0';
 export interface HttpClientOptions {
   logger: Logger;
   userAgentEmail?: string | undefined;
+  /** 代理 URL（http://, https://, socks5://） */
+  proxyUrl?: string | null | undefined;
 }
 
 export interface RequestOptions {
   method?: string | undefined;
   headers?: Record<string, string> | undefined;
+  body?: string | undefined;
   timeoutMs?: number | undefined;
   maxRedirects?: number | undefined;
 }
@@ -48,12 +51,51 @@ export interface HttpResponse {
 export class HttpClient {
   private readonly logger: Logger;
   private readonly userAgent: string;
+  private proxyAgent: Agent | null = null;
+  /** Resolves when proxy agent is ready (or immediately if no proxy) */
+  private proxyReady: Promise<void> = Promise.resolve();
 
   constructor(options: HttpClientOptions) {
     this.logger = options.logger;
     this.userAgent = options.userAgentEmail
       ? `Abyssal/1.0 (mailto:${options.userAgentEmail})`
       : USER_AGENT;
+    if (options.proxyUrl) {
+      this.proxyReady = this.setProxy(options.proxyUrl);
+    }
+  }
+
+  /**
+   * 设置/更改代理。支持 http://, https://, socks5:// 协议。
+   * 传入 null 关闭代理。
+   * 使用 dynamic import() 因为 proxy-agent 包是 ESM-only。
+   */
+  async setProxy(proxyUrl: string | null): Promise<void> {
+    if (!proxyUrl) {
+      this.proxyAgent = null;
+      this.logger.info('[HttpClient] Proxy disabled');
+      return;
+    }
+    try {
+      const url = new URL(proxyUrl);
+      const proto = url.protocol.replace(':', '');
+
+      if (proto === 'socks5' || proto === 'socks5h' || proto === 'socks4') {
+        const { SocksProxyAgent } = await import('socks-proxy-agent');
+        this.proxyAgent = new SocksProxyAgent(proxyUrl) as unknown as Agent;
+      } else if (proto === 'http' || proto === 'https') {
+        const { HttpsProxyAgent } = await import('https-proxy-agent');
+        this.proxyAgent = new HttpsProxyAgent(proxyUrl) as unknown as Agent;
+      } else {
+        this.logger.warn('[HttpClient] Unknown proxy protocol, ignoring', { proxyUrl });
+        return;
+      }
+      this.logger.info('[HttpClient] Proxy configured', { protocol: proto, host: url.hostname, port: url.port });
+    } catch (err) {
+      this.logger.error('[HttpClient] Failed to create proxy agent', undefined, {
+        proxyUrl, error: (err as Error).message,
+      });
+    }
   }
 
   /**
@@ -64,6 +106,7 @@ export class HttpClient {
     url: string,
     options: RequestOptions = {},
   ): Promise<HttpResponse> {
+    await this.proxyReady;
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
     const method = options.method ?? 'GET';
@@ -71,6 +114,8 @@ export class HttpClient {
     let currentUrl = url;
     let redirectCount = 0;
     const startTime = Date.now();
+    // Accumulate Set-Cookie headers across redirects (like requests.Session in Python)
+    const accumulatedSetCookies: string[] = [];
 
     while (true) {
       const parsed = new URL(currentUrl);
@@ -83,6 +128,18 @@ export class HttpClient {
         ...options.headers,
       };
 
+      // Inject accumulated cookies from previous redirects into the request
+      if (accumulatedSetCookies.length > 0) {
+        const redirectCookies = accumulatedSetCookies
+          .map((sc) => { const semi = sc.indexOf(';'); return semi > 0 ? sc.slice(0, semi).trim() : sc.trim(); })
+          .filter((c) => c.includes('='));
+        if (redirectCookies.length > 0) {
+          const existing = reqHeaders['Cookie'] ?? '';
+          const merged = existing ? `${existing}; ${redirectCookies.join('; ')}` : redirectCookies.join('; ');
+          reqHeaders['Cookie'] = merged;
+        }
+      }
+
       const response = await new Promise<{
         res: IncomingMessage;
         body: string;
@@ -90,13 +147,18 @@ export class HttpClient {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+        const reqOpts: Record<string, unknown> = {
+          method,
+          headers: reqHeaders,
+          signal: controller.signal,
+        };
+        if (this.proxyAgent) {
+          reqOpts['agent'] = this.proxyAgent;
+        }
+
         const req = transport.request(
           currentUrl,
-          {
-            method,
-            headers: reqHeaders,
-            signal: controller.signal,
-          },
+          reqOpts,
           (res) => {
             const chunks: Buffer[] = [];
             res.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -134,6 +196,9 @@ export class HttpClient {
           }
         });
 
+        if (options.body) {
+          req.write(options.body);
+        }
         req.end();
       });
 
@@ -146,6 +211,13 @@ export class HttpClient {
         bodySize: body.length,
         durationMs: Date.now() - startTime,
       });
+
+      // Collect Set-Cookie from every response (including redirects)
+      const setCookie = res.headers['set-cookie'];
+      if (setCookie) {
+        const arr = Array.isArray(setCookie) ? setCookie : [setCookie];
+        accumulatedSetCookies.push(...arr);
+      }
 
       // 重定向
       if ([301, 302, 303, 307, 308].includes(status)) {
@@ -167,11 +239,19 @@ export class HttpClient {
         continue;
       }
 
-      // 成功
+      // 成功 — merge accumulated Set-Cookie into final response headers
       if (status >= 200 && status < 300) {
+        const finalHeaders = res.headers as Record<string, string | string[] | undefined>;
+        if (accumulatedSetCookies.length > 0) {
+          // Ensure all Set-Cookie headers from redirects are included
+          const existing = finalHeaders['set-cookie'];
+          const existingArr = existing ? (Array.isArray(existing) ? existing : [existing]) : [];
+          const allCookies = [...new Set([...accumulatedSetCookies, ...existingArr])];
+          finalHeaders['set-cookie'] = allCookies;
+        }
         return {
           status,
-          headers: res.headers as Record<string, string | string[] | undefined>,
+          headers: finalHeaders,
           body,
           url: currentUrl,
           durationMs: Date.now() - startTime,
@@ -199,6 +279,25 @@ export class HttpClient {
     }
   }
 
+  /** POST JSON 并解析 JSON 响应 */
+  async postJson<T>(
+    url: string,
+    payload: unknown,
+    options: RequestOptions = {},
+  ): Promise<T> {
+    const body = JSON.stringify(payload);
+    return this.requestJson<T>(url, {
+      ...options,
+      method: 'POST',
+      body,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(body)),
+        ...options.headers,
+      },
+    });
+  }
+
   /**
    * 流式下载文件。自动处理重定向。
    * 返回下载完成后的文件元信息。
@@ -208,6 +307,7 @@ export class HttpClient {
     destPath: string,
     options: RequestOptions = {},
   ): Promise<{ status: number; fileSizeBytes: number; durationMs: number }> {
+    await this.proxyReady;
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
 
@@ -241,13 +341,18 @@ export class HttpClient {
         const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err); } };
         const safeResolve = (v: { type: 'redirect'; location: string; status: number } | { type: 'done'; status: number; fileSizeBytes: number }) => { if (!settled) { settled = true; resolve(v); } };
 
+        const dlOpts: Record<string, unknown> = {
+          method: 'GET',
+          headers: reqHeaders,
+          signal: controller.signal,
+        };
+        if (this.proxyAgent) {
+          dlOpts['agent'] = this.proxyAgent;
+        }
+
         const req = transport.request(
           currentUrl,
-          {
-            method: 'GET',
-            headers: reqHeaders,
-            signal: controller.signal,
-          },
+          dlOpts,
           (res) => {
             const status = res.statusCode ?? 0;
 

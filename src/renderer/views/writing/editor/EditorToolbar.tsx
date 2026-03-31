@@ -12,6 +12,7 @@
  */
 
 import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Editor } from '@tiptap/react';
 import {
   Bold,
@@ -26,6 +27,7 @@ import {
   Link,
   Sigma,
   AtSign,
+  ImagePlus,
   Sparkles,
   StopCircle,
 } from 'lucide-react';
@@ -41,6 +43,7 @@ interface EditorToolbarProps {
   onAICancel?: (() => void) | undefined;
   onInsertCitation?: (() => void) | undefined;
   onInsertMath?: (() => void) | undefined;
+  onInsertImage?: (() => void) | undefined;
 }
 
 // ── Styles ──
@@ -147,7 +150,9 @@ export function EditorToolbar({
   onAICancel,
   onInsertCitation,
   onInsertMath,
+  onInsertImage,
 }: EditorToolbarProps) {
+  const { t } = useTranslation();
   const disabled = editor === null;
 
   // ── Format helpers ──
@@ -172,28 +177,28 @@ export function EditorToolbar({
       {/* ── Text format ── */}
       <ToolbarButton
         icon={<Bold size={ICON_SIZE} />}
-        title="Bold"
+        title={t('writing.editor.bold')}
         active={isActive('bold')}
         disabled={disabled}
         onClick={() => toggle(() => editor!.chain().focus().toggleBold().run())}
       />
       <ToolbarButton
         icon={<Italic size={ICON_SIZE} />}
-        title="Italic"
+        title={t('writing.editor.italic')}
         active={isActive('italic')}
         disabled={disabled}
         onClick={() => toggle(() => editor!.chain().focus().toggleItalic().run())}
       />
       <ToolbarButton
         icon={<Strikethrough size={ICON_SIZE} />}
-        title="Strikethrough"
+        title={t('writing.editor.strikethrough')}
         active={isActive('strike')}
         disabled={disabled}
         onClick={() => toggle(() => editor!.chain().focus().toggleStrike().run())}
       />
       <ToolbarButton
         icon={<Code size={ICON_SIZE} />}
-        title="Code"
+        title={t('writing.editor.code')}
         active={isActive('code')}
         disabled={disabled}
         onClick={() => toggle(() => editor!.chain().focus().toggleCode().run())}
@@ -204,7 +209,7 @@ export function EditorToolbar({
       {/* ── Heading ── */}
       <ToolbarButton
         icon={<Heading2 size={ICON_SIZE} />}
-        title="Heading 2"
+        title={t('writing.editor.heading2')}
         active={isActive('heading', { level: 2 })}
         disabled={disabled}
         onClick={() =>
@@ -213,7 +218,7 @@ export function EditorToolbar({
       />
       <ToolbarButton
         icon={<Heading3 size={ICON_SIZE} />}
-        title="Heading 3"
+        title={t('writing.editor.heading3')}
         active={isActive('heading', { level: 3 })}
         disabled={disabled}
         onClick={() =>
@@ -226,7 +231,7 @@ export function EditorToolbar({
       {/* ── Block ── */}
       <ToolbarButton
         icon={<List size={ICON_SIZE} />}
-        title="Bullet list"
+        title={t('writing.editor.bulletList')}
         active={isActive('bulletList')}
         disabled={disabled}
         onClick={() =>
@@ -235,7 +240,7 @@ export function EditorToolbar({
       />
       <ToolbarButton
         icon={<ListOrdered size={ICON_SIZE} />}
-        title="Ordered list"
+        title={t('writing.editor.orderedList')}
         active={isActive('orderedList')}
         disabled={disabled}
         onClick={() =>
@@ -244,7 +249,7 @@ export function EditorToolbar({
       />
       <ToolbarButton
         icon={<Quote size={ICON_SIZE} />}
-        title="Blockquote"
+        title={t('writing.editor.blockquote')}
         active={isActive('blockquote')}
         disabled={disabled}
         onClick={() =>
@@ -257,7 +262,7 @@ export function EditorToolbar({
       {/* ── Insert ── */}
       <ToolbarButton
         icon={<Link size={ICON_SIZE} />}
-        title="Insert link"
+        title={t('writing.editor.insertLink')}
         active={isActive('link')}
         disabled={disabled}
         onClick={() => {
@@ -281,17 +286,24 @@ export function EditorToolbar({
       />
       <ToolbarButton
         icon={<Sigma size={ICON_SIZE} />}
-        title="Insert math"
+        title={t('writing.editor.insertMath')}
         active={false}
         disabled={disabled}
         onClick={() => onInsertMath?.()}
       />
       <ToolbarButton
         icon={<AtSign size={ICON_SIZE} />}
-        title="Insert citation"
+        title={t('writing.editor.insertCitation')}
         active={false}
         disabled={disabled}
         onClick={() => onInsertCitation?.()}
+      />
+      <ToolbarButton
+        icon={<ImagePlus size={ICON_SIZE} />}
+        title={t('writing.editor.insertImage', { defaultValue: '插入图片' })}
+        active={false}
+        disabled={disabled}
+        onClick={() => onInsertImage?.()}
       />
 
       <Separator />
@@ -307,7 +319,7 @@ export function EditorToolbar({
             }}
           >
             <Sparkles size={ICON_SIZE} />
-            生成中...
+            {t('writing.editor.generating')}
           </span>
           <button
             type="button"
@@ -318,40 +330,40 @@ export function EditorToolbar({
             onClick={() => onAICancel?.()}
           >
             <StopCircle size={ICON_SIZE} />
-            取消
+            {t('common.cancel')}
           </button>
         </>
       ) : (
         <>
           <button
             type="button"
-            title="AI Generate"
+            title={t('writing.editor.aiGenerate')}
             style={aiLabelStyle}
             disabled={disabled}
             onClick={() => onAIGenerate?.()}
           >
             <Sparkles size={ICON_SIZE} />
-            生成
+            {t('writing.editor.generate')}
           </button>
           <button
             type="button"
-            title="AI Rewrite"
+            title={t('writing.editor.aiRewrite')}
             style={aiLabelStyle}
             disabled={disabled}
             onClick={() => onAIRewrite?.()}
           >
             <Sparkles size={ICON_SIZE} />
-            重写
+            {t('writing.editor.rewrite')}
           </button>
           <button
             type="button"
-            title="AI Expand"
+            title={t('writing.editor.aiExpand')}
             style={aiLabelStyle}
             disabled={disabled}
             onClick={() => onAIExpand?.()}
           >
             <Sparkles size={ICON_SIZE} />
-            展开
+            {t('writing.editor.expand')}
           </button>
         </>
       )}

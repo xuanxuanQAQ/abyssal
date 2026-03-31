@@ -25,8 +25,14 @@ import { useEditorStore } from '../../../core/store/useEditorStore';
 // Custom extensions
 import { citationExtension } from './extensions/citationExtension';
 import { paragraphMarkPlugin } from './extensions/paragraphMarkPlugin';
+import { paragraphIdPlugin } from './extensions/paragraphIdPlugin';
 import { mathExtension } from './extensions/mathExtension';
 import { aiStreamingBlockExtension } from './extensions/aiStreamingBlockExtension';
+import { sectionExtension } from './extensions/sectionExtension';
+import { imageExtension } from './extensions/imageExtension';
+import { footnoteExtension } from './extensions/footnoteExtension';
+import { crossRefExtension } from './extensions/crossRefExtension';
+import { equationNumberingPlugin } from './extensions/equationNumberingPlugin';
 
 // ── Types ──
 
@@ -36,17 +42,23 @@ export interface TiptapEditorHandle {
 }
 
 interface TiptapEditorProps {
-  content: string; // Markdown content to load initially
+  content: string; // Markdown content or JSON to load initially
+  contentJson?: object | null; // ProseMirror JSON (takes precedence over content)
   onUpdate?: ((markdown: string) => void) | undefined;
+  onJsonUpdate?: ((json: object) => void) | undefined;
+  /** Called once when the Tiptap editor instance is created */
+  onEditorReady?: ((editor: Editor) => void) | undefined;
+  /** Whether to use unified document mode (doc > section+) */
+  unifiedMode?: boolean;
 }
 
 // ── Extension configuration ──
 
-function createExtensions() {
+function createExtensions(unifiedMode: boolean = false) {
   return [
     StarterKit.configure({
       heading: {
-        levels: [2, 3],
+        levels: unifiedMode ? [1, 2, 3, 4, 5, 6] : [2, 3],
       },
     }),
     Link.configure({
@@ -71,15 +83,22 @@ function createExtensions() {
     }),
     citationExtension,
     paragraphMarkPlugin,
+    paragraphIdPlugin,
     ...mathExtension,
     aiStreamingBlockExtension,
+    // New extensions for writing pipeline overhaul
+    ...(unifiedMode ? [sectionExtension] : []),
+    imageExtension,
+    footnoteExtension,
+    crossRefExtension,
+    equationNumberingPlugin,
   ];
 }
 
 // ── Component ──
 
 const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
-  function TiptapEditorInner({ content, onUpdate }, ref) {
+  function TiptapEditorInner({ content, contentJson, onUpdate, onJsonUpdate, onEditorReady, unifiedMode }, ref) {
     const setEditorFocused = useEditorStore((s) => s.setEditorFocused);
     const setUnsavedChanges = useEditorStore((s) => s.setUnsavedChanges);
 
@@ -91,16 +110,16 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         editorRef.current = ed;
         setUnsavedChanges(true);
 
-        // Debounce HTML serialization to avoid per-keystroke full DOM traversal.
-        // setUnsavedChanges fires immediately; the expensive getHTML() is deferred.
+        // Debounce serialization to avoid per-keystroke full DOM traversal.
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
           if (editorRef.current && !editorRef.current.isDestroyed) {
             onUpdate?.(editorRef.current.getHTML());
+            onJsonUpdate?.(editorRef.current.getJSON());
           }
         }, 300);
       },
-      [onUpdate, setUnsavedChanges],
+      [onUpdate, onJsonUpdate, setUnsavedChanges],
     );
 
     const handleFocus = useCallback(() => {
@@ -111,9 +130,11 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       setEditorFocused(false);
     }, [setEditorFocused]);
 
+    const initialContent = contentJson ?? content;
+
     const editor = useEditor({
-      extensions: createExtensions(),
-      content,
+      extensions: createExtensions(unifiedMode ?? false),
+      content: initialContent,
       onUpdate: handleUpdate,
       onFocus: handleFocus,
       onBlur: handleBlur,
@@ -123,6 +144,15 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         },
       },
     });
+
+    // Notify parent when the editor instance is ready.
+    const editorReadyFiredRef = React.useRef(false);
+    useEffect(() => {
+      if (editor && !editorReadyFiredRef.current) {
+        editorReadyFiredRef.current = true;
+        onEditorReady?.(editor);
+      }
+    }, [editor, onEditorReady]);
 
     // Expose the editor instance to the parent.
     useImperativeHandle(
@@ -152,6 +182,19 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         setUnsavedChanges(false);
       }
     }, [content, editor, setUnsavedChanges]);
+
+    // When the external `contentJson` prop changes (unified doc reload),
+    // replace the editor content.
+    const contentJsonRef = React.useRef(contentJson);
+    useEffect(() => {
+      if (contentJsonRef.current === contentJson) return;
+      contentJsonRef.current = contentJson;
+
+      if (editor && !editor.isDestroyed && contentJson) {
+        editor.commands.setContent(contentJson, false);
+        setUnsavedChanges(false);
+      }
+    }, [contentJson, editor, setUnsavedChanges]);
 
     // Clean up the debounce timer when the component unmounts.
     useEffect(() => {

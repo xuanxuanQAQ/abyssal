@@ -464,7 +464,7 @@ function tryRegexExtraction(text: string): ParsedOutput | null {
     const region = text.slice(match.index, match.index + 500);
 
     const freqMatch = region.match(/frequency[_\s]*(?:in[_\s]*paper)?\s*[:=]\s*(\d+)/i);
-    if (freqMatch) suggestion['frequency_in_paper'] = parseInt(freqMatch[1]!);
+    if (freqMatch) suggestion['frequency_in_paper'] = parseInt(freqMatch[1]!, 10);
 
     const reasonMatch = region.match(/reason\s*[:=]\s*["']([^"']{10,300})["']/i);
     if (reasonMatch) suggestion['reason'] = reasonMatch[1]!.trim();

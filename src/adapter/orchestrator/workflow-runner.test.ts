@@ -175,4 +175,30 @@ describe('WorkflowRunner', () => {
     const state = runner.start('analyze');
     await state.completionPromise;
   });
+
+  // ─── Quality warnings ───
+
+  it('reportQualityWarning accumulates warnings in progress', async () => {
+    const runner = makeRunner();
+    runner.registerWorkflow('analyze', async (_opts, ctx) => {
+      ctx.setTotal(2);
+      ctx.reportQualityWarning('p1', 'rag_degraded', 'RAG coverage: partial');
+      ctx.reportComplete('p1');
+      ctx.reportQualityWarning('p2', 'concept_stale', 'Concepts modified during batch');
+      ctx.reportComplete('p2');
+    });
+
+    const state = runner.start('analyze');
+    const result = await state.completionPromise;
+
+    expect(result.progress.qualityWarnings).toHaveLength(2);
+    expect(result.progress.qualityWarnings[0]).toMatchObject({
+      itemId: 'p1',
+      type: 'rag_degraded',
+    });
+    expect(result.progress.qualityWarnings[1]).toMatchObject({
+      itemId: 'p2',
+      type: 'concept_stale',
+    });
+  });
 });
