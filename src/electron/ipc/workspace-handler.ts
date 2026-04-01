@@ -79,8 +79,8 @@ export function registerWorkspaceHandlers(ctx: AppContext): void {
   // ── workspace:switch ──
 
   typedHandler('workspace:switch', logger, async (_e, workspacePath) => {
-    // Graceful shutdown of current DB proxy and lock
-    try { await ctx.dbProxy.close(); } catch { /* ignore */ }
+    // Graceful shutdown of current DB proxy and lock (may be null in lobby mode)
+    try { await ctx.dbProxy?.close(); } catch { /* ignore */ }
     ctx.lockHandle?.release();
 
     // Scaffold new workspace if needed
@@ -93,7 +93,8 @@ export function registerWorkspaceHandlers(ctx: AppContext): void {
     ctx.lockHandle = acquireLock(workspacePath);
 
     const globalConfig = loadGlobalConfig(app.getPath('userData'));
-    ctx.config = ConfigLoader.loadFromWorkspace(workspacePath, globalConfig);
+    const newConfig = ConfigLoader.loadFromWorkspace(workspacePath, globalConfig);
+    ctx.configProvider.update(newConfig);
 
     // Create and start new DB proxy
     const dbProcessPath = path.resolve(__dirname, '..', 'db-process', 'main.js');

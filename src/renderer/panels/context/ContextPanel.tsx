@@ -8,7 +8,7 @@
  * §1.2 ChatDock 全屏态：条件渲染移除 ContextBody
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ContextHeader } from './ContextHeader';
@@ -17,6 +17,7 @@ import { CrossfadeTransition } from './transitions/CrossfadeTransition';
 import { useEffectiveSource } from './engine/useEffectiveSource';
 import { contextSourceKey } from './engine/contextSourceKey';
 import { useChatStore } from '../../core/store/useChatStore';
+import { useReaderStore } from '../../core/store/useReaderStore';
 
 // ContentPanes
 import { LibraryPaperPane } from './panes/LibraryPaperPane';
@@ -85,6 +86,19 @@ function renderContentPane(source: ContextSource): React.ReactNode {
 export function ContextPanel() {
   const { t } = useTranslation();
   const effectiveSource = useEffectiveSource();
+
+  // 订阅桥：reader 写入 quotedSelection → 自动展开 ChatDock
+  useEffect(() => {
+    const unsub = useReaderStore.subscribe(
+      (s) => s.quotedSelection,
+      (sel) => {
+        if (sel) {
+          useChatStore.getState().setChatDockMode('expanded');
+        }
+      },
+    );
+    return unsub;
+  }, []);
   // 多论文模式下 transitionKey 固定为 'papers'，
   // 避免每增减一篇论文触发整面板 crossfade 动画。
   // 列表增删动画由 MultiPaperPane 内部处理。

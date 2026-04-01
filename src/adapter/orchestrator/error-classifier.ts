@@ -9,6 +9,20 @@
  * See spec: §7
  */
 
+import {
+  AbyssalError,
+  RateLimitedError,
+  AuthenticationError,
+  AccessDeniedError,
+  PaperNotFoundError,
+  PdfCorruptedError,
+  YamlParseError,
+  ParseError,
+  DatabaseError,
+  IntegrityError,
+  NetworkError,
+} from '../../core/types/errors';
+
 // ─── Error categories (§7.1) ───
 
 export type ErrorCategory =
@@ -30,12 +44,71 @@ export interface ClassifiedError {
 }
 
 /**
+ * Extract HTTP status code from error objects (various libraries use different field names).
+ */
+function extractHttpStatus(err: Error): number | undefined {
+  const e = err as unknown as Record<string, unknown>;
+  const status = e['statusCode'] ?? e['status'] ?? e['httpStatus'];
+  if (typeof status === 'number' && status >= 100 && status < 600) return status;
+  // AbyssalError may carry httpStatus in context
+  if (err instanceof AbyssalError) {
+    const ctx = err.context['httpStatus'];
+    if (typeof ctx === 'number') return ctx;
+  }
+  return undefined;
+}
+
+/**
  * Classify an error into a category with retryability.
  */
 export function classifyError(error: unknown): ClassifiedError {
   const err = error instanceof Error ? error : new Error(String(error));
   const msg = err.message.toLowerCase();
   const code = (err as NodeJS.ErrnoException).code ?? '';
+  const httpStatus = extractHttpStatus(err);
+
+  // ── instanceof-based classification (preferred — survives minification) ──
+
+  if (err instanceof RateLimitedError) {
+    return { category: 'RATE_LIMITED', retryable: true, message: err.message, original: err };
+  }
+  if (err instanceof AuthenticationError || err instanceof AccessDeniedError) {
+    return { category: 'AUTH_ERROR', retryable: false, message: err.message, original: err };
+  }
+  if (err instanceof PaperNotFoundError) {
+    return { category: 'NOT_FOUND', retryable: false, message: err.message, original: err };
+  }
+  if (err instanceof PdfCorruptedError) {
+    return { category: 'VALIDATION_ERROR', retryable: false, message: err.message, original: err };
+  }
+  if (err instanceof YamlParseError || err instanceof ParseError) {
+    return { category: 'PARSE_ERROR', retryable: false, message: err.message, original: err };
+  }
+  if (err instanceof IntegrityError || err instanceof DatabaseError) {
+    return { category: 'DB_ERROR', retryable: false, message: err.message, original: err };
+  }
+  if (err instanceof NetworkError) {
+    return { category: 'NETWORK_ERROR', retryable: true, message: err.message, original: err };
+  }
+
+  // ── HTTP status code classification (structured — more reliable than string matching) ──
+
+  if (httpStatus) {
+    if (httpStatus === 429) {
+      return { category: 'RATE_LIMITED', retryable: true, message: err.message, original: err };
+    }
+    if (httpStatus === 401 || httpStatus === 403) {
+      return { category: 'AUTH_ERROR', retryable: false, message: err.message, original: err };
+    }
+    if (httpStatus === 404) {
+      return { category: 'NOT_FOUND', retryable: false, message: err.message, original: err };
+    }
+    if (httpStatus >= 500) {
+      return { category: 'NETWORK_ERROR', retryable: true, message: err.message, original: err };
+    }
+  }
+
+  // ── System error codes ──
 
   // Disk errors — fatal, never retry (§7.2)
   if (code === 'ENOSPC' || code === 'EACCES' || code === 'EROFS') {
@@ -49,40 +122,30 @@ export function classifyError(error: unknown): ClassifiedError {
     return { category: 'NETWORK_ERROR', retryable: true, message: err.message, original: err };
   }
 
-  // Rate limiting — retryable
-  if (msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests') ||
-      err.constructor.name === 'RateLimitedError') {
+  // ── String-based fallback (for third-party errors not wrapped in AbyssalError) ──
+
+  // Rate limiting
+  if (msg.includes('rate limit') || msg.includes('too many requests')) {
     return { category: 'RATE_LIMITED', retryable: true, message: err.message, original: err };
   }
 
-  // Auth errors — not retryable
-  if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') ||
-      msg.includes('forbidden') || err.constructor.name === 'AuthenticationError' ||
-      err.constructor.name === 'AccessDeniedError') {
+  // Auth
+  if (msg.includes('unauthorized') || msg.includes('forbidden')) {
     return { category: 'AUTH_ERROR', retryable: false, message: err.message, original: err };
   }
 
-  // Not found — not retryable
-  if (msg.includes('404') || msg.includes('not found') ||
-      err.constructor.name === 'PaperNotFoundError') {
-    return { category: 'NOT_FOUND', retryable: false, message: err.message, original: err };
-  }
-
-  // Validation errors — not retryable
-  if (msg.includes('pdf') && (msg.includes('invalid') || msg.includes('corrupt') || msg.includes('validation')) ||
-      err.constructor.name === 'PdfCorruptedError') {
+  // Validation
+  if (msg.includes('pdf') && (msg.includes('invalid') || msg.includes('corrupt') || msg.includes('validation'))) {
     return { category: 'VALIDATION_ERROR', retryable: false, message: err.message, original: err };
   }
 
-  // Parse errors — not retryable
-  if (msg.includes('parse') || msg.includes('yaml') || msg.includes('json') ||
-      err.constructor.name === 'YamlParseError') {
+  // Parse
+  if (msg.includes('parse error') || msg.includes('yaml parse') || msg.includes('json parse')) {
     return { category: 'PARSE_ERROR', retryable: false, message: err.message, original: err };
   }
 
-  // DB errors — not retryable (after Mutex protection)
-  if (msg.includes('sqlite') || msg.includes('database') || msg.includes('busy') ||
-      err.constructor.name === 'IntegrityError' || err.constructor.name === 'DatabaseError') {
+  // DB
+  if (msg.includes('sqlite') || msg.includes('database') || msg.includes('busy')) {
     return { category: 'DB_ERROR', retryable: false, message: err.message, original: err };
   }
 

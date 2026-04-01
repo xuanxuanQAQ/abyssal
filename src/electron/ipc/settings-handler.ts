@@ -171,6 +171,9 @@ export function registerSettingsHandlers(ctx: AppContext): void {
       personalization: {
         authorDisplayThreshold: c.personalization?.authorDisplayThreshold ?? 1,
       },
+      ai: {
+        proactiveSuggestions: (c as any).ai?.proactiveSuggestions ?? false,
+      },
     };
   });
 
@@ -191,6 +194,11 @@ export function registerSettingsHandlers(ctx: AppContext): void {
     const globalConfig = loadGlobalConfig(appDataDir);
     const newConfig = ConfigLoader.loadFromWorkspace(ctx.workspaceRoot, globalConfig);
     ctx.configProvider.update(newConfig);
+
+    // Propagate AI config changes to SessionOrchestrator at runtime
+    if (section === 'ai' && 'proactiveSuggestions' in patch) {
+      ctx.sessionOrchestrator?.setProactiveEnabled(!!patch['proactiveSuggestions']);
+    }
 
     logger.info('Settings updated', {
       section,

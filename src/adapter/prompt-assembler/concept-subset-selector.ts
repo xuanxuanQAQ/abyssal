@@ -268,45 +268,68 @@ function ensureParentInclusion(
 // ─── §4.5: Semantic neighbor supplement ───
 
 /** LRU cache for concept definition embeddings (keyed by concept ID). */
-const conceptEmbeddingCache = new Map<string, Float32Array>();
+interface CachedEmbedding {
+  embedding: Float32Array;
+  /** Definition text that was embedded — invalidate if definition changes */
+  defHash: string;
+  createdAt: number;
+}
+const conceptEmbeddingCache = new Map<string, CachedEmbedding>();
 const CONCEPT_CACHE_MAX = 200;
+/** Cache entries expire after 1 hour to prevent stale embeddings */
+const CONCEPT_CACHE_TTL_MS = 60 * 60 * 1000;
 
-function getCachedOrEmbed(
+/** Simple string hash for definition change detection */
+function quickHash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
+async function getCachedOrEmbed(
   concepts: ConceptForSubset[],
   embedder: EmbedFunction,
 ): Promise<Float32Array[]> {
+  const now = Date.now();
   const uncachedIndices: number[] = [];
   const uncachedTexts: string[] = [];
   const result: (Float32Array | null)[] = new Array(concepts.length).fill(null);
 
   for (let i = 0; i < concepts.length; i++) {
-    const cached = conceptEmbeddingCache.get(concepts[i]!.id);
-    if (cached) {
-      result[i] = cached;
+    const concept = concepts[i]!;
+    const cached = conceptEmbeddingCache.get(concept.id);
+    const defHash = quickHash(concept.definition);
+    // Cache hit only if: entry exists, definition unchanged, and not expired
+    if (cached && cached.defHash === defHash && (now - cached.createdAt) < CONCEPT_CACHE_TTL_MS) {
+      result[i] = cached.embedding;
     } else {
+      if (cached) conceptEmbeddingCache.delete(concept.id); // Invalidate stale entry
       uncachedIndices.push(i);
-      uncachedTexts.push(concepts[i]!.definition);
+      uncachedTexts.push(concept.definition);
     }
   }
 
   if (uncachedTexts.length === 0) {
-    return Promise.resolve(result as Float32Array[]);
+    return result as Float32Array[];
   }
 
-  return embedder.embed(uncachedTexts).then((embeddings) => {
-    for (let j = 0; j < uncachedIndices.length; j++) {
-      const idx = uncachedIndices[j]!;
-      const emb = embeddings[j]!;
-      result[idx] = emb;
-      // Evict oldest if cache full
-      if (conceptEmbeddingCache.size >= CONCEPT_CACHE_MAX) {
-        const firstKey = conceptEmbeddingCache.keys().next().value as string;
-        conceptEmbeddingCache.delete(firstKey);
-      }
-      conceptEmbeddingCache.set(concepts[idx]!.id, emb);
+  const embeddings = await embedder.embed(uncachedTexts);
+  for (let j = 0; j < uncachedIndices.length; j++) {
+    const idx = uncachedIndices[j]!;
+    const emb = embeddings[j]!;
+    result[idx] = emb;
+    // Evict oldest if cache full
+    if (conceptEmbeddingCache.size >= CONCEPT_CACHE_MAX) {
+      const firstKey = conceptEmbeddingCache.keys().next().value as string;
+      conceptEmbeddingCache.delete(firstKey);
     }
-    return result as Float32Array[];
-  });
+    conceptEmbeddingCache.set(concepts[idx]!.id, {
+      embedding: emb,
+      defHash: quickHash(concepts[idx]!.definition),
+      createdAt: now,
+    });
+  }
+  return result as Float32Array[];
 }
 
 /**

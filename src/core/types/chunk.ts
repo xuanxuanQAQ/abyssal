@@ -101,6 +101,12 @@ export interface TextChunk {
   contextAfter: string | null;
   /** §8.1: 创建时间 ISO 8601。迁移前的旧 chunk 可能缺失此字段。 */
   createdAt?: string | null | undefined;
+  /** DLA block type that sourced this chunk (null for pre-DLA chunks) */
+  blockType?: string | null | undefined;
+  /** Global reading order position in the document */
+  readingOrder?: number | null | undefined;
+  /** Document column layout: 'single' | 'double' | 'mixed' */
+  columnLayout?: string | null | undefined;
 }
 
 // ═══ RankedChunk ═══

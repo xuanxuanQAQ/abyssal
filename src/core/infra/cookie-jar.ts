@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { parseSetCookieHeaders } from './cookie-utils';
 
 // ─── Types ───
 
@@ -35,15 +36,22 @@ export interface InstitutionalSessionStatus {
   activeDomains: string[];
 }
 
+export type CookieJarLogger = (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
+
+/** Session cookies without an explicit expiry are given a 24-hour TTL. */
+const DEFAULT_SESSION_TTL_S = 86_400;
+
 // ─── CookieJar ───
 
 export class CookieJar {
   private store: CookieStore;
   private readonly filePath: string;
   private readonly encryptionKey: Buffer;
+  private readonly log: CookieJarLogger | null;
 
-  constructor(appDataDir: string) {
+  constructor(appDataDir: string, logger?: CookieJarLogger | null) {
     this.filePath = path.join(appDataDir, 'institutional-cookies.enc');
+    this.log = logger ?? null;
     // Derive key from machine-specific info (prevents cookie file portability)
     this.encryptionKey = crypto.scryptSync(
       `${os.hostname()}:${os.userInfo().username}:abyssal`,
@@ -80,25 +88,81 @@ export class CookieJar {
       existingMap.set(`${c.domain}|${c.name}|${c.path}`, c);
     }
 
+    const now = Date.now() / 1000;
     for (const c of relevant) {
       const stored: StoredCookie = {
         name: c.name,
         value: c.value,
         domain: c.domain ?? '',
         path: c.path ?? '/',
-        expirationDate: c.expirationDate,
+        // Session cookies (no expiry) get a default TTL to prevent immortal stale cookies
+        expirationDate: c.expirationDate ?? (now + DEFAULT_SESSION_TTL_S),
         httpOnly: c.httpOnly ?? false,
         secure: c.secure ?? false,
       };
       existingMap.set(`${stored.domain}|${stored.name}|${stored.path}`, stored);
     }
 
-    this.store.cookies = [...existingMap.values()];
-    this.store.institutionId = institutionId;
-    this.store.updatedAt = new Date().toISOString();
-    this.save();
+    const nextStore: CookieStore = {
+      cookies: [...existingMap.values()],
+      institutionId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Save first — only update in-memory store on success
+    if (!this.save(nextStore)) {
+      this.log?.('warn', 'Cookie import succeeded in-memory but failed to persist to disk');
+    }
+    this.store = nextStore;
+    this.log?.('info', `Imported ${relevant.length} cookies for ${institutionId}`);
 
     return relevant.length;
+  }
+
+  /**
+   * Merge Set-Cookie response headers into the jar.
+   * Call this after HTTP requests that return fresh session cookies (e.g., FSSO bridge, warmup).
+   */
+  mergeFromHeaders(
+    url: string,
+    headers: Record<string, string | string[] | undefined>,
+  ): void {
+    const pairs = parseSetCookieHeaders(headers);
+    if (pairs.length === 0) return;
+
+    let hostname: string;
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      return;
+    }
+
+    const now = Date.now() / 1000;
+    const map = new Map<string, StoredCookie>();
+    for (const c of this.store.cookies) {
+      map.set(`${c.domain}|${c.name}|${c.path}`, c);
+    }
+
+    for (const pair of pairs) {
+      const eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      const name = pair.slice(0, eq);
+      const value = pair.slice(eq + 1);
+      const stored: StoredCookie = {
+        name,
+        value,
+        domain: hostname,
+        path: '/',
+        expirationDate: now + DEFAULT_SESSION_TTL_S,
+        httpOnly: false,
+        secure: false,
+      };
+      map.set(`${stored.domain}|${stored.name}|${stored.path}`, stored);
+    }
+
+    this.store.cookies = [...map.values()];
+    this.store.updatedAt = new Date().toISOString();
+    this.save(this.store);
   }
 
   /**
@@ -115,11 +179,8 @@ export class CookieJar {
 
     const now = Date.now() / 1000;
     const matching = this.store.cookies.filter((c) => {
-      // Skip expired cookies
       if (c.expirationDate && c.expirationDate < now) return false;
-      // Domain matching: cookie domain ".foo.com" matches "bar.foo.com"
-      const cookieDomain = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-      return hostname === cookieDomain || hostname.endsWith(`.${cookieDomain}`);
+      return domainMatches(hostname, c.domain);
     });
 
     if (matching.length === 0) return null;
@@ -128,6 +189,7 @@ export class CookieJar {
 
   /**
    * Check if there are valid (non-expired) cookies for any of the specified domains.
+   * Accepts both exact domains ("cnki.net") and sub-domains ("kns.cnki.net").
    */
   hasCookiesFor(domains: string[]): boolean {
     if (domains.length === 0) return false;
@@ -135,9 +197,9 @@ export class CookieJar {
     return domains.some((d) =>
       this.store.cookies.some((c) => {
         if (c.expirationDate && c.expirationDate < now) return false;
-        // Proper domain matching: strip leading dot then check exact or subdomain
-        const cookieDomain = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-        return cookieDomain === d || cookieDomain.endsWith(`.${d}`);
+        // The query domain `d` should match cookie domain the same way as
+        // getCookieHeader: d is the "hostname", c.domain is the cookie domain.
+        return domainMatches(d, c.domain);
       }),
     );
   }
@@ -148,12 +210,16 @@ export class CookieJar {
     const domains = new Set<string>();
     for (const c of this.store.cookies) {
       if (!c.expirationDate || c.expirationDate > now) {
-        // Normalize: strip leading dot
         const d = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
         domains.add(d);
       }
     }
     return [...domains];
+  }
+
+  /** Collect and merge cookies from multiple URLs (cross-domain CARSI scenarios). */
+  collectCookies(urls: string[]): string | null {
+    return collectCookiesFromJar(this, urls);
   }
 
   /** Get current session status (for UI display). */
@@ -179,16 +245,18 @@ export class CookieJar {
     this.store = { cookies: [], updatedAt: '', institutionId: null };
     try {
       if (fs.existsSync(this.filePath)) fs.unlinkSync(this.filePath);
-    } catch {
-      // Best-effort delete
+    } catch (err) {
+      this.log?.('warn', 'Failed to delete cookie file', { error: (err as Error).message });
     }
+    this.log?.('info', 'Cookie jar cleared');
   }
 
   // ─── Encrypted persistence ───
 
-  private save(): void {
+  /** Returns true on success, false on failure. */
+  private save(store: CookieStore): boolean {
     try {
-      const json = JSON.stringify(this.store);
+      const json = JSON.stringify(store);
       const iv = crypto.randomBytes(16);
       const cipher = crypto.createCipheriv('aes-256-gcm', this.encryptionKey, iv);
       const encrypted = Buffer.concat([
@@ -199,9 +267,16 @@ export class CookieJar {
       // Format: iv(16) + authTag(16) + ciphertext
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(this.filePath, Buffer.concat([iv, tag, encrypted]));
-    } catch {
-      // Non-fatal: cookies won't persist but app still works
+      // Atomic write: write to temp file first, then rename
+      const tmpPath = this.filePath + '.tmp';
+      fs.writeFileSync(tmpPath, Buffer.concat([iv, tag, encrypted]));
+      fs.renameSync(tmpPath, this.filePath);
+      return true;
+    } catch (err) {
+      this.log?.('error', 'Failed to persist cookies', { error: (err as Error).message });
+      // Clean up temp file if it was written
+      try { fs.unlinkSync(this.filePath + '.tmp'); } catch { /* ignore */ }
+      return false;
     }
   }
 
@@ -220,9 +295,45 @@ export class CookieJar {
         decipher.update(data),
         decipher.final(),
       ]).toString('utf8');
-      return JSON.parse(json) as CookieStore;
-    } catch {
+      const loaded = JSON.parse(json) as CookieStore;
+      this.log?.('info', `Loaded ${loaded.cookies.length} cookies from disk`);
+      return loaded;
+    } catch (err) {
+      this.log?.('warn', 'Failed to load cookie file, starting fresh', { error: (err as Error).message });
       return empty;
     }
   }
+}
+
+// ─── Domain matching (RFC 6265) ───
+
+/**
+ * Check if `hostname` matches `cookieDomain`.
+ * Cookie domain ".foo.com" (or "foo.com") matches "bar.foo.com" and "foo.com".
+ */
+function domainMatches(hostname: string, cookieDomain: string): boolean {
+  const normalized = cookieDomain.startsWith('.') ? cookieDomain.slice(1) : cookieDomain;
+  return hostname === normalized || hostname.endsWith(`.${normalized}`);
+}
+
+// ─── Cookie collection helper ───
+
+/**
+ * Collect cookies from the CookieJar across multiple domains and merge them.
+ * Needed because CARSI login stores cookies under SSO domains (e.g. fsso.cnki.net)
+ * which don't match the search host (kns.cnki.net).
+ */
+export function collectCookiesFromJar(cookieJar: CookieJar, urls: string[]): string | null {
+  const parts = new Map<string, string>();
+  for (const url of urls) {
+    const header = cookieJar.getCookieHeader(url);
+    if (header) {
+      for (const pair of header.split(';')) {
+        const trimmed = pair.trim();
+        const eq = trimmed.indexOf('=');
+        if (eq > 0) parts.set(trimmed.slice(0, eq), trimmed);
+      }
+    }
+  }
+  return parts.size > 0 ? [...parts.values()].join('; ') : null;
 }

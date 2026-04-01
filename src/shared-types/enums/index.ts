@@ -43,6 +43,7 @@ export type ViewType =
 export type WorkflowType =
   | 'discover'
   | 'acquire'
+  | 'process'
   | 'analyze'
   | 'synthesize'
   | 'article'
@@ -86,6 +87,7 @@ export type CitationStyle = 'GB/T 7714' | 'APA' | 'IEEE' | 'Chicago';
 export type PipelineStatus =
   | 'running'
   | 'completed'
+  | 'partial'
   | 'failed'
   | 'cancelled';
 

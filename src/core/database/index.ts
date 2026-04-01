@@ -34,6 +34,7 @@ import type { ChatMessageRecord, ChatSessionSummary, PaginationOpts } from '../.
 // ─── 连接 & 迁移 ───
 import { openDatabase, walCheckpoint } from './connection';
 import { runMigrations } from './migration';
+import { writeTransaction } from './transaction-utils';
 
 // ─── 文件锁 & 预编译语句 & 互斥 ───
 import { FileLock } from './file-lock';
@@ -59,6 +60,9 @@ import * as referencesDao from './dao/references';
 import * as chatDao from './dao/chat';
 import * as statsDao from './dao/stats';
 import * as reconCacheDao from './dao/recon-cache';
+import * as auditLogDao from './dao/audit-log';
+import * as sessionStateDao from './dao/session-state';
+import * as layoutBlocksDao from './dao/layout-blocks';
 
 // ─── 快照 ───
 import * as snapshotMod from './snapshot';
@@ -111,10 +115,17 @@ export class DatabaseService implements IDbService {
   private pauseWorkerWrites?: () => (() => void);
 
   /**
+   * Worker Thread 引用。
+   * 由 Orchestrator 层通过 setWorkerRef() 注入。
+   * close() 时调用 worker.terminate() 释放线程资源。
+   */
+  private workerRef?: { terminate: () => Promise<number> } | undefined;
+
+  /**
    * §3.3: CLI 批量模式的写操作互斥锁。
    * 防御性措施——在选项 A 策略（异步操作在事务外完成）下理论不需要，
    * 但防止未来代码修改无意中在事务内引入 async 操作。
-   * TODO: CLI Orchestrator 启动时通过 dbWriteMutex.runExclusive 包装写操作
+   * CLI Orchestrator 启动时应通过 dbWriteMutex.runExclusive 包装写操作。
    */
   readonly dbWriteMutex = new Mutex();
 
@@ -143,6 +154,15 @@ export class DatabaseService implements IDbService {
    */
   setPauseWorkerWrites(fn: () => (() => void)): void {
     this.pauseWorkerWrites = fn;
+  }
+
+  /**
+   * 注册 Worker Thread 引用。
+   * Orchestrator 初始化 Worker Thread 后调用此方法注入引用，
+   * 使 close() 能够终止 Worker 释放线程资源。
+   */
+  setWorkerRef(worker: { terminate: () => Promise<number> }): void {
+    this.workerRef = worker;
   }
 
   /** 获取底层 better-sqlite3 实例（仅供高级用途） */
@@ -381,8 +401,7 @@ export class DatabaseService implements IDbService {
     analysisPath?: string | null,
   ): void {
     return this.withOp(() => {
-      const { writeTransaction: wt } = require('./transaction-utils');
-      wt(this.db, () => {
+      writeTransaction(this.db, () => {
         // Write mappings
         if (mappings.length > 0) {
           mappingsDao.mapPaperConceptBatch(this.db, mappings);
@@ -403,13 +422,12 @@ export class DatabaseService implements IDbService {
    */
   resetAnalysis(paperId: PaperId): string | null {
     return this.withOp(() => {
-      const { writeTransaction: wt } = require('./transaction-utils');
       let analysisPath: string | null = null;
 
-      wt(this.db, () => {
+      writeTransaction(this.db, () => {
         // Read inside transaction to prevent TOCTOU race
         const paper = papersDao.getPaper(this.db, paperId);
-        analysisPath = (paper as any)?.analysisPath ?? null;
+        analysisPath = (paper as unknown as Record<string, unknown>)?.['analysisPath'] as string | null ?? null;
 
         mappingsDao.deleteMappingsForPaper(this.db, paperId);
         papersDao.updatePaper(this.db, paperId, {
@@ -453,6 +471,14 @@ export class DatabaseService implements IDbService {
 
   countAnnotationsForPaperConcept(paperId: PaperId, conceptId: ConceptId): number {
     return this.withOp(() => annotationsDao.countAnnotationsForPaperConcept(this.db, paperId, conceptId));
+  }
+
+  batchCountAnnotationsByPaper(paperId: PaperId): Map<string, number> {
+    return this.withOp(() => annotationsDao.batchCountAnnotationsByPaper(this.db, paperId));
+  }
+
+  batchCountMappingsByPapers(paperIds: string[]): Map<string, number> {
+    return this.withOp(() => annotationsDao.batchCountMappingsByPapers(this.db, paperIds));
   }
 
   // ════════════════════════════════════════
@@ -866,6 +892,28 @@ export class DatabaseService implements IDbService {
     this.withOp(() => reconCacheDao.upsertRecon(this.db, recon));
   }
 
+  insertAuditLog(entry: Parameters<typeof auditLogDao.insertAuditLog>[1]): number {
+    return this.withOp(() => auditLogDao.insertAuditLog(this.db, entry));
+  }
+
+  // ─── 会话状态持久化 ───
+
+  saveSessionMemory(entries: sessionStateDao.MemoryRow[]): void {
+    this.withOp(() => sessionStateDao.saveMemoryEntries(this.db, entries));
+  }
+
+  loadSessionMemory(): sessionStateDao.MemoryRow[] {
+    return this.withOp(() => sessionStateDao.loadMemoryEntries(this.db));
+  }
+
+  saveSessionConversation(key: string, messagesJson: string): void {
+    this.withOp(() => sessionStateDao.saveConversation(this.db, key, messagesJson));
+  }
+
+  loadSessionConversation(key: string): string | null {
+    return this.withOp(() => sessionStateDao.loadConversation(this.db, key));
+  }
+
   getStats(): statsDao.DatabaseStats {
     return this.withOp(() => statsDao.getStats(this.db));
   }
@@ -880,7 +928,11 @@ export class DatabaseService implements IDbService {
    * 用于 deletePaper 事务成功后的文件清理（C2：文件操作在事务外）。
    * 返回的路径是相对于 workspace/ 的相对路径——由 PathResolver 在 I/O 前拼接绝对路径。
    *
-   * TODO: deletePaper 后的文件清理调用链——由 Orchestrator 在事务成功后执行
+   * Orchestrator 的 deletePaper 流程应为：
+   *   1. const paths = db.getPaperFilePaths(id);
+   *   2. const figDir = db.getPaperFigureDir(id);
+   *   3. db.deletePaper(id, true);       // 事务内：级联删除 DB 数据
+   *   4. await cleanupFiles(paths, figDir); // 事务外：批量删除文件
    */
   getPaperFilePaths(paperId: PaperId): string[] {
     const paths: string[] = [];
@@ -908,6 +960,46 @@ export class DatabaseService implements IDbService {
    */
   getPaperFigureDir(paperId: PaperId): string {
     return `figures/${paperId}`;
+  }
+
+  // ════════════════════════════════════════
+  // §11.5 布局分析 + 章节边界
+  // ════════════════════════════════════════
+
+  insertLayoutBlocks(blocks: layoutBlocksDao.LayoutBlockRow[]): void {
+    this.withOp(() => layoutBlocksDao.insertLayoutBlocks(this.db, blocks));
+  }
+
+  getLayoutBlocks(paperId: PaperId): layoutBlocksDao.LayoutBlockRow[] {
+    return this.withOp(() => layoutBlocksDao.getLayoutBlocks(this.db, paperId));
+  }
+
+  getLayoutBlocksByPage(paperId: PaperId, pageIndex: number): layoutBlocksDao.LayoutBlockRow[] {
+    return this.withOp(() => layoutBlocksDao.getLayoutBlocksByPage(this.db, paperId, pageIndex));
+  }
+
+  getLayoutModelVersion(paperId: PaperId): string | null {
+    return this.withOp(() => layoutBlocksDao.getLayoutModelVersion(this.db, paperId));
+  }
+
+  deleteLayoutBlocks(paperId: PaperId): number {
+    return this.withOp(() => layoutBlocksDao.deleteLayoutBlocks(this.db, paperId));
+  }
+
+  hasLayoutBlocks(paperId: PaperId): boolean {
+    return this.withOp(() => layoutBlocksDao.hasLayoutBlocks(this.db, paperId));
+  }
+
+  insertSectionBoundaries(boundaries: layoutBlocksDao.SectionBoundaryRow[]): void {
+    this.withOp(() => layoutBlocksDao.insertSectionBoundaries(this.db, boundaries));
+  }
+
+  getSectionBoundaries(paperId: PaperId): layoutBlocksDao.SectionBoundaryRow[] {
+    return this.withOp(() => layoutBlocksDao.getSectionBoundaries(this.db, paperId));
+  }
+
+  deleteSectionBoundaries(paperId: PaperId): number {
+    return this.withOp(() => layoutBlocksDao.deleteSectionBoundaries(this.db, paperId));
   }
 
   // ════════════════════════════════════════
@@ -997,8 +1089,8 @@ export class DatabaseService implements IDbService {
    * §5.1 优雅关闭序列。
    *
    * 1. 设置 isClosing=true，后续操作立即抛出 DatabaseError
-   * 2. 等待 activeOps==0（最多 10 秒）
-   * 3. （调用方负责 Worker Thread 终止——见 TODO）
+   * 2. 检查活跃操作（防御性断言）
+   * 3. 终止 Worker Thread（如果已注入引用）
    * 4. WAL TRUNCATE checkpoint
    * 5. 释放预编译语句引用
    * 6. 关闭数据库连接
@@ -1018,7 +1110,15 @@ export class DatabaseService implements IDbService {
       });
     }
 
-    // TODO: Worker Thread terminate 逻辑——依赖 Worker 管理器提供 worker 引用
+    // 步骤 3：终止 Worker Thread
+    if (this.workerRef) {
+      this.workerRef.terminate().catch((err) => {
+        this.logger.warn('Worker terminate failed during close', {
+          error: (err as Error).message,
+        });
+      });
+      this.workerRef = undefined;
+    }
 
     // 步骤 4：WAL TRUNCATE checkpoint（含 Worker 协调）
     try {

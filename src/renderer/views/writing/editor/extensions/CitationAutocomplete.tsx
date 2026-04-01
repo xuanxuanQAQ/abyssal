@@ -11,12 +11,12 @@
  * On select: delete `[@...` text, insert CitationNode, move cursor after.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
-import type { EditorView } from '@tiptap/pm/view';
 import type { Editor } from '@tiptap/react';
 import { Z_INDEX } from '../../../../styles/zIndex';
 import { CITATION_PARTIAL_REGEX } from '../../shared/citationPattern';
+import { usePaperList } from '../../../../core/ipc/hooks/usePapers';
 
 // ─── Types ───
 
@@ -153,13 +153,21 @@ interface CitationAutocompletePanelProps {
   onDismiss: () => void;
 }
 
-/**
- * Stub for paper list until the real hook is integrated.
- * TODO: replace with usePaperList from ../../../../core/ipc/hooks/usePapers
- */
-function usePaperListStub(): PaperItem[] {
-  // TODO: wire up real paper data
-  return [];
+/** Map raw paper data from IPC into PaperItem shape for autocomplete. */
+function usePaperItems(): PaperItem[] {
+  const { data: rawPapers } = usePaperList();
+  return useMemo(() => {
+    if (!rawPapers) return [];
+    return rawPapers.map((p) => {
+      const pr = p as unknown as Record<string, unknown>;
+      return {
+        id: (pr['id'] as string) ?? '',
+        title: (pr['title'] as string) ?? '',
+        firstAuthor: ((pr['authors'] as string) ?? '').split(/[,;]/)[0]?.trim() ?? '',
+        year: (pr['year'] as number) ?? 0,
+      };
+    });
+  }, [rawPapers]);
 }
 
 function filterPapers(papers: PaperItem[], query: string): PaperItem[] {
@@ -183,7 +191,7 @@ export function CitationAutocompletePanel({
 }: CitationAutocompletePanelProps): React.ReactElement | null {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const papers = usePaperListStub();
+  const papers = usePaperItems();
   const filteredPapers = filterPapers(papers, state.query);
 
   // Reset index when query changes

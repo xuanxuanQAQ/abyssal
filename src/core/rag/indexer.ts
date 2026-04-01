@@ -56,7 +56,7 @@ export async function indexChunks(
 
     // Fix #13: 批量查询已存在的 chunk_id（替代逐条 SELECT）
     const chunkIds = batchChunks.map((c) => c.chunkId as string);
-    const existingSet = dbService.getExistingChunkIds(chunkIds);
+    const existingSet = await dbService.getExistingChunkIds(chunkIds);
 
     const newChunks: TextChunk[] = [];
     const newEmbeddings: Float32Array[] = [];
@@ -74,7 +74,7 @@ export async function indexChunks(
 
     if (newChunks.length > 0) {
       // 使用 DatabaseService 的批量写入（内部在单事务中）
-      dbService.insertChunksBatch(
+      await dbService.insertChunksBatch(
         newChunks,
         newEmbeddings.map((e) => e as Float32Array | null),
       );

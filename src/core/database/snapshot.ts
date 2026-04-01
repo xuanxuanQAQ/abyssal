@@ -126,7 +126,9 @@ export async function createSnapshot(
   const tempBackupPath = path.join(snapshotsDir, `_tmp_${timestamp}.db`);
 
   try {
-    db.exec(`VACUUM INTO '${tempBackupPath.replace(/'/g, "''")}'`);
+    // 统一使用 forward slash，避免 Windows 反斜杠在 SQLite 中的解析问题
+    const safePath = tempBackupPath.replace(/\\/g, '/').replace(/'/g, "''");
+    db.exec(`VACUUM INTO '${safePath}'`);
   } catch {
     // VACUUM INTO 失败（旧版 SQLite）→ 文件拷贝
     const dbPath = db.name;
@@ -150,30 +152,24 @@ export async function createSnapshot(
 
   const sizeCompressed = fs.statSync(compressedPath).size;
 
-  // 步骤 4：收集统计信息生成 manifest
-  const paperCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM papers').get() as { cnt: number }
-  ).cnt;
-  const analyzedCount = (
-    db.prepare(
-      "SELECT COUNT(*) AS cnt FROM papers WHERE analysis_status IN ('analyzed','reviewed','integrated')",
-    ).get() as { cnt: number }
-  ).cnt;
-  const conceptCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM concepts').get() as { cnt: number }
-  ).cnt;
-  const mappingCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM paper_concept_map').get() as { cnt: number }
-  ).cnt;
-  const chunkCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM chunks').get() as { cnt: number }
-  ).cnt;
-  const memoCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM research_memos').get() as { cnt: number }
-  ).cnt;
-  const noteCount = (
-    db.prepare('SELECT COUNT(*) AS cnt FROM research_notes').get() as { cnt: number }
-  ).cnt;
+  // 步骤 4：收集统计信息生成 manifest（单次 round-trip 减少锁竞争）
+  const counts = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM papers) AS paper_count,
+      (SELECT COUNT(*) FROM papers WHERE analysis_status IN ('analyzed','reviewed','integrated')) AS analyzed_count,
+      (SELECT COUNT(*) FROM concepts) AS concept_count,
+      (SELECT COUNT(*) FROM paper_concept_map) AS mapping_count,
+      (SELECT COUNT(*) FROM chunks) AS chunk_count,
+      (SELECT COUNT(*) FROM research_memos) AS memo_count,
+      (SELECT COUNT(*) FROM research_notes) AS note_count
+  `).get() as Record<string, number>;
+  const paperCount = counts['paper_count'] ?? 0;
+  const analyzedCount = counts['analyzed_count'] ?? 0;
+  const conceptCount = counts['concept_count'] ?? 0;
+  const mappingCount = counts['mapping_count'] ?? 0;
+  const chunkCount = counts['chunk_count'] ?? 0;
+  const memoCount = counts['memo_count'] ?? 0;
+  const noteCount = counts['note_count'] ?? 0;
 
   const userVersionRow = db.pragma('user_version') as [{ user_version: number }];
   const schemaVersion = userVersionRow[0]?.user_version ?? 0;
@@ -327,7 +323,8 @@ export async function restoreSnapshot(options: RestoreSnapshotOptions): Promise<
     }
   }
 
-  // TODO: 通过 Electron IPC 发送 'database-restored' 事件通知前端刷新
+  // 调用方（Electron IPC handler）负责在恢复成功后发送 'database-restored' 事件通知前端刷新。
+  // 本函数是纯 core 层，不直接依赖 Electron API。
 }
 
 // ─── §6.3 空间管理 ───

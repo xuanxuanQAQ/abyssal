@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useReaderStore } from '../../../core/store/useReaderStore';
+import { useAppStore } from '../../../core/store';
+import { emitUserAction } from '../../../core/hooks/useEventBridge';
 
 export function useCurrentPage(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
@@ -43,6 +45,10 @@ export function useCurrentPage(
           const currentPage = useReaderStore.getState().currentPage;
           if (currentPage !== bestPage) {
             useReaderStore.getState().setCurrentPage(bestPage);
+            const paperId = useAppStore.getState().selectedPaperId;
+            if (paperId) {
+              emitUserAction({ action: 'pageChange', paperId, page: bestPage, totalPages });
+            }
           }
         }
       },

@@ -14,7 +14,7 @@ import {
   FileText, Lightbulb, Highlighter, StickyNote, Link2,
   Check, Edit3, X, PenLine,
 } from 'lucide-react';
-import { useMappingsForPaper } from '../../core/ipc/hooks/useMappings';
+import { useMappingsForPaper, useAdjudicateMapping } from '../../core/ipc/hooks/useMappings';
 import { useMemoList } from '../../core/ipc/hooks/useMemos';
 import { MemoCard } from '../notes/memo/MemoCard';
 
@@ -33,6 +33,7 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
   const { data: mappings } = useMappingsForPaper(paperId);
   const { data: memosData } = useMemoList({ paperIds: [paperId] });
   const memos = memosData?.pages.flat() ?? [];
+  const adjudicate = useAdjudicateMapping();
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', fontSize: 12 }}>
@@ -50,8 +51,7 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
         {/* Summary Tab */}
         <Tabs.Content value="summary" style={tabContentStyle}>
           <div style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>
-            {/* TODO: AI analysis summary from Orchestrator analyze output */}
-            Run analysis workflow to generate summary
+            Run analysis to generate summary
           </div>
         </Tabs.Content>
 
@@ -69,6 +69,8 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
               <MappingCard
                 key={idx}
                 mapping={m}
+                paperId={paperId}
+                adjudicate={adjudicate}
                 {...(onScrollToPage != null ? { onScrollToPage } : {})}
                 {...(onOpenMemoFloat != null ? { onMemo: () => onOpenMemoFloat([m['conceptId'] as string]) } : {})}
               />
@@ -100,8 +102,7 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
         {/* Related Tab */}
         <Tabs.Content value="related" style={tabContentStyle}>
           <div style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>
-            {/* TODO: related papers/notes from citation graph */}
-            Related content will appear here
+            Related papers will appear after analysis
           </div>
         </Tabs.Content>
       </Tabs.Root>
@@ -113,10 +114,14 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
 
 function MappingCard({
   mapping,
+  paperId,
+  adjudicate,
   onScrollToPage,
   onMemo,
 }: {
   mapping: Record<string, unknown>;
+  paperId: string;
+  adjudicate: ReturnType<typeof useAdjudicateMapping>;
   onScrollToPage?: (page: number) => void;
   onMemo?: () => void;
 }) {
@@ -176,9 +181,23 @@ function MappingCard({
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: 4 }}>
-        <ActionButton icon={<Check size={12} />} label="Accept" color="var(--success, #22c55e)" onClick={() => {/* TODO: adjudicate */}} />
-        <ActionButton icon={<Edit3 size={12} />} label="Revise" color="var(--accent-color)" onClick={() => {/* TODO: revise */}} />
-        <ActionButton icon={<X size={12} />} label="Reject" color="var(--danger, #ef4444)" onClick={() => {/* TODO: reject */}} />
+        <ActionButton icon={<Check size={12} />} label="Accept" color="var(--success, #22c55e)" onClick={() => {
+          const mappingId = (mapping['id'] as string) ?? '';
+          if (!mappingId) return;
+          adjudicate.mutate({ mappingId, decision: 'accept', paperId });
+        }} />
+        <ActionButton icon={<Edit3 size={12} />} label="Revise" color="var(--accent-color)" onClick={() => {
+          const mappingId = (mapping['id'] as string) ?? '';
+          if (!mappingId) return;
+          const revised = window.prompt('Revised relation (supports/challenges/extends/operationalizes):');
+          if (revised === null) return;
+          adjudicate.mutate({ mappingId, decision: 'revise', paperId, revisedMapping: { relation: revised } as any });
+        }} />
+        <ActionButton icon={<X size={12} />} label="Reject" color="var(--danger, #ef4444)" onClick={() => {
+          const mappingId = (mapping['id'] as string) ?? '';
+          if (!mappingId) return;
+          adjudicate.mutate({ mappingId, decision: 'reject', paperId });
+        }} />
         {onMemo && (
           <ActionButton icon={<PenLine size={12} />} label="Memo" color="var(--text-muted)" onClick={onMemo} />
         )}

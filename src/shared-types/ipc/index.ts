@@ -80,6 +80,18 @@ export interface StreamChunkEvent {
   }>;
 }
 
+/** DLA 截图引用（图片区域截取） */
+export interface ChatImageClip {
+  /** Block type (figure, table, formula, etc.) */
+  type: string;
+  /** Base64 JPEG data URL */
+  dataUrl: string;
+  /** 1-based page number */
+  pageNumber: number;
+  /** Normalized bbox on page */
+  bbox: { x: number; y: number; w: number; h: number };
+}
+
 export interface ChatContext {
   activeView: ViewType;
   contextKey: string;
@@ -89,6 +101,10 @@ export interface ChatContext {
   selectedConceptId?: string;
   selectedSectionId?: string;
   pdfPage?: number;
+  /** 用户在 PDF 阅读器中选取的引用文本 */
+  selectedQuote?: string;
+  /** DLA 智能选取的图片截图（figure/table/formula） */
+  imageClips?: ChatImageClip[];
 }
 
 /**

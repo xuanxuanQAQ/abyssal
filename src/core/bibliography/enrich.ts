@@ -6,6 +6,7 @@ import type { EnrichResult } from '../types/bibliography';
 import type { HttpClient } from '../infra/http-client';
 import type { RateLimiter } from '../infra/rate-limiter';
 import { PaperNotFoundError } from '../types/errors';
+import { isEmpty } from '../infra/utils';
 
 // ─── §3.1.2 CrossRef type → PaperType ───
 
@@ -30,12 +31,6 @@ function cleanJats(text: string): string {
     .trim();
 }
 
-// ─── 辅助：仅当目标为空时覆盖 ───
-
-function isEmpty(v: unknown): boolean {
-  return v === null || v === undefined || (typeof v === 'string' && v.trim().length === 0);
-}
-
 // ─── §3.1 enrichBibliography ───
 
 export async function enrichBibliography(
@@ -58,13 +53,7 @@ export async function enrichBibliography(
   try {
     data = await http.requestJson<typeof data>(url);
   } catch (err) {
-    // Fix #19: 使用 instanceof 和结构化字段检测 404，而非字符串匹配
     if (err instanceof PaperNotFoundError) {
-      return { enriched: false, enrichedFields: [], metadata: paper };
-    }
-    const status = (err as { status?: number; statusCode?: number }).status
-      ?? (err as { status?: number; statusCode?: number }).statusCode;
-    if (status === 404) {
       return { enriched: false, enrichedFields: [], metadata: paper };
     }
     throw err;

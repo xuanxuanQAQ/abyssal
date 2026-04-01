@@ -10,7 +10,7 @@ import React, {
 import { PageSlot } from './PageSlot';
 import type { PageMetadataMap } from '../core/pageMetadataPreloader';
 import type { RenderWindowResult } from '../core/renderWindow';
-import type { Annotation } from '../../../../shared-types/models';
+import type { Annotation, ContentBlockDTO } from '../../../../shared-types/models';
 import type { Transform6 } from '../math/coordinateTransform';
 import { useCurrentPage } from '../hooks/useCurrentPage';
 import { useReaderStore } from '../../../core/store/useReaderStore';
@@ -35,7 +35,7 @@ export interface ScrollContainerProps {
     pageNumber: number,
     scale: number,
     dpr: number,
-  ) => Promise<void>;
+  ) => { promise: Promise<void>; cancel: () => void };
   getPage: (pageNumber: number) => Promise<any>;
   onAreaSelect: (
     pageNumber: number,
@@ -43,6 +43,9 @@ export interface ScrollContainerProps {
   ) => void;
   onAnnotationHover: (id: string | null) => void;
   onAnnotationClick: (id: string) => void;
+  /** DLA block map: pageIndex (0-based) → blocks */
+  blockMap?: Map<number, ContentBlockDTO[]>;
+  onBlockSelect?: (block: ContentBlockDTO) => void;
 }
 
 const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
@@ -60,6 +63,8 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       onAreaSelect,
       onAnnotationHover,
       onAnnotationClick,
+      blockMap,
+      onBlockSelect,
     } = props;
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -160,6 +165,8 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
 
         const pageAnnotations = annotationsByPage.get(i) ?? [];
         const transform = getPageTransform(i);
+        // DLA blocks use 0-based pageIndex
+        const pageBlocks = blockMap?.get(i - 1) ?? [];
 
         slots.push(
           <PageSlot
@@ -177,6 +184,8 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
             onAreaSelect={onAreaSelect}
             onAnnotationHover={onAnnotationHover}
             onAnnotationClick={onAnnotationClick}
+            blocks={pageBlocks}
+            {...(onBlockSelect ? { onBlockSelect } : {})}
           />,
         );
       }
@@ -194,6 +203,8 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       onAreaSelect,
       onAnnotationHover,
       onAnnotationClick,
+      blockMap,
+      onBlockSelect,
     ]);
 
     return (

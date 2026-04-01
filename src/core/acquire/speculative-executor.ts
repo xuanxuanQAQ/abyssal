@@ -56,7 +56,8 @@ async function executeCandidate(
   let downloadUrl = candidate.url;
 
   // ── Preflight ──
-  if (enablePreflight) {
+  // Skip preflight for candidates flagged as known direct PDF links
+  if (enablePreflight && !candidate.skipPreflight) {
     const pf = await preflight({
       url: candidate.url,
       http,
@@ -87,12 +88,9 @@ async function executeCandidate(
   if (sharedAbort.aborted) throw new Error('Aborted by winning candidate');
 
   // ── Download ──
-  await downloadPdf(http, downloadUrl, tempPath, timeoutMs, candidate.headers);
-
-  if (sharedAbort.aborted) {
-    deleteFileIfExists(tempPath);
-    throw new Error('Aborted by winning candidate');
-  }
+  // Pass sharedAbort so the download is truly cancelled when another candidate wins,
+  // rather than consuming bandwidth until timeout or completion.
+  await downloadPdf(http, downloadUrl, tempPath, timeoutMs, candidate.headers, sharedAbort);
 
   // ── Validate ──
   const validation = await validatePdf(tempPath);

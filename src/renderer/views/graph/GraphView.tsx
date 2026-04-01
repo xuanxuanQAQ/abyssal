@@ -58,10 +58,20 @@ export function GraphView() {
   useEffect(() => {
     if (!graphData) return;
     const syncResult = synchronizeGraph(graph, graphData);
-    // TODO: Wire incremental layout — when new nodes arrive, call
-    // layoutControls.addNodes() with the new node/edge data to trigger
-    // Pin-and-Cool 3-phase incremental layout (already implemented in layoutWorker.ts)
-    void syncResult;
+    if (syncResult.addedNodes.length > 0 || syncResult.addedEdges.length > 0) {
+      const newNodes = syncResult.addedNodes.map((id) => ({
+        id,
+        x: graph.getNodeAttribute(id, 'x') as number ?? Math.random() * 100,
+        y: graph.getNodeAttribute(id, 'y') as number ?? Math.random() * 100,
+        size: graph.getNodeAttribute(id, 'size') as number ?? 5,
+      }));
+      const newEdges = syncResult.addedEdges.map((edgeId) => ({
+        source: graph.source(edgeId),
+        target: graph.target(edgeId),
+        weight: graph.getEdgeAttribute(edgeId, 'weight') as number ?? 1,
+      }));
+      layoutControls.addNodes(newNodes, newEdges);
+    }
   }, [graph, graphData]);
 
   // Sigma.js instance

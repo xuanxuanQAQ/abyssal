@@ -7,6 +7,24 @@
 
 import type Database from 'better-sqlite3';
 
+// ─── 列检测缓存 ───
+
+const layoutColumnsCache = new WeakMap<Database.Database, boolean>();
+
+/**
+ * 检测 chunks 表是否已包含 migration 016 新增的布局列。
+ * 结果按连接实例缓存，避免重复 PRAGMA 查询。
+ */
+export function hasLayoutColumns(db: Database.Database): boolean {
+  let result = layoutColumnsCache.get(db);
+  if (result === undefined) {
+    const cols = db.pragma('table_info(chunks)') as Array<{ name: string }>;
+    result = cols.some((c) => c.name === 'block_type');
+    layoutColumnsCache.set(db, result);
+  }
+  return result;
+}
+
 /**
  * 预编译语句集合。
  *
@@ -23,6 +41,8 @@ export interface StatementCache {
   readonly getConceptMappings: Database.Statement;
   readonly getMemosByPaper: Database.Statement;
   readonly getMemosByConcept: Database.Statement;
+  /** migration 016 布局列是否可用 */
+  readonly hasLayout: boolean;
 }
 
 /**
@@ -102,14 +122,28 @@ export function createStatements(
     `),
 
     // ─── 文本块（含 created_at） ───
-    insertChunk: db.prepare(`
-      INSERT INTO chunks (
-        chunk_id, paper_id, section_label, section_title, section_type,
-        page_start, page_end, text, token_count, source,
-        position_ratio, parent_chunk_id, chunk_index,
-        context_before, context_after, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `),
+    // 布局列（block_type, reading_order, column_layout）由 migration 016 添加，
+    // 旧 schema 中不存在时使用不含布局列的 INSERT 避免崩溃。
+    insertChunk: hasLayoutColumns(db)
+      ? db.prepare(`
+          INSERT INTO chunks (
+            chunk_id, paper_id, section_label, section_title, section_type,
+            page_start, page_end, text, token_count, source,
+            position_ratio, parent_chunk_id, chunk_index,
+            context_before, context_after, created_at,
+            block_type, reading_order, column_layout
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+      : db.prepare(`
+          INSERT INTO chunks (
+            chunk_id, paper_id, section_label, section_title, section_type,
+            page_start, page_end, text, token_count, source,
+            position_ratio, parent_chunk_id, chunk_index,
+            context_before, context_after, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `),
+
+    hasLayout: hasLayoutColumns(db),
 
     // §6.1 幂等写入预检（高频查询）
     checkChunkExists: db.prepare('SELECT rowid FROM chunks WHERE chunk_id = ?'),
@@ -153,12 +187,23 @@ export function createStatements(
 
 /**
  * 释放全部预编译语句引用。
- * better-sqlite3 的 Statement 在 Database.close() 时自动释放，
- * 但显式置 null 可帮助 GC 及时回收闭包中的引用。
+ *
+ * 遍历缓存中的所有 Statement 对象，将其从引用图中断开。
+ * better-sqlite3 的 Statement 在 Database.close() 时自动 finalize，
+ * 但在 runHotMigration 场景中连接未关闭就执行 DDL，
+ * 显式清除引用可帮助 GC 回收闭包中的 Statement 对象并释放 SQLite 锁。
  */
 export function releaseStatements(
   cache: StatementCache | null,
 ): null {
-  // 返回 null 以便调用方直接赋值：this.stmts = releaseStatements(this.stmts)
+  if (cache) {
+    // 遍历所有 Statement 字段，将其引用断开以释放 SQLite 内部 stmt handle。
+    // better-sqlite3 Statement 没有公开 finalize()，但 db.close() 前
+    // 清除所有引用可确保 DDL 操作（ALTER TABLE 等）不会遇到
+    // "database table is locked" 错误。
+    for (const key of Object.keys(cache)) {
+      (cache as unknown as Record<string, unknown>)[key] = undefined;
+    }
+  }
   return null;
 }

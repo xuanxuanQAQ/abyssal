@@ -7,31 +7,10 @@ import type { HttpClient } from '../../infra/http-client';
 import type { CookieJar } from '../../infra/cookie-jar';
 import type { Logger } from '../../infra/logger';
 import type { BrowserSearchFn } from '../index';
+import { copyFile, unlink } from 'fs/promises';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
 import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
-
-// ─── Cookie collection helper ───
-
-/**
- * Collect cookies from the CookieJar across multiple domains and merge them.
- * Needed because CARSI login stores cookies under www.wanfangdata.com.cn
- * which may not match s.wanfangdata.com.cn.
- */
-function collectCookiesFromJar(cookieJar: CookieJar, urls: string[]): string | null {
-  const parts = new Map<string, string>();
-  for (const url of urls) {
-    const header = cookieJar.getCookieHeader(url);
-    if (header) {
-      for (const pair of header.split(';')) {
-        const trimmed = pair.trim();
-        const eq = trimmed.indexOf('=');
-        if (eq > 0) parts.set(trimmed.slice(0, eq), trimmed);
-      }
-    }
-  }
-  return parts.size > 0 ? [...parts.values()].join('; ') : null;
-}
 
 const SOURCE_NAME = 'wanfang';
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -323,7 +302,7 @@ export async function tryWanfang(
     'https://wanfangdata.com.cn/',
     'https://login.wanfangdata.com.cn/',
   ];
-  const mergedCookie = collectCookiesFromJar(cookieJar, wanfangUrls);
+  const mergedCookie = cookieJar.collectCookies(wanfangUrls);
   const activeDomains = cookieJar.getActiveDomains().filter((d) => d.includes('wanfang'));
   log?.info('[Wanfang] Cookie status', {
     hasCookies: !!mergedCookie,
@@ -344,10 +323,12 @@ export async function tryWanfang(
     let searchResults: WanfangSearchResult[] = [];
     /** Session cookies exported from the BrowserWindow session */
     let browserSessionCookies: string | null = null;
+    /** Path to PDF already downloaded by BrowserWindow (via will-download interception) */
+    let browserDownloadedPath: string | null = null;
 
     log?.info('[Wanfang] Searching', { title: title.slice(0, 50) });
 
-    // ── Primary: BrowserWindow-based search (handles SPA client-side rendering) ──
+    // ── Primary: BrowserWindow-based search (semi-automated — user downloads PDF) ──
     if (browserSearchFn) {
       log?.info('[Wanfang] Using BrowserWindow search');
       try {
@@ -357,6 +338,7 @@ export async function tryWanfang(
         });
         if (browserResults.length > 0) {
           browserSessionCookies = browserResults[0]?.metadata['sessionCookies'] ?? null;
+          browserDownloadedPath = browserResults[0]?.metadata['downloadedTempPath'] ?? null;
           searchResults = browserResults.map((r) => ({
             title: r.title,
             paperId: r.metadata['paperId'] ?? '',
@@ -367,6 +349,7 @@ export async function tryWanfang(
             count: searchResults.length,
             titles: searchResults.slice(0, 3).map((r) => r.title.slice(0, 40)),
             hasSessionCookies: !!browserSessionCookies,
+            hasBrowserDownload: !!browserDownloadedPath,
           });
         } else {
           log?.info('[Wanfang] BrowserWindow search returned no results, falling back to HTTP');
@@ -446,6 +429,34 @@ export async function tryWanfang(
       count: searchResults.length,
       titles: searchResults.slice(0, 3).map((r) => r.title.slice(0, 40)),
     });
+
+    // ── Fast path: BrowserWindow already downloaded the PDF ──
+    if (browserDownloadedPath) {
+      log?.info('[Wanfang] Using BrowserWindow-downloaded file', { from: browserDownloadedPath });
+      try {
+        await copyFile(browserDownloadedPath, tempPath);
+        await unlink(browserDownloadedPath).catch(() => {});
+      } catch (copyErr) {
+        log?.warn('[Wanfang] Failed to copy browser download', {
+          error: (copyErr as Error).message,
+        });
+        // Fall through to normal HTTP path
+        browserDownloadedPath = null;
+      }
+
+      if (browserDownloadedPath) {
+        const validation = await validatePdf(tempPath);
+        if (!validation.valid) {
+          deleteFileIfExists(tempPath);
+          const reason = validation.reason ?? 'PDF validation failed';
+          return makeAttempt(SOURCE_NAME, 'failed', Date.now() - start, {
+            failureReason: `Wanfang browser download: ${reason}`,
+            failureCategory: 'invalid_pdf',
+          });
+        }
+        return makeAttempt(SOURCE_NAME, 'success', Date.now() - start, { httpStatus: 200 });
+      }
+    }
 
     if (searchResults.length === 0) {
       return makeAttempt(SOURCE_NAME, 'failed', Date.now() - start, {

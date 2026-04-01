@@ -31,27 +31,33 @@ import type { PageMetadataMap } from '../core/pageMetadataPreloader';
 import type { PDFDocumentManager } from '../core/pdfDocumentManager';
 import type { Transform6 } from '../math/coordinateTransform';
 import { computeInverseTransform } from '../math/inverseTransform';
-import { useTextSelection } from '../selection/useTextSelection';
+import { useSmartSelection } from '../selection/useSmartSelection';
+import { emitUserAction } from '../../../core/hooks/useEventBridge';
 import { selectionToAnnotationPosition } from '../selection/selectionToAnnotation';
-import type { AnnotationPosition } from '../../../../shared-types/models';
+import type { AnnotationPosition, ContentBlockDTO } from '../../../../shared-types/models';
 import type { HighlightColor } from '../../../../shared-types/enums';
 import { useConceptList as useConcepts } from '../../../core/ipc/hooks/useConcepts';
 import type { Concept } from '../../../../shared-types/models';
+import { useLayoutBlocks } from '../hooks/useLayoutBlocks';
+import { captureBlockRegion } from './layers/captureBlockRegion';
 
 export interface PDFViewportProps {
   paperId: string;
+  pdfPath: string | null;
   manager: PDFDocumentManager;
   pageMetadataMap: PageMetadataMap;
+  scrollRef?: React.RefObject<ScrollContainerHandle | null>;
 }
 
-function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
+function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: PDFViewportProps) {
   const totalPages = useReaderStore((s) => s.totalPages);
   const zoomLevel = useReaderStore((s) => s.zoomLevel);
   const activeAnnotationTool = useReaderStore((s) => s.activeAnnotationTool);
   const highlightColor = useReaderStore((s) => s.highlightColor);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<ScrollContainerHandle>(null);
+  const internalScrollRef = useRef<ScrollContainerHandle>(null);
+  const scrollContainerRef = scrollRef ?? internalScrollRef;
   const memoryBudgetRef = useRef(new MemoryBudget());
 
   // Container dimensions from ResizeObserver
@@ -80,7 +86,6 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
   }, []);
 
   // useZoom needs an HTMLDivElement ref — get it from ScrollContainer handle
-  const scrollDivRef = useRef<HTMLDivElement | null>(null);
   const scrollDivRefForZoom = useMemo(
     () => ({
       get current() {
@@ -103,6 +108,15 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
     pageMetadataMap,
   );
 
+  // Ctrl+wheel zoom: attach handleWheelZoom to scroll container
+  useEffect(() => {
+    const container = scrollContainerRef.current?.getScrollContainer();
+    if (!container) return;
+    const handler = zoomActions.handleWheelZoom;
+    container.addEventListener('wheel', handler, { passive: false });
+    return () => container.removeEventListener('wheel', handler);
+  });
+
   // Render window
   const renderWindow = useRenderWindow(totalPages, memoryBudgetRef.current);
 
@@ -113,8 +127,62 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
   // Concepts (for ConceptSelector and concept tag colors)
   const { data: conceptsData } = useConcepts();
 
+  // DLA layout blocks
+  const currentPage = useReaderStore((s) => s.currentPage);
+  const blockMap = useLayoutBlocks({
+    paperId,
+    pdfPath,
+    totalPages,
+    currentPage,
+  });
+
+  // Block select handler — capture canvas region → write SelectionPayload to store
+  const handleBlockSelect = useCallback(
+    (block: ContentBlockDTO) => {
+      console.log(`[DLA-Select] Block clicked: type=${block.type} page=${block.pageIndex} conf=${block.confidence.toFixed(2)}`);
+      const container = containerRef.current;
+      if (!container) return;
+
+      const pageSlotEl = container.querySelector<HTMLElement>(
+        `[data-page="${block.pageIndex + 1}"]`,
+      );
+      if (!pageSlotEl) return;
+
+      const clip = captureBlockRegion(
+        pageSlotEl,
+        block.bbox,
+        block.pageIndex + 1,
+        block.type,
+      );
+
+      if (clip) {
+        console.log(`[DLA-Select] Captured ${block.type} region (${clip.bbox.w.toFixed(3)}×${clip.bbox.h.toFixed(3)}) → dataUrl ${(clip.dataUrl.length / 1024).toFixed(1)}KB`);
+      } else {
+        console.warn('[DLA-Select] Canvas capture failed — canvas not available or region too small');
+      }
+
+      useReaderStore.getState().setSelectionPayload({
+        images: clip ? [clip] : [],
+        sourcePages: [block.pageIndex + 1],
+      });
+    },
+    [],
+  );
+
   // Text selection
-  const textSelection = useTextSelection();
+  const textSelection = useSmartSelection(blockMap);
+
+  // Emit selectText event when user selects text
+  useEffect(() => {
+    if (textSelection.selectedText && textSelection.anchorPageNumber) {
+      emitUserAction({
+        action: 'selectText',
+        paperId,
+        text: textSelection.selectedText,
+        page: textSelection.anchorPageNumber,
+      });
+    }
+  }, [textSelection.selectedText, textSelection.anchorPageNumber, paperId]);
 
   // Text annotation pen mode
   const getPageContext = useCallback(
@@ -169,46 +237,56 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
     selectedText: string;
   } | null>(null);
 
-  // Render page callback
+  // Render page callback — returns { promise, cancel } so callers can
+  // abort the underlying pdfjs render task (critical for StrictMode double-invoke).
   const renderPage = useCallback(
-    async (
+    (
       canvas: HTMLCanvasElement,
       pageNumber: number,
       renderScale: number,
       dpr: number,
-    ) => {
-      const doc = manager.getDocument();
-      if (!doc) return;
+    ): { promise: Promise<void>; cancel: () => void } => {
+      let cancelled = false;
+      let activeRenderTask: { cancel(): void; promise: Promise<void> } | null = null;
 
-      const page = await doc.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: renderScale });
+      const promise = (async () => {
+        const doc = manager.getDocument();
+        if (!doc) return;
 
-      // CanvasLayer already set canvas.width/height and style.width/height.
-      // Just render into the canvas using the viewport at the requested scale.
-      console.log(`[CanvasLayer] page=${pageNumber}`, {
-        renderScale,
-        dpr,
-        viewportSize: `${viewport.width}x${viewport.height}`,
-        canvasPixels: `${canvas.width}x${canvas.height}`,
-        canvasCss: `${canvas.style.width}x${canvas.style.height}`,
-      });
+        const page = await doc.getPage(pageNumber);
+        if (cancelled) return;
 
-      const context = canvas.getContext('2d');
-      if (!context) return;
+        const viewport = page.getViewport({ scale: renderScale });
 
-      context.scale(dpr, dpr);
+        const context = canvas.getContext('2d');
+        if (!context) return;
 
-      // §5.4: Track render task for cancellation on document switch/destroy
-      const renderTask = page.render({
-        canvasContext: context,
-        viewport,
-      });
-      manager.trackRenderTask(renderTask);
-      try {
-        await renderTask.promise;
-      } finally {
-        manager.untrackRenderTask(renderTask);
-      }
+        context.scale(dpr, dpr);
+
+        // §5.4: Track render task for cancellation on document switch/destroy
+        const renderTask = page.render({
+          canvasContext: context,
+          viewport,
+        });
+        activeRenderTask = renderTask;
+        manager.trackRenderTask(renderTask);
+        try {
+          await renderTask.promise;
+        } finally {
+          manager.untrackRenderTask(renderTask);
+          activeRenderTask = null;
+        }
+      })();
+
+      return {
+        promise,
+        cancel() {
+          cancelled = true;
+          if (activeRenderTask) {
+            try { activeRenderTask.cancel(); } catch { /* already finished */ }
+          }
+        },
+      };
     },
     [manager],
   );
@@ -381,6 +459,8 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
         onAreaSelect={handleAreaSelect}
         onAnnotationHover={handleAnnotationHover}
         onAnnotationClick={handleAnnotationClick}
+        blockMap={blockMap}
+        onBlockSelect={handleBlockSelect}
       />
 
       {showSelectionToolbar && (
@@ -441,6 +521,22 @@ function PDFViewport({ paperId, manager, pageMetadataMap }: PDFViewportProps) {
           }}
           onColorChange={(color) => {
             useReaderStore.getState().setHighlightColor(color);
+          }}
+          capturedImageCount={textSelection.capturedImages.length}
+          onAskAI={() => {
+            if (!textSelection.anchorPageNumber) return;
+            // Write both text and captured images into the unified payload
+            if (textSelection.payload) {
+              useReaderStore.getState().setSelectionPayload(textSelection.payload);
+            }
+            // Also set quotedSelection for backward compat with chat
+            if (textSelection.selectedText) {
+              useReaderStore.getState().setQuotedSelection({
+                text: textSelection.selectedText,
+                page: textSelection.anchorPageNumber,
+              });
+            }
+            textSelection.clearSelection();
           }}
         />
       )}

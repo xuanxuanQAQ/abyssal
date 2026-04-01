@@ -20,15 +20,25 @@ import {
 export function registerAcquireHandlers(ctx: AppContext): void {
   const { logger } = ctx;
 
+  // ── Helper: start or enqueue into running acquire workflow ──
+  const startOrEnqueueAcquire = (ids: string[]): { id: string; completionPromise: Promise<unknown> } => {
+    const orchestrator = ctx.orchestrator;
+    if (!orchestrator) throw new Error('Orchestrator not initialized');
+
+    // orchestrator.start() will either:
+    // - Create a new acquire workflow (if none running), or
+    // - Enqueue paperIds into the running workflow's shared queue (merge)
+    const state = orchestrator.start('acquire', {
+      paperIds: ids,
+      concurrency: 5,
+    });
+
+    return { id: state.id, completionPromise: state.completionPromise };
+  };
+
   // ── acquire:fulltext — single paper ──
   typedHandler('acquire:fulltext', logger, async (_e, paperId) => {
     logger.info('[acquire:fulltext] IPC invoked', { paperId });
-
-    const orchestrator = ctx.orchestrator;
-    if (!orchestrator) {
-      logger.error('[acquire:fulltext] Orchestrator not initialized');
-      throw new Error('Orchestrator not initialized');
-    }
 
     // Mark paper as pending immediately so UI reflects state
     try {
@@ -38,34 +48,26 @@ export function registerAcquireHandlers(ctx: AppContext): void {
       logger.warn('[acquire:fulltext] Failed to mark paper as pending', { paperId, error: (err as Error).message });
     }
 
-    // Start acquire workflow for a single paper
-    const state = orchestrator.start('acquire', {
-      paperIds: [paperId],
-      concurrency: 1,
-    });
+    const { id, completionPromise } = startOrEnqueueAcquire([paperId]);
 
     // Log workflow completion asynchronously (fire-and-forget)
-    state.completionPromise.then((result) => {
+    completionPromise.then((result: any) => {
       logger.info('[acquire:fulltext] Workflow completed', {
-        paperId, taskId: state.id, status: result.status,
-        completed: result.progress.completedItems,
-        failed: result.progress.failedItems,
-        durationMs: result.durationMs,
-        errors: result.progress.errors.map((e) => `${e.itemId}@${e.stage}: ${e.message}`),
+        paperId, taskId: id, status: result?.status,
+        completed: result?.progress?.completedItems,
+        failed: result?.progress?.failedItems,
+        durationMs: result?.durationMs,
       });
-    }).catch((err) => {
-      logger.error(`[acquire:fulltext] Workflow promise rejected: paperId=${paperId} taskId=${state.id} error=${(err as Error).message}`);
+    }).catch((err: unknown) => {
+      logger.error(`[acquire:fulltext] Workflow promise rejected: paperId=${paperId} taskId=${id} error=${(err as Error).message}`);
     });
 
-    logger.info('[acquire:fulltext] Workflow launched', { paperId, taskId: state.id });
-    return state.id;
+    logger.info('[acquire:fulltext] Workflow launched/enqueued', { paperId, taskId: id });
+    return id;
   });
 
   // ── acquire:batch — multiple papers ──
   typedHandler('acquire:batch', logger, async (_e, paperIds) => {
-    const orchestrator = ctx.orchestrator;
-    if (!orchestrator) throw new Error('Orchestrator not initialized');
-
     // Mark papers as pending immediately
     for (const id of paperIds) {
       try {
@@ -73,13 +75,10 @@ export function registerAcquireHandlers(ctx: AppContext): void {
       } catch { /* best-effort */ }
     }
 
-    const state = orchestrator.start('acquire', {
-      paperIds,
-      concurrency: 5,
-    });
+    const { id } = startOrEnqueueAcquire(paperIds);
 
-    logger.info('Acquire batch started', { count: paperIds.length, taskId: state.id });
-    return state.id;
+    logger.info('Acquire batch started/enqueued', { count: paperIds.length, taskId: id });
+    return id;
   });
 
   // ── acquire:status — query status ──

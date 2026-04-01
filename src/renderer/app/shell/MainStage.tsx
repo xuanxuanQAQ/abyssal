@@ -9,10 +9,11 @@
  * - 内存管理：最多保留 4 个 keep-alive 视图，LRU 淘汰最久未访问的
  */
 
-import React, { Suspense, useState, useCallback, useEffect, useRef } from 'react';
+import React, { Suspense, useDeferredValue, useRef } from 'react';
 import { useAppStore } from '../../core/store';
 import { ViewErrorBoundary } from '../ErrorBoundaries';
 import { LibraryView } from '../../views/library/LibraryView';
+import { ViewActiveContext } from '../../core/context/ViewActiveContext';
 import type { ViewType } from '../../../shared-types/enums';
 
 // ═══ 可预加载的 lazy 组件 ═══
@@ -79,7 +80,7 @@ export function preloadView(viewType: ViewType): void {
 }
 
 /**
- * 空闲预加载：首屏渲染后利用 idle 时间预加载全部 lazy 视图的 JS chunk。
+ * 预加载全部 lazy 视图的 JS chunk。
  * Electron 从本地磁盘加载，lazy split 的网络收益不存在，
  * 提前加载可消除首次切换时的 Suspense fallback 闪烁。
  */
@@ -89,6 +90,9 @@ export function preloadAllViews(): void {
     config.preload?.();
   }
 }
+
+// 模块级立即预加载 — 不等 idle callback，Electron 本地磁盘 IO 几乎无开销
+queueMicrotask(preloadAllViews);
 
 // ═══ Suspense fallback ═══
 
@@ -105,39 +109,51 @@ function ViewLoading() {
 export function MainStage() {
   const activeView = useAppStore((s) => s.activeView);
 
-  // 跟踪已访问视图的 LRU 顺序（最近访问在末尾）
-  const [aliveViews, setAliveViews] = useState<ViewType[]>(['library']);
-  const prevActiveRef = useRef(activeView);
+  // ── Deferred view：首次访问 lazy 视图时保持旧视图可见，不闪 fallback ──
+  // activeView 立即更新（NavRail 高亮响应），renderView 延迟到 chunk 就绪后才切换。
+  const renderView = useDeferredValue(activeView);
 
-  useEffect(() => {
-    if (prevActiveRef.current === activeView) return;
-    prevActiveRef.current = activeView;
+  // ── 同步 LRU 派生（消除 useEffect 导致的一帧空白） ──
+  // 基于 renderView 计算，确保新视图的 DOM 只在 chunk 就绪后才插入。
+  const aliveRef = useRef<ViewType[]>(['library']);
+  const prevRenderRef = useRef<ViewType>(renderView);
 
-    setAliveViews((prev) => {
-      // 移除离开的非 keep-alive 视图
-      const prevActive = prevActiveRef.current;
-      let cleaned = prev;
-      if (prevActive && prevActive !== activeView) {
-        const prevConfig = VIEW_CONFIG[prevActive];
-        if (!prevConfig.keepAlive) {
-          cleaned = prev.filter((v) => v !== prevActive);
-        }
+  if (prevRenderRef.current !== renderView) {
+    const leaving = prevRenderRef.current;
+    prevRenderRef.current = renderView;
+
+    const prev = aliveRef.current;
+
+    // 移除离开的非 keep-alive 视图
+    let cleaned = prev;
+    if (leaving !== renderView) {
+      const leavingConfig = VIEW_CONFIG[leaving];
+      if (!leavingConfig.keepAlive) {
+        cleaned = prev.filter((v) => v !== leaving);
       }
+    }
 
-      // 将当前视图移到末尾（最近访问）
-      const without = cleaned.filter((v) => v !== activeView);
-      const updated = [...without, activeView];
+    // 将当前视图移到末尾（最近访问）
+    const without = cleaned.filter((v) => v !== renderView);
+    const updated = [...without, renderView];
 
-      // LRU 淘汰：超过上限时移除最久未访问的 keep-alive 视图
-      while (updated.length > MAX_ALIVE) {
-        const oldest = updated[0]!;
-        if (oldest === activeView) break;
-        updated.shift();
-      }
+    // LRU 淘汰
+    while (updated.length > MAX_ALIVE) {
+      const oldest = updated[0]!;
+      if (oldest === renderView) break;
+      updated.shift();
+    }
 
-      return updated;
-    });
-  }, [activeView]);
+    aliveRef.current = updated;
+  }
+
+  const aliveViews = aliveRef.current;
+
+  console.log('[PDF-DBG][MainStage] render', {
+    activeView,
+    renderView,
+    aliveViews: [...aliveViews],
+  });
 
   return (
     <main
@@ -147,7 +163,7 @@ export function MainStage() {
     >
       {aliveViews.map((viewType) => {
         const config = VIEW_CONFIG[viewType];
-        const isActive = viewType === activeView;
+        const isActive = viewType === renderView;
         const ViewComponent = config.component;
 
         // 非 keep-alive 视图：仅在活动时渲染
@@ -160,17 +176,17 @@ export function MainStage() {
               position: 'absolute',
               inset: 0,
               display: isActive ? 'block' : 'none',
-              // 非活动视图保持 DOM 但不接收事件
               pointerEvents: isActive ? 'auto' : 'none',
             }}
-            // 非活动视图标记 inert 阻止 Tab 焦点
             {...(!isActive ? { inert: true } : {})}
           >
-            <ViewErrorBoundary viewKey={viewType}>
-              <Suspense fallback={<ViewLoading />}>
-                <ViewComponent />
-              </Suspense>
-            </ViewErrorBoundary>
+            <ViewActiveContext.Provider value={isActive}>
+              <ViewErrorBoundary viewKey={viewType}>
+                <Suspense fallback={<ViewLoading />}>
+                  <ViewComponent />
+                </Suspense>
+              </ViewErrorBoundary>
+            </ViewActiveContext.Provider>
           </div>
         );
       })}

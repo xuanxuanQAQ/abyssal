@@ -91,7 +91,7 @@ export function importRis(input: string): ImportedEntry[] {
       id: generatePaperId(doi, null, title),
       title: title ?? '',
       authors,
-      year: year ?? 0,
+      ...(year != null ? { year } : {}),
       doi,
       arxivId: null,
       abstract: get(['AB', 'N2']),

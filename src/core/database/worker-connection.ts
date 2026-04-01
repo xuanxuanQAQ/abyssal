@@ -216,8 +216,9 @@ export function resetVectorFlag(
 
 // ─── Worker 消息协议 ───
 
-// TODO: Worker Thread 启动与生命周期管理（postMessage 协议）由 Orchestrator 编排层实现
-// TODO: ONNX 推理 + DB 写入在同一 Worker 中执行的集成，依赖嵌入器模块
+// 设计说明：Worker Thread 启动、生命周期管理（postMessage 协议）及
+// ONNX 推理 + DB 写入的集成由 Orchestrator 编排层和嵌入器模块负责。
+// 本模块仅提供连接工厂和 SharedArrayBuffer 传输协议。
 
 /** 主线程 → Worker 的消息类型 */
 export type MainToWorkerMessage =

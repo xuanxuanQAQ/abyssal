@@ -111,6 +111,24 @@ const dbProcessConfig = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const dlaProcessConfig = {
+  entryPoints: ['src/dla-process/main.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node20',
+  format: 'cjs',
+  outfile: 'dist/dla-process/main.js',
+  external: externalModules,
+  sourcemap: true,
+  alias: {
+    '@core': path.join(__dirname, 'src/core'),
+    '@shared-types': path.join(__dirname, 'src/shared-types'),
+  },
+  conditions: ['node'],
+  logLevel: 'info',
+};
+
+/** @type {esbuild.BuildOptions} */
 const preloadConfig = {
   entryPoints: ['src/electron/preload.ts'],
   bundle: true,
@@ -131,14 +149,41 @@ if (isWatch) {
   const mainCtx = await esbuild.context(mainConfig);
   const preloadCtx = await esbuild.context(preloadConfig);
   const dbCtx = await esbuild.context(dbProcessConfig);
-  await Promise.all([mainCtx.watch(), preloadCtx.watch(), dbCtx.watch()]);
+  const dlaCtx = await esbuild.context(dlaProcessConfig);
+  await Promise.all([mainCtx.watch(), preloadCtx.watch(), dbCtx.watch(), dlaCtx.watch()]);
   await buildTsMigrations();
+  copyMigrations();
+
+  // Watch migrations directory for new/changed .ts and .sql files.
+  // esbuild context.watch() only tracks import graphs — dynamically-loaded
+  // migration scripts are invisible to it, so we use fs.watch as a sidecar.
+  const migrationsDir = path.join(__dirname, 'src/core/database/migrations');
+  let migrationRebuildTimer = null;
+  fs.watch(migrationsDir, (_eventType, filename) => {
+    if (!filename) return;
+    if (!filename.endsWith('.ts') && !filename.endsWith('.sql')) return;
+    // Debounce: coalesce rapid file events into a single rebuild
+    if (migrationRebuildTimer) clearTimeout(migrationRebuildTimer);
+    migrationRebuildTimer = setTimeout(async () => {
+      migrationRebuildTimer = null;
+      console.log(`[esbuild] migration file changed: ${filename}, rebuilding...`);
+      try {
+        copyMigrations();
+        await buildTsMigrations();
+        console.log('[esbuild] migrations rebuilt');
+      } catch (err) {
+        console.error('[esbuild] migration rebuild failed:', err);
+      }
+    }, 300);
+  });
+
   console.log('[esbuild] watching for changes...');
 } else {
   await Promise.all([
     esbuild.build(mainConfig),
     esbuild.build(preloadConfig),
     esbuild.build(dbProcessConfig),
+    esbuild.build(dlaProcessConfig),
     buildTsMigrations(),
   ]);
 }

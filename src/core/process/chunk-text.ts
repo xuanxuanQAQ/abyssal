@@ -20,6 +20,8 @@ import type {
   SectionBoundaryList,
   ChunkSource,
 } from '../types/chunk';
+import type { DocumentStructure, DocumentSection, TypedBlock } from '../dla/types';
+import type { Logger } from '../infra/logger';
 import { countTokens } from '../infra/token-counter';
 
 // ─── §4.4 页码映射 ───
@@ -217,7 +219,9 @@ export function chunkText(
   boundaries: SectionBoundaryList,
   pageTexts: string[],
   options: ChunkTextOptions = {},
+  logger?: Logger | null,
 ): TextChunk[] {
+  const t0 = Date.now();
   const paperId = options.paperId ?? null;
   const maxTokens = options.maxTokensPerChunk ?? 1024;
   const overlapTokens = options.overlapTokens ?? 128;
@@ -417,6 +421,15 @@ export function chunkText(
     results.push(...sectionChunks);
   }
 
+  const totalTokens = results.reduce((sum, c) => sum + c.tokenCount, 0);
+  logger?.info('[chunkText] Chunking complete (regex path)', {
+    sections: sections.length,
+    chunks: results.length,
+    totalTokens,
+    avgTokensPerChunk: results.length > 0 ? Math.round(totalTokens / results.length) : 0,
+    durationMs: Date.now() - t0,
+  });
+
   return results;
 }
 
@@ -439,4 +452,179 @@ function makeChunkId(
     : `${source}__${label}__${seq}`;
 
   return asChunkId(seq > 0 ? `${base}__${seq}` : base);
+}
+
+// ═══ Block-aware chunking (DLA path) ═══
+
+/**
+ * Create TextChunks from a DLA DocumentStructure using block boundaries
+ * instead of paragraph-level regex splitting.
+ *
+ * Each TypedBlock is a natural split boundary. Adjacent text blocks are
+ * grouped into chunks up to maxTokens, preserving block-level metadata
+ * (blockType, readingOrder, columnLayout).
+ */
+export function chunkTextFromLayout(
+  structure: DocumentStructure,
+  fullText: string,
+  options: ChunkTextOptions = {},
+  logger?: Logger | null,
+): TextChunk[] {
+  const t0 = Date.now();
+  const paperId = options.paperId ?? null;
+  const maxTokens = options.maxTokensPerChunk ?? 1024;
+  const overlapTokens = options.overlapTokens ?? 128;
+  const source = options.source ?? 'paper';
+
+  if (overlapTokens >= maxTokens / 2) {
+    throw new Error(
+      `overlapTokens (${overlapTokens}) must be < maxTokens/2 (${maxTokens / 2})`,
+    );
+  }
+
+  const results: TextChunk[] = [];
+
+  function processSection(sec: DocumentSection): void {
+    const label = sec.label;
+    const type = LABEL_TO_TYPE[label];
+    const title = sec.titleBlock.text?.trim() ?? '';
+    const sectionPage = sec.titleBlock.pageIndex;
+
+    const textBlocks = sec.bodyBlocks.filter(
+      (b) => b.text != null && b.text.trim().length > 0,
+    );
+
+    if (textBlocks.length === 0) {
+      for (const child of sec.children) processSection(child);
+      return;
+    }
+
+    const sectionChunks: TextChunk[] = [];
+    let pending: TypedBlock[] = [];
+    let pendingTokens = 0;
+    let seq = 0;
+    let overlapPrefix = '';
+
+    const flush = () => {
+      if (pending.length === 0) return;
+      const rawText = pending.map((b) => b.text!).join('\n\n');
+      const text = overlapPrefix ? overlapPrefix + '\n\n' + rawText : rawText;
+      const first = pending[0]!;
+      const last = pending[pending.length - 1]!;
+      const charStart = first.charStart ?? 0;
+      const posRatio = fullText.length > 0 ? charStart / fullText.length : null;
+      const id = makeChunkId(paperId, label, sectionPage, seq, source, options.chunkIdPrefix);
+
+      sectionChunks.push({
+        chunkId: id,
+        paperId,
+        sectionLabel: label,
+        sectionTitle: title,
+        sectionType: type,
+        pageStart: first.pageIndex,
+        pageEnd: last.pageIndex,
+        text,
+        tokenCount: countTokens(text),
+        source,
+        positionRatio: posRatio,
+        parentChunkId: null,
+        chunkIndex: null,
+        contextBefore: null,
+        contextAfter: null,
+        blockType: first.blockType,
+        readingOrder: first.readingOrder,
+        columnLayout: structure.columnLayout,
+      });
+
+      // Compute overlap for next chunk
+      overlapPrefix = overlapTokens > 0 ? extractTailTokens(rawText, overlapTokens) : '';
+      seq++;
+      pending = [];
+      pendingTokens = 0;
+    };
+
+    for (const block of textBlocks) {
+      const bTokens = countTokens(block.text!);
+
+      if (pendingTokens + bTokens <= maxTokens) {
+        pending.push(block);
+        pendingTokens += bTokens;
+      } else {
+        flush();
+        if (bTokens > maxTokens) {
+          // Single block exceeds limit — force split
+          const subs = forceSplitByTokens(block.text!, maxTokens, overlapTokens);
+          for (const sub of subs) {
+            const posRatio =
+              block.charStart != null && fullText.length > 0
+                ? block.charStart / fullText.length
+                : null;
+            const id = makeChunkId(paperId, label, sectionPage, seq, source, options.chunkIdPrefix);
+            sectionChunks.push({
+              chunkId: id,
+              paperId,
+              sectionLabel: label,
+              sectionTitle: title,
+              sectionType: type,
+              pageStart: block.pageIndex,
+              pageEnd: block.pageIndex,
+              text: sub,
+              tokenCount: countTokens(sub),
+              source,
+              positionRatio: posRatio,
+              parentChunkId: null,
+              chunkIndex: null,
+              contextBefore: null,
+              contextAfter: null,
+              blockType: block.blockType,
+              readingOrder: block.readingOrder,
+              columnLayout: structure.columnLayout,
+            });
+            seq++;
+          }
+        } else {
+          pending = [block];
+          pendingTokens = bTokens;
+        }
+      }
+    }
+    flush();
+
+    // parentChunkId + chunkIndex
+    if (sectionChunks.length > 1) {
+      const parentId = sectionChunks[0]!.chunkId;
+      for (let i = 1; i < sectionChunks.length; i++) {
+        sectionChunks[i]!.parentChunkId = parentId;
+        sectionChunks[i]!.chunkIndex = i;
+      }
+    }
+
+    // contextBefore / contextAfter
+    for (let i = 0; i < sectionChunks.length - 1; i++) {
+      sectionChunks[i]!.contextAfter = extractFirstSentence(sectionChunks[i + 1]!.text);
+    }
+    for (let i = 1; i < sectionChunks.length; i++) {
+      sectionChunks[i]!.contextBefore = extractFirstSentence(sectionChunks[i - 1]!.text);
+    }
+
+    results.push(...sectionChunks);
+
+    for (const child of sec.children) processSection(child);
+  }
+
+  for (const sec of structure.sections) {
+    processSection(sec);
+  }
+
+  const totalTokens = results.reduce((sum, c) => sum + c.tokenCount, 0);
+  logger?.info('[chunkText] Chunking complete (DLA path)', {
+    sections: structure.sections.length,
+    chunks: results.length,
+    totalTokens,
+    avgTokensPerChunk: results.length > 0 ? Math.round(totalTokens / results.length) : 0,
+    columnLayout: structure.columnLayout,
+    durationMs: Date.now() - t0,
+  });
+
+  return results;
 }

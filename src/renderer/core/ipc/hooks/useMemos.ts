@@ -10,8 +10,10 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tansta
 import { getAPI } from '../bridge';
 import type { Memo, NewMemo, MemoFilter, ConceptDraft } from '../../../../shared-types/models';
 import { handleError } from '../../errors/errorHandlers';
+import { useViewActive } from '../../context/ViewActiveContext';
 
 export function useMemoList(filter: MemoFilter) {
+  const viewActive = useViewActive();
   return useInfiniteQuery({
     queryKey: ['memos', filter],
     queryFn: ({ pageParam = 0 }) =>
@@ -23,14 +25,16 @@ export function useMemoList(filter: MemoFilter) {
       return allPages.reduce((sum, page) => sum + page.length, 0);
     },
     staleTime: 0,
+    enabled: viewActive,
   });
 }
 
 export function useMemo(memoId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['memos', 'detail', memoId],
     queryFn: () => getAPI().db.memos.get(memoId!),
-    enabled: !!memoId,
+    enabled: !!memoId && viewActive,
   });
 }
 

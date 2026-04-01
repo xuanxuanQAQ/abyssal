@@ -13,8 +13,8 @@ export interface AnnotationLayerProps {
   transform: Transform6;
   cropBox: CropBox;
   flashingAnnotationId: string | null;
-  onAnnotationHover: (id: string | null) => void;
-  onAnnotationClick: (id: string) => void;
+  onAnnotationHover?: (id: string | null) => void;
+  onAnnotationClick?: (id: string) => void;
 }
 
 import { HIGHLIGHT_COLOR_MAP as HIGHLIGHT_COLORS } from '../../shared/highlightColors';
@@ -30,8 +30,9 @@ interface ComputedRect {
 }
 
 /**
- * Annotation overlay layer (z-index: 2).
+ * Annotation overlay layer (z-index: 1, below TextLayer).
  * Renders highlight/note/conceptTag divs with mix-blend-mode: multiply.
+ * All rects are pointer-events: none so text selection passes through.
  */
 const AnnotationLayer = React.memo(function AnnotationLayer(
   props: AnnotationLayerProps,
@@ -43,8 +44,6 @@ const AnnotationLayer = React.memo(function AnnotationLayer(
     transform,
     cropBox,
     flashingAnnotationId,
-    onAnnotationHover,
-    onAnnotationClick,
   } = props;
 
   const computedRects = useMemo(() => {
@@ -98,7 +97,7 @@ const AnnotationLayer = React.memo(function AnnotationLayer(
         width: cssWidth,
         height: cssHeight,
         pointerEvents: 'none',
-        zIndex: 2,
+        zIndex: 1,
       }}
     >
       {computedRects.map((rect, index) => {
@@ -116,14 +115,11 @@ const AnnotationLayer = React.memo(function AnnotationLayer(
               width: rect.width,
               height: rect.height,
               background: rect.color,
-              pointerEvents: 'auto',
-              cursor: 'pointer',
+              mixBlendMode: 'multiply',
+              pointerEvents: 'none',
               borderRadius: 2,
               opacity: isFlashing ? 0.8 : undefined,
             }}
-            onMouseEnter={() => onAnnotationHover(rect.annotationId)}
-            onMouseLeave={() => onAnnotationHover(null)}
-            onClick={() => onAnnotationClick(rect.annotationId)}
           />
         );
       })}

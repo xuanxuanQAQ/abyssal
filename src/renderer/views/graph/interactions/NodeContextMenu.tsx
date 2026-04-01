@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import toast from 'react-hot-toast';
 import { useAppStore } from '../../../core/store';
+import { usePaper } from '../../../core/ipc/hooks/usePapers';
 
 interface NodeContextMenuProps {
   nodeId: string | null;
@@ -81,6 +83,7 @@ function NodeContextMenu({
   const navigateTo = useAppStore((s) => s.navigateTo);
   const focusGraphNode = useAppStore((s) => s.focusGraphNode);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { data: paper } = usePaper(nodeType === 'paper' ? nodeId : null);
 
   // Click-outside handler
   useEffect(() => {
@@ -133,7 +136,11 @@ function NodeContextMenu({
         <MenuItem
           label={t('graph.nodeMenu.openInReader')}
           onClick={() => {
-            // TODO: check fulltextStatus before navigating
+            if (paper?.fulltextStatus !== 'available') {
+              toast(t('graph.nodeMenu.fulltextNotAvailable'));
+              onOpenChange(false);
+              return;
+            }
             navigateTo({ type: 'paper', id: nodeId, view: 'reader' });
             onOpenChange(false);
           }}
@@ -143,7 +150,11 @@ function NodeContextMenu({
         <MenuItem
           label={t('graph.nodeMenu.viewAnalysisReport')}
           onClick={() => {
-            // TODO: check analysisStatus before navigating
+            if (paper?.analysisStatus !== 'completed') {
+              toast(t('graph.nodeMenu.analysisNotReady'));
+              onOpenChange(false);
+              return;
+            }
             navigateTo({ type: 'paper', id: nodeId, view: 'analysis' });
             onOpenChange(false);
           }}

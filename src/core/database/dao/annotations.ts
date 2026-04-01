@@ -163,6 +163,52 @@ export function countAnnotationsForPaperConcept(
   return row.cnt;
 }
 
+// ─── batchCountAnnotationsByPaper ───
+
+/**
+ * 批量统计某篇论文上所有概念的标注数量（用于子集选择评分预取）。
+ * 单次 SQL 替代 N 次 countAnnotationsForPaperConcept 调用。
+ */
+export function batchCountAnnotationsByPaper(
+  db: Database.Database,
+  paperId: PaperId,
+): Map<string, number> {
+  const rows = db
+    .prepare(
+      'SELECT concept_id, COUNT(*) AS cnt FROM annotations WHERE paper_id = ? AND concept_id IS NOT NULL GROUP BY concept_id',
+    )
+    .all(paperId) as Array<{ concept_id: string; cnt: number }>;
+  const result = new Map<string, number>();
+  for (const row of rows) {
+    result.set(row.concept_id, row.cnt);
+  }
+  return result;
+}
+
+// ─── batchCountMappingsByPapers ───
+
+/**
+ * 批量统计给定论文集中各概念的映射数量。
+ * 单次 SQL 替代 M 次 countMappingsForConceptInPapers 调用。
+ */
+export function batchCountMappingsByPapers(
+  db: Database.Database,
+  paperIds: string[],
+): Map<string, number> {
+  if (paperIds.length === 0) return new Map();
+  const placeholders = paperIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT concept_id, COUNT(*) AS cnt FROM paper_concept_map WHERE paper_id IN (${placeholders}) GROUP BY concept_id`,
+    )
+    .all(...paperIds) as Array<{ concept_id: string; cnt: number }>;
+  const result = new Map<string, number>();
+  for (const row of rows) {
+    result.set(row.concept_id, row.cnt);
+  }
+  return result;
+}
+
 // ─── getAnnotationsByConceptId ───
 
 export function getAnnotationsByConcept(

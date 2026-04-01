@@ -13,6 +13,7 @@ import {
   TimeoutError,
   RateLimitedError,
   AccessDeniedError,
+  PaperNotFoundError,
 } from '../types/errors';
 import type { Logger } from './logger';
 import { RateLimiter } from './rate-limiter';
@@ -36,6 +37,8 @@ export interface RequestOptions {
   body?: string | undefined;
   timeoutMs?: number | undefined;
   maxRedirects?: number | undefined;
+  /** External abort signal — allows caller to cancel the request (e.g. speculative execution). */
+  abortSignal?: AbortSignal | undefined;
 }
 
 export interface HttpResponse {
@@ -310,6 +313,15 @@ export class HttpClient {
     await this.proxyReady;
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
+    const externalSignal = options.abortSignal;
+
+    // Early check: if already aborted before we start
+    if (externalSignal?.aborted) {
+      throw new TimeoutError({
+        message: `Download aborted before start: ${url}`,
+        context: { url },
+      });
+    }
 
     let currentUrl = url;
     let redirectCount = 0;
@@ -336,10 +348,16 @@ export class HttpClient {
           controller.abort();
         }, timeoutMs);
 
+        // Link external abort signal to internal controller
+        const onExternalAbort = () => controller.abort();
+        externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+        // Clean up external listener when this promise settles
+        const cleanupExternal = () => externalSignal?.removeEventListener('abort', onExternalAbort);
+
         // 防止 abort + writeStream.error 双重 reject
         let settled = false;
-        const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err); } };
-        const safeResolve = (v: { type: 'redirect'; location: string; status: number } | { type: 'done'; status: number; fileSizeBytes: number }) => { if (!settled) { settled = true; resolve(v); } };
+        const safeReject = (err: Error) => { if (!settled) { settled = true; cleanupExternal(); reject(err); } };
+        const safeResolve = (v: { type: 'redirect'; location: string; status: number } | { type: 'done'; status: number; fileSizeBytes: number }) => { if (!settled) { settled = true; cleanupExternal(); resolve(v); } };
 
         const dlOpts: Record<string, unknown> = {
           method: 'GET',
@@ -504,6 +522,12 @@ export class HttpClient {
     if (status === 403) {
       throw new AccessDeniedError({
         message: `Access denied (403): ${url}`,
+        context: { url },
+      });
+    }
+    if (status === 404) {
+      throw new PaperNotFoundError({
+        message: `Not found (404): ${url}`,
         context: { url },
       });
     }

@@ -1,6 +1,9 @@
 // ═══ Row Mapper ═══
 // snake_case (SQLite 列名) ↔ camelCase (TypeScript 字段名) 转换
 // JSON 列的 serialize / parse
+//
+// 列元数据定义：COLUMN_TYPES 是唯一权威来源。
+// 新增 JSON 或 boolean 列时只需在此处更新一行。
 
 // ─── snake_case → camelCase ───
 
@@ -26,36 +29,48 @@ function camelToSnake(s: string): string {
   return cached;
 }
 
-// ─── JSON 列集合 ───
-// 这些列在数据库中存储为 TEXT（JSON 字符串），需要在映射时 parse/stringify
+// ─── 列元数据（唯一权威来源） ───
+// 新增/修改表结构中的 JSON 或 boolean 列时，只需在此处更新。
+// schemas.ts 中的 Zod schema 应与此保持一致（z.array → json, z.boolean → boolean）。
 
-const JSON_COLUMNS = new Set([
-  'authors',
-  'editors',
-  'search_keywords',
-  'history',
-  'evidence',
-  'concept_ids',
-  'paper_ids',
-  'source_paper_ids',
-  'linked_note_ids',
-  'linked_paper_ids',
-  'linked_concept_ids',
-  'tags',
-  'edited_paragraphs',
-  'metadata',
-]);
+const COLUMN_TYPES: Record<string, 'json' | 'boolean'> = {
+  // JSON 列（数据库中存储为 TEXT JSON 字符串）
+  authors: 'json',
+  editors: 'json',
+  search_keywords: 'json',
+  history: 'json',
+  evidence: 'json',
+  concept_ids: 'json',
+  paper_ids: 'json',
+  source_paper_ids: 'json',
+  linked_note_ids: 'json',
+  linked_paper_ids: 'json',
+  linked_concept_ids: 'json',
+  tags: 'json',
+  edited_paragraphs: 'json',
+  metadata: 'json',
 
-// ─── 布尔列集合 ───
-// 数据库中存储为 INTEGER (0/1)，TypeScript 中为 boolean
+  // Boolean 列（数据库中存储为 INTEGER 0/1）
+  biblio_complete: 'boolean',
+  reviewed: 'boolean',
+  deprecated: 'boolean',
+  indexed: 'boolean',
+  is_breaking: 'boolean',
+};
 
-const BOOLEAN_COLUMNS = new Set([
-  'biblio_complete',
-  'reviewed',
-  'deprecated',
-  'indexed',
-  'is_breaking',
-]);
+/** 数据库中以 TEXT (JSON) 存储、TypeScript 中为数组/对象的列集合（snake_case） */
+export const JSON_COLUMNS: ReadonlySet<string> = new Set(
+  Object.entries(COLUMN_TYPES)
+    .filter(([, t]) => t === 'json')
+    .map(([k]) => k),
+);
+
+/** 数据库中以 INTEGER (0/1) 存储、TypeScript 中为 boolean 的列集合（snake_case） */
+export const BOOLEAN_COLUMNS: ReadonlySet<string> = new Set(
+  Object.entries(COLUMN_TYPES)
+    .filter(([, t]) => t === 'boolean')
+    .map(([k]) => k),
+);
 
 // ─── fromRow: 数据库行 → TypeScript 对象 ───
 

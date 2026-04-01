@@ -62,6 +62,12 @@ perSourceTimeoutMs = 30000
 
 const GLOBAL_CONFIG_FILENAME = 'global-config.toml';
 
+/** Serialize a JS value to TOML literal */
+function toTomlValue(val: unknown): string {
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  return JSON.stringify(val); // strings, arrays
+}
+
 /**
  * 加载全局配置。
  *
@@ -161,14 +167,35 @@ export function saveGlobalConfig(
   }
 
   lines.push('', '[llm]');
-  lines.push(`defaultProvider = ${JSON.stringify(merged.llm.defaultProvider)}`);
-  lines.push(`defaultModel = ${JSON.stringify(merged.llm.defaultModel)}`);
+  for (const [key, val] of Object.entries(merged.llm)) {
+    if (val === null || val === undefined) continue;
+    if (typeof val === 'object' && !Array.isArray(val)) {
+      // nested table (e.g. workflowOverrides)
+      lines.push('');
+      lines.push(`[llm.${key}]`);
+      for (const [sk, sv] of Object.entries(val as Record<string, unknown>)) {
+        if (sv === null || sv === undefined) continue;
+        if (typeof sv === 'object' && !Array.isArray(sv)) {
+          lines.push('');
+          lines.push(`[llm.${key}.${sk}]`);
+          for (const [ssk, ssv] of Object.entries(sv as Record<string, unknown>)) {
+            if (ssv === null || ssv === undefined) continue;
+            lines.push(`${ssk} = ${toTomlValue(ssv)}`);
+          }
+        } else {
+          lines.push(`${sk} = ${toTomlValue(sv)}`);
+        }
+      }
+    } else {
+      lines.push(`${key} = ${toTomlValue(val)}`);
+    }
+  }
 
   lines.push('', '[rag]');
-  lines.push(`embeddingModel = ${JSON.stringify(merged.rag.embeddingModel)}`);
-  lines.push(`embeddingDimension = ${merged.rag.embeddingDimension}`);
-  lines.push(`rerankerBackend = ${JSON.stringify(merged.rag.rerankerBackend)}`);
-  lines.push(`correctiveRagEnabled = ${merged.rag.correctiveRagEnabled}`);
+  for (const [key, val] of Object.entries(merged.rag)) {
+    if (val === null || val === undefined) continue;
+    lines.push(`${key} = ${toTomlValue(val)}`);
+  }
 
   lines.push('', '[acquire]');
   lines.push(`enabledSources = ${JSON.stringify(merged.acquire.enabledSources)}`);

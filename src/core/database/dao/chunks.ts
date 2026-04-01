@@ -12,6 +12,7 @@ import type { TextChunk, ChunkSource } from '../../types/chunk';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 import { embeddingToBuffer, validateAndNormalize } from '../vector-ops';
+import { hasLayoutColumns } from '../prepared-statements';
 import type { Logger } from '../../infra/logger';
 
 /**
@@ -53,16 +54,28 @@ function runInsertChunkText(
 
   // Fix #3: 使用 RETURNING rowid 替代 lastInsertRowid()，
   // 切断与连接级全局状态的耦合——语句级原子性寻址。
-  const row = db.prepare(`
-    INSERT INTO chunks (
-      chunk_id, paper_id, section_label, section_title, section_type,
-      page_start, page_end, text, token_count, source,
-      position_ratio, parent_chunk_id, chunk_index,
-      context_before, context_after, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(chunk_id) DO UPDATE SET created_at = created_at
-    RETURNING rowid
-  `).get(
+  // 布局列由 migration 016 添加，旧 schema 中不存在时降级。
+  const withLayout = hasLayoutColumns(db);
+  const sql = withLayout
+    ? `INSERT INTO chunks (
+        chunk_id, paper_id, section_label, section_title, section_type,
+        page_start, page_end, text, token_count, source,
+        position_ratio, parent_chunk_id, chunk_index,
+        context_before, context_after, created_at,
+        block_type, reading_order, column_layout
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET created_at = created_at
+      RETURNING rowid`
+    : `INSERT INTO chunks (
+        chunk_id, paper_id, section_label, section_title, section_type,
+        page_start, page_end, text, token_count, source,
+        position_ratio, parent_chunk_id, chunk_index,
+        context_before, context_after, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chunk_id) DO UPDATE SET created_at = created_at
+      RETURNING rowid`;
+
+  const baseParams = [
     chunk.chunkId,
     chunk.paperId,
     chunk.sectionLabel,
@@ -79,7 +92,16 @@ function runInsertChunkText(
     chunk.contextBefore,
     chunk.contextAfter,
     chunk.createdAt ?? now(),
-  ) as { rowid: number };
+  ];
+  if (withLayout) {
+    baseParams.push(
+      chunk.blockType ?? null,
+      chunk.readingOrder ?? null,
+      chunk.columnLayout ?? null,
+    );
+  }
+
+  const row = db.prepare(sql).get(...baseParams) as { rowid: number };
   return { rowid: row.rowid, inserted: true };
 }
 

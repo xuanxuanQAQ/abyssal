@@ -2,6 +2,8 @@
 //
 // 引文标准化闭环：BibTeX/RIS 导入导出 + CrossRef 补全 + CSL 格式化 + 引文替换
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { PaperId } from '../types/common';
 import type { PaperMetadata } from '../types/paper';
 import type {
@@ -12,8 +14,6 @@ import type {
   AnystyleParsedEntry,
   ScanAndReplaceResult,
 } from '../types/bibliography';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { AbyssalConfig } from '../types/config';
 import type { Logger } from '../infra/logger';
 import { HttpClient } from '../infra/http-client';
@@ -40,7 +40,7 @@ import {
   type AvailableCslStyle,
 } from './csl-manager';
 
-// ─── 类型重导出 ───
+// ─── 子模块重导出（仅 export from，无双重 import） ───
 
 export { importBibtex } from './import-bibtex';
 export { exportBibtex } from './export-bibtex';
@@ -80,24 +80,38 @@ export class BibliographyService {
       userAgentEmail: config.apiKeys.openalexEmail ?? undefined,
     });
     this.crossRefLimiter = createRateLimiter('crossRef');
+
+    // 从 config 自动初始化 CSL Engine（需要 cslStylesDir + defaultCslStyleId）
+    const { cslStylesDir, cslLocalesDir, defaultCslStyleId } = config.writing;
+    if (cslStylesDir && cslLocalesDir) {
+      const stylePath = path.join(cslStylesDir, `${defaultCslStyleId}.csl`);
+      if (fs.existsSync(stylePath) && fs.existsSync(cslLocalesDir)) {
+        this.cslEngine = new CslEngine(stylePath, cslLocalesDir);
+        logger.debug('CSL engine initialized from config', { stylePath, cslLocalesDir });
+      }
+    }
   }
 
-  // ─── CSL Engine 懒加载 ───
+  // ─── CSL Engine ───
 
-  private getEngine(stylePath?: string | undefined, localePath?: string | undefined): CslEngine {
-    // TODO: stylePath / localePath 应从 config 或 workspace 解析
-    if (!this.cslEngine && stylePath && localePath) {
-      this.cslEngine = new CslEngine(stylePath, localePath, 'en-US');
-    }
+  private getEngine(): CslEngine {
     if (!this.cslEngine) {
-      throw new Error('CSL engine not initialized — provide stylePath and localePath');
+      throw new Error(
+        'CSL engine not initialized — ensure config.writing.cslStylesDir and cslLocalesDir are set',
+      );
     }
     return this.cslEngine;
   }
 
-  /** 使用指定的 CSL 样式初始化引擎 */
-  initCslEngine(stylePath: string, localePath: string, locale?: string | undefined): void {
-    this.cslEngine = new CslEngine(stylePath, localePath, locale ?? 'en-US');
+  /** 切换 CSL 样式（格式变更时调用） */
+  switchCslStyle(styleId: string): void {
+    const { cslStylesDir, cslLocalesDir } = this.config.writing;
+    const stylePath = path.join(cslStylesDir, `${styleId}.csl`);
+    this.cslEngine = new CslEngine(stylePath, cslLocalesDir);
+  }
+
+  get engineReady(): boolean {
+    return this.cslEngine !== null;
   }
 
   // ─── §1 BibTeX ───
@@ -192,21 +206,21 @@ export class BibliographyService {
 
   // ─── §1.6 可用格式列表 ───
 
-  listAvailableStyles(stylesDir: string): AvailableCslStyle[] {
-    return listAvailableStyles(stylesDir);
+  listAvailableStyles(): AvailableCslStyle[] {
+    return listAvailableStyles(this.config.writing.cslStylesDir);
   }
 
   // ─── §1.5 CSL 文件校验 + 添加 ───
 
   validateAndAddCslFile(
     filePath: string,
-    stylesDir: string,
   ): { success: boolean; error?: string | undefined } {
     const result = validateCslFile(filePath);
     if (!result.valid) {
       return { success: false, error: result.error };
     }
 
+    const stylesDir = this.config.writing.cslStylesDir;
     const fileName = path.basename(filePath);
     const destPath = path.join(stylesDir, fileName);
     try {

@@ -185,6 +185,33 @@ export interface IDbService {
   deleteChatSession(contextKey: string): void;
   listChatSessions(): ChatSessionSummary[];
 
+  // ─── LLM 审计日志 ───
+  insertAuditLog(entry: {
+    workflowId?: string | null;
+    model: string;
+    provider: string;
+    inputTokens: number;
+    outputTokens: number;
+    durationMs: number;
+    costUsd?: number | null;
+    paperId?: string | null;
+    finishReason?: string | null;
+  }): number;
+
+  // ─── 会话状态持久化 ───
+  saveSessionMemory(entries: Array<{
+    id: string; type: string; content: string; source: string;
+    linked_entities: string; importance: number;
+    created_at: number; last_accessed_at: number; tags: string | null;
+  }>): void;
+  loadSessionMemory(): Array<{
+    id: string; type: string; content: string; source: string;
+    linked_entities: string; importance: number;
+    created_at: number; last_accessed_at: number; tags: string | null;
+  }>;
+  saveSessionConversation(key: string, messagesJson: string): void;
+  loadSessionConversation(key: string): string | null;
+
   // ─── 统计 ───
   getStats(): DatabaseStats;
   checkIntegrity(): IntegrityReport;
@@ -212,3 +239,91 @@ export type AsyncDbService = {
     ? (...args: A) => Promise<Awaited<R>>
     : IDbService[K];
 };
+
+/**
+ * IDbService 的全部方法名集合（运行时）。
+ *
+ * 使用 Record<keyof IDbService, true> 保证编译期同步：
+ * - IDbService 新增方法 → 此处缺少对应 key → TS 报错
+ * - IDbService 删除方法 → 此处多余 key → TS 报错
+ *
+ * 被 DbProxy 的 Proxy get-trap 用于区分"合法 RPC 方法"与"不存在的属性"。
+ */
+const _dbServiceMethodMap: Record<keyof IDbService, true> = {
+  // 论文
+  addPaper: true, updatePaper: true, getPaper: true, queryPapers: true,
+  deletePaper: true, resetAnalysis: true,
+  // 引用
+  addCitation: true, addCitations: true, getCitationsFrom: true,
+  getCitationsTo: true, deleteCitation: true,
+  // 概念
+  addConcept: true, updateConcept: true, deprecateConcept: true,
+  syncConcepts: true, mergeConcepts: true, splitConcept: true,
+  gcConceptChange: true, getConcept: true, getAllConcepts: true,
+  // 映射
+  mapPaperConcept: true, mapPaperConceptBatch: true, updateMapping: true,
+  getMappingsByPaper: true, getMappingsByConcept: true, getMapping: true,
+  deleteMapping: true, getConceptMatrix: true, adjudicateMapping: true,
+  countMappingsForConceptInPapers: true, getConceptMappingStats: true,
+  // 分析
+  completeAnalysis: true,
+  // 标注
+  addAnnotation: true, getAnnotations: true, getAnnotation: true,
+  updateAnnotation: true, deleteAnnotation: true,
+  getAnnotationsByConcept: true, countAnnotationsForPaperConcept: true,
+  // 搜索历史
+  listDiscoverRuns: true, addDiscoverRun: true,
+  // 种子
+  addSeed: true, getSeeds: true, removeSeed: true,
+  // 检索日志
+  addSearchLog: true, getSearchLog: true,
+  // 文本块
+  insertChunkTextOnly: true, insertChunksTextOnlyBatch: true,
+  insertChunkVectors: true, insertChunk: true, insertChunksBatch: true,
+  deleteChunksByPaper: true, deleteChunksByPrefix: true,
+  getChunksByPaper: true, getChunkByChunkId: true,
+  // Memo
+  addMemo: true, markMemoIndexed: true, updateMemo: true,
+  getMemosByEntity: true, queryMemos: true, getMemo: true, deleteMemo: true,
+  // 笔记
+  createNote: true, onNoteFileChanged: true, linkMemoToNote: true,
+  linkNoteToConcept: true, updateNoteMeta: true, queryNotes: true,
+  getNote: true, getNoteByFilePath: true, getAllNotes: true, deleteNote: true,
+  // 概念建议
+  addSuggestedConcept: true, adoptSuggestedConcept: true,
+  dismissSuggestedConcept: true, getSuggestedConcepts: true,
+  getSuggestedConcept: true, restoreSuggestedConcept: true,
+  getSuggestedConceptsStats: true,
+  // 文章
+  createArticle: true, getArticle: true, updateArticle: true,
+  getAllArticles: true, deleteArticle: true, setOutline: true,
+  getOutline: true, getOutlineEntry: true, updateOutlineEntry: true,
+  markOutlineEntryDeleted: true, searchSections: true,
+  addSectionDraft: true, getSectionDrafts: true, markEditedParagraphs: true,
+  // 全文档
+  getFullDocument: true, saveDocumentSections: true, cleanupVersions: true,
+  // 文章资产
+  addArticleAsset: true, getArticleAssets: true, getArticleAsset: true,
+  deleteArticleAsset: true,
+  // 关系
+  computeRelationsForPaper: true, recomputeAllRelations: true,
+  getRelationGraph: true, getRelationsForPaper: true,
+  // 聊天
+  saveChatMessage: true, getChatHistory: true, deleteChatSession: true,
+  listChatSessions: true,
+  // 审计
+  insertAuditLog: true,
+  // 会话状态
+  saveSessionMemory: true, loadSessionMemory: true,
+  saveSessionConversation: true, loadSessionConversation: true,
+  // 统计
+  getStats: true, checkIntegrity: true,
+  // 文件路径
+  getPaperFilePaths: true, getPaperFigureDir: true,
+  // 快照
+  createSnapshot: true, listSnapshots: true, cleanupSnapshots: true,
+  // 热迁移 / WAL
+  runHotMigration: true, walCheckpoint: true,
+};
+
+export const DB_SERVICE_METHODS: ReadonlySet<string> = new Set(Object.keys(_dbServiceMethodMap));

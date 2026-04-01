@@ -730,7 +730,8 @@ export interface SplitAssignment {
  * 将原概念的映射按用户指定的 assignments 迁移到新概念 A 或 B，
  * 然后废弃原概念。
  *
- * TODO — LLM 预分配（>20 条映射时），需注入 LlmClient
+ * 注意：当映射数 >20 时，Orchestrator 层应在调用 completeSplit 前
+ * 使用 LLM 预生成 assignments，本 DAO 不负责 LLM 调用。
  */
 export function completeSplit(
   db: Database.Database,

@@ -1,17 +1,10 @@
 // ═══ 书目完整度检查 ═══
 // §5: 必填字段检测 + 完整度比率
 
-import type { PaperId } from '../types/common';
-import type { PaperMetadata, PaperType } from '../types/paper';
+import type { PaperMetadata } from '../types/paper';
 import type { BiblioCompletenessReport } from '../types/bibliography';
 import type { CslEngine } from './csl-engine';
-
-function isEmpty(value: unknown): boolean {
-  if (value === null || value === undefined) return true;
-  if (typeof value === 'string' && value.trim().length === 0) return true;
-  if (Array.isArray(value) && value.length === 0) return true;
-  return false;
-}
+import { isEmpty } from '../infra/utils';
 
 export function checkBiblioCompleteness(
   paper: PaperMetadata,

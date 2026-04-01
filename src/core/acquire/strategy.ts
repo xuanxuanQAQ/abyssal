@@ -25,6 +25,8 @@ export interface DownloadCandidate {
   headers: Record<string, string>;
   /** 是否为复杂源（需要特殊执行逻辑，不参与投机并行） */
   complex: boolean;
+  /** 跳过 preflight HEAD 检查（已知直出 PDF 的高置信度源） */
+  skipPreflight: boolean;
   /** 评分明细（调试用） */
   scoreBreakdown: Record<string, number>;
 }
@@ -110,6 +112,7 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
     baseScore: number,
     opts: {
       complex?: boolean;
+      skipPreflight?: boolean;
       headers?: Record<string, string>;
       extraBreakdown?: Record<string, number>;
     } = {},
@@ -174,20 +177,24 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
       score: totalScore,
       headers,
       complex: opts.complex ?? false,
+      skipPreflight: opts.skipPreflight ?? false,
       scoreBreakdown: breakdown,
     });
   };
 
   // ── 1. Fast Path 候选 ──
+  // Known direct PDF endpoints (arXiv, PMC, bioRxiv, Zenodo) — skip preflight HEAD
   if (fastPath.matched && fastPath.pdfUrl) {
-    addCandidate(fastPath.source ?? 'fast-path', fastPath.pdfUrl, SCORES.FAST_PATH_OA);
+    addCandidate(fastPath.source ?? 'fast-path', fastPath.pdfUrl, SCORES.FAST_PATH_OA, { skipPreflight: true });
   }
 
   // ── 2. OpenAlex PDF URLs ──
   if (recon?.openAlexData) {
+    // OpenAlex pdfUrls are typically direct PDF links — skip preflight
     for (const url of recon.openAlexData.pdfUrls) {
-      addCandidate('openalex-oa', url, SCORES.OPENALEX_PDF);
+      addCandidate('openalex-oa', url, SCORES.OPENALEX_PDF, { skipPreflight: true });
     }
+    // Repository URLs may be landing pages — keep preflight
     for (const url of recon.openAlexData.repositoryUrls) {
       addCandidate('openalex-repo', url, SCORES.OPENALEX_REPO);
     }
@@ -195,8 +202,9 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
 
   // ── 3. CrossRef PDF Links ──
   if (recon?.crossRefData) {
+    // CrossRef PDF links are usually direct — skip preflight
     for (const url of recon.crossRefData.pdfLinks) {
-      addCandidate('crossref-pdf', url, SCORES.CROSSREF_PDF);
+      addCandidate('crossref-pdf', url, SCORES.CROSSREF_PDF, { skipPreflight: true });
     }
   }
 

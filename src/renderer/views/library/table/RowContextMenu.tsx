@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { useAppStore } from '../../../core/store';
-import { useUpdatePaper, useDeletePaper } from '../../../core/ipc/hooks/usePapers';
+import { useUpdatePaper, useDeletePaper, useResetProcess, useResetFulltext } from '../../../core/ipc/hooks/usePapers';
 import { useAcquireFulltext, useLinkLocalPdf } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import type { Paper } from '../../../../shared-types/models';
@@ -51,28 +51,45 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
   const deletePaper = useDeletePaper();
   const acquireFulltext = useAcquireFulltext();
   const linkLocalPdf = useLinkLocalPdf();
+  const resetProcess = useResetProcess();
+  const resetFulltext = useResetFulltext();
   const startPipeline = useStartPipeline();
 
-  const handleNavigateReader = () => {
-    navigateTo({ type: 'paper', id: paper.id, view: 'reader' });
-  };
-
-  const handleNavigateAnalysis = () => {
-    navigateTo({ type: 'paper', id: paper.id, view: 'analysis' });
-  };
-
-  const handleNavigateGraph = () => {
-    navigateTo({ type: 'graph', focusNodeId: paper.id });
-  };
+  // ── 状态派生 ──
+  const hasFulltext = paper.fulltextStatus === 'available' || !!paper.fulltextPath;
+  const hasText = !!paper.textPath;
+  const hasAnalysis = paper.analysisStatus === 'completed';
+  const isAcquiring = paper.fulltextStatus === 'pending';
+  const isAnalyzing = paper.analysisStatus === 'in_progress';
 
   const handleSetRelevance = (rel: Relevance) => {
     updatePaper.mutate({ id: paper.id, patch: { relevance: rel } });
   };
 
   const handleDelete = () => {
-    // TODO: 确认 Dialog
+    const pr = paper as unknown as Record<string, unknown>;
+    const confirmed = window.confirm(
+      t('library.contextMenu.deleteConfirm', { title: (pr['title'] as string) ?? paper.id })
+    );
+    if (!confirmed) return;
     deletePaper.mutate(paper.id);
   };
+
+  const handleCopyBibtex = () => {
+    const pr = paper as unknown as Record<string, unknown>;
+    const key = (pr['bibtexKey'] as string) ?? (pr['id'] as string) ?? 'unknown';
+    const title = (pr['title'] as string) ?? '';
+    const authors = (pr['authors'] as string) ?? '';
+    const year = (pr['year'] as number) ?? 0;
+    const doi = (pr['doi'] as string) ?? '';
+    const bibtex = `@article{${key},\n  title = {${title}},\n  author = {${authors}},\n  year = {${year}}${doi ? `,\n  doi = {${doi}}` : ''}\n}`;
+    navigator.clipboard.writeText(bibtex).then(() => {
+      toast.success(t('library.contextMenu.bibtexCopied'));
+    });
+  };
+
+  const separatorStyle: React.CSSProperties = { height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' };
+  const dangerStyle: React.CSSProperties = { ...menuItemStyle, color: 'var(--danger)' };
 
   return (
     <ContextMenu.Root>
@@ -81,29 +98,44 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content style={menuContentStyle}>
+          {/* ── 导航区 ── */}
+          {hasFulltext && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => navigateTo({ type: 'paper', id: paper.id, view: 'reader' })}
+            >
+              {t('library.contextMenu.openInReader')}
+            </ContextMenu.Item>
+          )}
+          {hasFulltext && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => {
+                const fp = paper.fulltextPath;
+                if (fp) window.open(`file://${fp}`);
+              }}
+            >
+              {t('library.contextMenu.openPdf')}
+            </ContextMenu.Item>
+          )}
+          {hasAnalysis && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => navigateTo({ type: 'paper', id: paper.id, view: 'analysis' })}
+            >
+              {t('library.contextMenu.viewAnalysisReport')}
+            </ContextMenu.Item>
+          )}
           <ContextMenu.Item
             style={menuItemStyle}
-            onSelect={handleNavigateReader}
-            disabled={paper.fulltextStatus !== 'available'}
-          >
-            {t('library.contextMenu.openInReader')}
-          </ContextMenu.Item>
-          <ContextMenu.Item
-            style={menuItemStyle}
-            onSelect={handleNavigateAnalysis}
-            disabled={paper.analysisStatus !== 'completed'}
-          >
-            {t('library.contextMenu.viewAnalysisReport')}
-          </ContextMenu.Item>
-          <ContextMenu.Item
-            style={menuItemStyle}
-            onSelect={handleNavigateGraph}
+            onSelect={() => navigateTo({ type: 'graph', focusNodeId: paper.id })}
           >
             {t('library.contextMenu.locateInGraph')}
           </ContextMenu.Item>
 
-          <ContextMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
+          <ContextMenu.Separator style={separatorStyle} />
 
+          {/* ── 属性 ── */}
           <ContextMenu.Sub>
             <ContextMenu.SubTrigger style={menuItemStyle}>
               {t('library.contextMenu.setRelevance')}
@@ -124,69 +156,84 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
             </ContextMenu.Portal>
           </ContextMenu.Sub>
 
-          <ContextMenu.Item
-            style={menuItemStyle}
-            onSelect={() => {
-              if (paper.fulltextStatus === 'available') {
-                toast(t('library.contextMenu.alreadyAcquired'));
-                return;
-              }
-              if (paper.fulltextStatus === 'pending') {
-                toast(t('library.contextMenu.acquireInProgress'));
-                return;
-              }
-              acquireFulltext.mutate(paper.id);
-            }}
-          >
-            {t('library.contextMenu.acquireFulltext')}
-          </ContextMenu.Item>
-          <ContextMenu.Item
-            style={menuItemStyle}
-            onSelect={() => {
-              if (paper.fulltextStatus === 'available') {
-                toast(t('library.contextMenu.alreadyAcquired'));
-                return;
-              }
-              linkLocalPdf.mutate({ paperId: paper.id });
-            }}
-          >
-            {t('library.contextMenu.linkLocalPdf')}
-          </ContextMenu.Item>
-          <ContextMenu.Item
-            style={menuItemStyle}
-            onSelect={() => {
-              if (paper.analysisStatus === 'completed') {
-                toast(t('library.contextMenu.alreadyAnalyzed'));
-                return;
-              }
-              if (paper.analysisStatus === 'in_progress') {
-                toast(t('library.contextMenu.analysisInProgress'));
-                return;
-              }
-              if (paper.fulltextStatus !== 'available') {
-                toast(t('library.contextMenu.fulltextRequired'));
-                return;
-              }
-              startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paper.id] } });
-            }}
-          >
-            {t('library.contextMenu.triggerAnalysis')}
-          </ContextMenu.Item>
+          {/* ── 操作区：仅显示当前可执行的操作 ── */}
+          {!hasFulltext && !isAcquiring && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => acquireFulltext.mutate(paper.id)}
+            >
+              {t('library.contextMenu.acquireFulltext')}
+            </ContextMenu.Item>
+          )}
+          {!hasFulltext && !isAcquiring && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => linkLocalPdf.mutate({ paperId: paper.id })}
+            >
+              {t('library.contextMenu.linkLocalPdf')}
+            </ContextMenu.Item>
+          )}
+          {hasFulltext && !hasText && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => startPipeline.mutate({ workflow: 'process', config: { paperIds: [paper.id] } })}
+            >
+              {t('library.contextMenu.triggerProcess')}
+            </ContextMenu.Item>
+          )}
+          {hasFulltext && !hasAnalysis && !isAnalyzing && (
+            <ContextMenu.Item
+              style={menuItemStyle}
+              onSelect={() => startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paper.id] } })}
+            >
+              {t('library.contextMenu.triggerAnalysis')}
+            </ContextMenu.Item>
+          )}
 
-          <ContextMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
+          <ContextMenu.Separator style={separatorStyle} />
 
           <ContextMenu.Item style={menuItemStyle}>
             {t('library.contextMenu.editTags')}
           </ContextMenu.Item>
-          <ContextMenu.Item style={menuItemStyle}>
-            {/* TODO: 需要 bibliography 模块 */}
+          <ContextMenu.Item style={menuItemStyle} onSelect={handleCopyBibtex}>
             {t('library.contextMenu.copyBibtex')}
           </ContextMenu.Item>
 
-          <ContextMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
+          <ContextMenu.Separator style={separatorStyle} />
 
+          {/* ── 危险区：仅显示有东西可删的选项 ── */}
+          {hasText && (
+            <ContextMenu.Item
+              style={dangerStyle}
+              onSelect={() => {
+                const pr = paper as unknown as Record<string, unknown>;
+                const confirmed = window.confirm(
+                  t('library.contextMenu.resetProcessConfirm', { title: (pr['title'] as string) ?? paper.id })
+                );
+                if (!confirmed) return;
+                resetProcess.mutate(paper.id);
+              }}
+            >
+              {t('library.contextMenu.resetProcess')}
+            </ContextMenu.Item>
+          )}
+          {hasFulltext && (
+            <ContextMenu.Item
+              style={dangerStyle}
+              onSelect={() => {
+                const pr = paper as unknown as Record<string, unknown>;
+                const confirmed = window.confirm(
+                  t('library.contextMenu.resetFulltextConfirm', { title: (pr['title'] as string) ?? paper.id })
+                );
+                if (!confirmed) return;
+                resetFulltext.mutate(paper.id);
+              }}
+            >
+              {t('library.contextMenu.resetFulltext')}
+            </ContextMenu.Item>
+          )}
           <ContextMenu.Item
-            style={{ ...menuItemStyle, color: 'var(--danger)' }}
+            style={dangerStyle}
             onSelect={handleDelete}
           >
             {t('common.delete')}

@@ -2,8 +2,9 @@ import React, { useRef, useEffect } from 'react';
 import { CanvasLayer } from './layers/CanvasLayer';
 import { TextLayer } from './layers/TextLayer';
 import { AnnotationLayer } from './layers/AnnotationLayer';
+import { BlockOverlayLayer } from './layers/BlockOverlayLayer';
 import { InteractionLayer } from './layers/InteractionLayer';
-import type { Annotation } from '../../../../shared-types/models';
+import type { Annotation, ContentBlockDTO } from '../../../../shared-types/models';
 import type { PageMetadata } from '../core/pageMetadataPreloader';
 import type { Transform6 } from '../math/coordinateTransform';
 import type { MemoryBudget } from '../core/memoryBudget';
@@ -22,7 +23,7 @@ export interface PageSlotProps {
     pageNumber: number,
     scale: number,
     dpr: number,
-  ) => Promise<void>;
+  ) => { promise: Promise<void>; cancel: () => void };
   getPage: (pageNumber: number) => Promise<any>;
   onAreaSelect: (
     pageNumber: number,
@@ -31,11 +32,14 @@ export interface PageSlotProps {
   onAnnotationHover: (id: string | null) => void;
   onAnnotationClick: (id: string) => void;
   memoryBudget?: MemoryBudget;
+  /** DLA content blocks for this page */
+  blocks?: ContentBlockDTO[];
+  onBlockSelect?: (block: ContentBlockDTO) => void;
 }
 
 /**
- * Single page container with 4-layer stack + placeholder logic.
- * z-index 0: CanvasLayer, 1: TextLayer, 2: AnnotationLayer, 3: InteractionLayer
+ * Single page container with 5-layer stack + placeholder logic.
+ * z-index 0: CanvasLayer, 1: AnnotationLayer, 2: TextLayer, 3: BlockOverlayLayer, 4: InteractionLayer
  */
 const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
   const {
@@ -53,6 +57,8 @@ const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
     onAnnotationHover,
     onAnnotationClick,
     memoryBudget,
+    blocks = [],
+    onBlockSelect,
   } = props;
 
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
@@ -127,7 +133,7 @@ const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
     );
   }
 
-  // Full render → all 4 layers
+  // Full render → all 5 layers
   return (
     <div
       data-page={pageNumber}
@@ -156,6 +162,7 @@ const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
         scale={scale}
         getPage={getPage}
         isInRenderWindow={true}
+        blocks={blocks}
       />
       <AnnotationLayer
         pageNumber={pageNumber}
@@ -167,6 +174,13 @@ const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
         flashingAnnotationId={flashingAnnotationId}
         onAnnotationHover={onAnnotationHover}
         onAnnotationClick={onAnnotationClick}
+      />
+      <BlockOverlayLayer
+        pageNumber={pageNumber}
+        cssWidth={cssWidth}
+        cssHeight={cssHeight}
+        blocks={blocks}
+        {...(onBlockSelect ? { onBlockSelect } : {})}
       />
       <InteractionLayer
         pageNumber={pageNumber}

@@ -13,7 +13,7 @@ export interface CanvasLayerProps {
     pageNumber: number,
     scale: number,
     dpr: number,
-  ) => Promise<void>;
+  ) => { promise: Promise<void>; cancel: () => void };
   isInRenderWindow: boolean;
 }
 
@@ -49,9 +49,18 @@ const CanvasLayer = React.memo(function CanvasLayer(props: CanvasLayerProps) {
     return activeCanvasRef.current === 'a' ? canvasBRef.current : canvasARef.current;
   }, []);
 
+  const pendingRenderRef = useRef<{ cancel(): void } | null>(null);
+
   useEffect(() => {
     if (!isInRenderWindow) {
       return;
+    }
+
+    // Cancel any in-flight render on re-run (e.g. StrictMode or scale change)
+    if (pendingRenderRef.current) {
+      pendingRenderRef.current.cancel();
+      pendingRenderRef.current = null;
+      isRenderingRef.current = false;
     }
 
     if (isRenderingRef.current) {
@@ -84,8 +93,34 @@ const CanvasLayer = React.memo(function CanvasLayer(props: CanvasLayerProps) {
 
     isRenderingRef.current = true;
 
-    renderPage(backgroundCanvas, pageNumber, scale, dpr)
+    // Obtain a cancellable handle for the render
+    const ctx = backgroundCanvas.getContext('2d');
+    if (!ctx) {
+      isRenderingRef.current = false;
+      return;
+    }
+
+    // renderPage now returns { promise, cancel } so we can properly abort
+    // the underlying pdfjs render task (fixes StrictMode double-invoke crash).
+    let swapCancelled = false;
+    const { promise: renderPromise, cancel: cancelRenderTask } = renderPage(
+      backgroundCanvas,
+      pageNumber,
+      scale,
+      dpr,
+    );
+
+    pendingRenderRef.current = {
+      cancel() {
+        swapCancelled = true;
+        cancelRenderTask(); // Actually cancel the pdfjs render task
+      },
+    };
+
+    renderPromise
       .then(() => {
+        if (swapCancelled) return;
+
         // Clear any CSS transform on the old active canvas
         activeCanvas.style.transform = '';
         activeCanvas.style.transformOrigin = '';
@@ -98,9 +133,21 @@ const CanvasLayer = React.memo(function CanvasLayer(props: CanvasLayerProps) {
         activeCanvasRef.current = activeCanvasRef.current === 'a' ? 'b' : 'a';
         previousScaleRef.current = scale;
       })
+      .catch(() => { /* cancelled or failed */ })
       .finally(() => {
-        isRenderingRef.current = false;
+        if (!swapCancelled) {
+          isRenderingRef.current = false;
+          pendingRenderRef.current = null;
+        }
       });
+
+    return () => {
+      if (pendingRenderRef.current) {
+        pendingRenderRef.current.cancel();
+        pendingRenderRef.current = null;
+        isRenderingRef.current = false;
+      }
+    };
   }, [
     isInRenderWindow,
     scale,

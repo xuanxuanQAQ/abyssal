@@ -48,6 +48,7 @@ export interface SourceStats {
  */
 export interface FailureMemoryDb {
   recordAcquireFailure(record: FailureRecord): Promise<void>;
+  recordAcquireSuccess(record: { source: string; doiPrefix?: string | null; publisher?: string | null }): Promise<void>;
   getAcquireFailureStats(params: {
     doiPrefix?: string | null;
     publisher?: string | null;
@@ -93,13 +94,37 @@ export class FailureMemory {
     }
     const entry = sourceMap.get(record.source) ?? { total: 0, failures: 0 };
     entry.total++;
-    if (record.failureType !== 'unknown') entry.failures++;
+    entry.failures++;
     sourceMap.set(record.source, entry);
 
     // 异步写入 DB（fire-and-forget）
     if (this.db) {
       this.db.recordAcquireFailure(record).catch((err) => {
         this.logger.warn('[FailureMemory] Async DB write failed', { error: (err as Error).message });
+      });
+    }
+  }
+
+  /**
+   * 记录一次成功。增 total 不增 failures，使 failureRate 反映真实成功率。
+   * 同时异步写入 DB，避免冷启动后所有源 failureRate ≈ 100% 的偏差。
+   */
+  recordSuccess(source: string, doi: string | null, publisher: string | null): void {
+    const doiPrefix = extractDoiPrefix(doi);
+    const cacheKey = doiPrefix ?? publisher ?? '_default';
+    let sourceMap = this.memoryCache.get(cacheKey);
+    if (!sourceMap) {
+      sourceMap = new Map();
+      this.memoryCache.set(cacheKey, sourceMap);
+    }
+    const entry = sourceMap.get(source) ?? { total: 0, failures: 0 };
+    entry.total++;
+    sourceMap.set(source, entry);
+
+    // 异步写入 DB（fire-and-forget）
+    if (this.db) {
+      this.db.recordAcquireSuccess({ source, doiPrefix, publisher }).catch((err) => {
+        this.logger.warn('[FailureMemory] Async DB success write failed', { error: (err as Error).message });
       });
     }
   }
@@ -165,7 +190,11 @@ export class FailureMemory {
           sourceMap = new Map();
           this.memoryCache.set(key, sourceMap);
         }
-        sourceMap.set(row.source, { total: row.total, failures: row.failures });
+        // Calibration: if total === failures (legacy data without success records),
+        // apply a Bayesian prior — assume at least 50% success rate to avoid
+        // cold-start bias where all sources appear ~100% failed.
+        const total = row.total > row.failures ? row.total : Math.max(row.failures * 2, row.failures + 1);
+        sourceMap.set(row.source, { total, failures: row.failures });
       }
 
       this.logger.info('[FailureMemory] Loaded from DB', { entries: stats.length });

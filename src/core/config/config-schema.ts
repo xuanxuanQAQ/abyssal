@@ -26,6 +26,47 @@ export interface FieldDefinition {
   migration?: string;
 }
 
+// ─── Embedding Model Registry ───
+// Single source of truth for provider → model → dimension / token-limit mapping.
+// Used by config-schema, config-validator, embed-function-factory, and settings UI.
+
+export interface EmbeddingModelDef {
+  model: string;
+  dimension: number;
+  maxTokens: number;
+  label: string;
+}
+
+export type EmbeddingProvider = 'openai' | 'siliconflow';
+
+export const EMBEDDING_MODEL_REGISTRY: Record<EmbeddingProvider, EmbeddingModelDef[]> = {
+  openai: [
+    { model: 'text-embedding-3-small', dimension: 1536, maxTokens: 8191, label: 'text-embedding-3-small (1536d)' },
+    { model: 'text-embedding-3-large', dimension: 3072, maxTokens: 8191, label: 'text-embedding-3-large (3072d)' },
+    { model: 'text-embedding-ada-002', dimension: 1536, maxTokens: 8191, label: 'text-embedding-ada-002 (1536d)' },
+  ],
+  siliconflow: [
+    { model: 'BAAI/bge-m3', dimension: 1024, maxTokens: 8192, label: 'BAAI/bge-m3 (1024d)' },
+    { model: 'BAAI/bge-large-zh-v1.5', dimension: 1024, maxTokens: 512, label: 'BAAI/bge-large-zh-v1.5 (1024d)' },
+    { model: 'BAAI/bge-large-en-v1.5', dimension: 1024, maxTokens: 512, label: 'BAAI/bge-large-en-v1.5 (1024d)' },
+    { model: 'Pro/BAAI/bge-m3', dimension: 1024, maxTokens: 8192, label: 'Pro/BAAI/bge-m3 (1024d)' },
+  ],
+};
+
+/** Look up the definition for a given model string (any provider). Returns undefined if not found. */
+export function findEmbeddingModelDef(model: string): (EmbeddingModelDef & { provider: EmbeddingProvider }) | undefined {
+  for (const [provider, models] of Object.entries(EMBEDDING_MODEL_REGISTRY) as [EmbeddingProvider, EmbeddingModelDef[]][]) {
+    const def = models.find((m) => m.model === model);
+    if (def) return { ...def, provider };
+  }
+  return undefined;
+}
+
+/** Get the default model for a provider. */
+export function defaultModelForProvider(provider: EmbeddingProvider): EmbeddingModelDef {
+  return EMBEDDING_MODEL_REGISTRY[provider][0]!;
+}
+
 // ─── Schema 定义 ───
 
 export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
@@ -589,6 +630,13 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     envVar: 'ABYSSAL_LOGGING_LEVEL',
   },
 
+  // ── ai ──
+  'ai.proactiveSuggestions': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+
   // ── notes (v1.3) ──
   'notes.memoMaxLength': {
     type: 'integer',
@@ -621,6 +669,34 @@ export interface CrossFieldConstraint {
 }
 
 export const CROSS_FIELD_CONSTRAINTS: CrossFieldConstraint[] = [
+  {
+    description: 'embeddingModel must be valid for embeddingProvider',
+    validate: (c) => {
+      const provider = (getNestedValue(c, 'rag.embeddingProvider') ?? 'openai') as EmbeddingProvider;
+      const model = getNestedValue(c, 'rag.embeddingModel') as string | undefined;
+      if (!model) return null;
+      const models = EMBEDDING_MODEL_REGISTRY[provider];
+      if (!models) return null;
+      if (!models.some((m) => m.model === model)) {
+        const valid = models.map((m) => m.model).join(', ');
+        return `rag.embeddingModel "${model}" is not available on provider "${provider}". Valid models: ${valid}`;
+      }
+      return null;
+    },
+  },
+  {
+    description: 'embeddingDimension must match embeddingModel',
+    validate: (c) => {
+      const model = getNestedValue(c, 'rag.embeddingModel') as string | undefined;
+      const dim = getNestedValue(c, 'rag.embeddingDimension') as number | undefined;
+      if (!model || !dim) return null;
+      const def = findEmbeddingModelDef(model);
+      if (def && def.dimension !== dim) {
+        return `rag.embeddingDimension (${dim}) does not match model "${model}" (expected ${def.dimension})`;
+      }
+      return null;
+    },
+  },
   {
     description: 'focusedMaxTokens < broadMaxTokens',
     validate: (c) => {

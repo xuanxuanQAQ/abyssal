@@ -10,7 +10,7 @@ import { useAppStore } from '../../../../core/store';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
 import { useEffectiveSource } from '../../engine/useEffectiveSource';
 import { contextSourceKey } from '../../engine/contextSourceKey';
-import type { ChatContext } from '../../../../../shared-types/ipc';
+import type { ChatContext, ChatImageClip } from '../../../../../shared-types/ipc';
 
 export function useChatContext(): () => ChatContext {
   const source = useEffectiveSource();
@@ -24,11 +24,33 @@ export function useChatContext(): () => ChatContext {
       contextKey: contextSourceKey(source),
     };
 
+    // 注入阅读器中选取的引用文本
+    if (readerState.quotedSelection) {
+      context.selectedQuote = readerState.quotedSelection.text;
+      context.pdfPage = readerState.quotedSelection.page;
+    }
+
+    // 注入 DLA 智能选取的图片截图
+    if (readerState.selectionPayload?.images?.length) {
+      context.imageClips = readerState.selectionPayload.images.map(
+        (img): ChatImageClip => ({
+          type: img.type,
+          dataUrl: img.dataUrl,
+          pageNumber: img.pageNumber,
+          bbox: img.bbox,
+        }),
+      );
+      // Use first image's page as pdfPage if not already set
+      if (!context.pdfPage && readerState.selectionPayload.sourcePages.length > 0) {
+        context.pdfPage = readerState.selectionPayload.sourcePages[0];
+      }
+    }
+
     // 从当前 ContextSource 注入实体信息
     switch (source.type) {
       case 'paper':
         context.selectedPaperId = source.paperId;
-        if (source.originView === 'reader') {
+        if (source.originView === 'reader' && !context.pdfPage) {
           context.pdfPage = readerState.currentPage;
         }
         break;

@@ -19,10 +19,14 @@ export {
 } from '../../adapter/orchestrator/workflow-runner';
 
 export {
-  parseOutput,
-  extractConceptMappings,
-  extractSuggestedConcepts,
+  parse as parseOutput,
   type ParsedOutput,
-  type ConceptMapping,
-  type SuggestedNewConcept,
-} from '../../adapter/orchestrator/output-parser';
+} from '../../adapter/output-parser/output-parser';
+
+export {
+  type ValidatedMapping as ConceptMapping,
+} from '../../adapter/output-parser/field-validator';
+
+export {
+  type NormalizedSuggestion as SuggestedNewConcept,
+} from '../../adapter/output-parser/suggestion-parser';

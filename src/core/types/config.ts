@@ -211,6 +211,11 @@ export interface PersonalizationConfig {
   authorDisplayThreshold: number;
 }
 
+export interface AiConfig {
+  /** 是否启用 AI 主动建议（EventBus 事件触发的 toast 提示） */
+  proactiveSuggestions: boolean;
+}
+
 // ═══ AbyssalConfig 顶层（合并后的运行时配置） ═══
 
 export interface AbyssalConfig {
@@ -232,6 +237,7 @@ export interface AbyssalConfig {
   logging: LoggingConfig;
   writing: WritingConfig;
   personalization: PersonalizationConfig;
+  ai: AiConfig;
   webSearch: WebSearchConfig;
 }
 
@@ -242,4 +248,8 @@ export interface WritingConfig {
   defaultCslStyleId: string;
   /** 默认输出语言（BCP 47，如 "zh", "en"） */
   defaultOutputLanguage: string;
+  /** CSL 样式文件目录（绝对路径，由 bootstrap 解析） */
+  cslStylesDir: string;
+  /** CSL locale 文件目录（绝对路径，由 bootstrap 解析） */
+  cslLocalesDir: string;
 }

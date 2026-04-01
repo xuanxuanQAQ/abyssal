@@ -25,16 +25,8 @@ import {
 import { useAppStore } from '../../core/store';
 import { getAPI } from '../../core/ipc/bridge';
 import type { TaskUIState } from '../../../shared-types/models';
-
-const WORKFLOW_KEYS: Record<string, string> = {
-  discover: 'statusBar.workflows.discover',
-  acquire: 'statusBar.workflows.acquire',
-  analyze: 'statusBar.workflows.analyze',
-  synthesize: 'statusBar.workflows.synthesize',
-  article: 'statusBar.workflows.article',
-  bibliography: 'statusBar.workflows.bibliography',
-  generate: 'statusBar.workflows.generate',
-};
+import { WORKFLOW_I18N_KEYS } from '../../core/constants/workflow';
+import { TaskDetailPopover } from './TaskDetailPopover';
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Claude',
@@ -84,8 +76,8 @@ export function StatusBar() {
       // 用 testApiKey 验证 default provider 是否真正可用
       api.settings.testApiKey(provider).then((result) => {
         setLlmStatus(result.ok ? 'ok' : 'error');
-      }).catch(() => setLlmStatus('error'));
-    }).catch(() => { /* not ready yet */ });
+      }).catch((err) => { console.warn('[StatusBar] API key test failed:', err); setLlmStatus('error'); });
+    }).catch((err) => { console.warn('[StatusBar] Failed to load settings:', err); });
 
     // 初始探测：尝试调用 getDbStats 确认 DB 是否可用
     api.settings.getDbStats()
@@ -164,56 +156,58 @@ export function StatusBar() {
       >
         {/* 左组 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* 任务活动按钮 */}
-          <button
-            style={taskBtnStyle}
-            onClick={toggleTaskPanel}
-            title={t('statusBar.taskPanel')}
-          >
-            {hasRunning ? (
-              <Activity
-                size={12}
-                aria-hidden="true"
-                style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
-              />
-            ) : (
-              <PanelBottom size={12} aria-hidden="true" />
-            )}
-            {firstRunning ? (
-              <span>
-                {WORKFLOW_KEYS[firstRunning[1].workflow] ? t(WORKFLOW_KEYS[firstRunning[1].workflow]!) : firstRunning[1].workflow}{' '}
-                {firstRunning[1].progress.current}/{firstRunning[1].progress.total}
-                {runningCount > 1 && ` (+${runningCount - 1})`}
-              </span>
-            ) : (
-              <span>{t('statusBar.tasks')}</span>
-            )}
+          {/* 任务活动按钮 + 详情浮层 */}
+          <TaskDetailPopover>
+            <button
+              style={taskBtnStyle}
+              onClick={toggleTaskPanel}
+              title={t('statusBar.taskPanel')}
+            >
+              {hasRunning ? (
+                <Activity
+                  size={12}
+                  aria-hidden="true"
+                  style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
+                />
+              ) : (
+                <PanelBottom size={12} aria-hidden="true" />
+              )}
+              {firstRunning ? (
+                <span>
+                  {WORKFLOW_I18N_KEYS[firstRunning[1].workflow] ? t(WORKFLOW_I18N_KEYS[firstRunning[1].workflow]!) : firstRunning[1].workflow}{' '}
+                  {firstRunning[1].progress.current}/{firstRunning[1].progress.total}
+                  {runningCount > 1 && ` (+${runningCount - 1})`}
+                </span>
+              ) : (
+                <span>{t('statusBar.tasks')}</span>
+              )}
 
-            {/* 未读失败红点 */}
-            {unseenFailures > 0 && (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: -2,
-                  right: -4,
-                  minWidth: 14,
-                  height: 14,
-                  borderRadius: 7,
-                  backgroundColor: 'var(--danger, #ef4444)',
-                  color: '#fff',
-                  fontSize: 9,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '0 3px',
-                  lineHeight: 1,
-                }}
-              >
-                {unseenFailures}
-              </span>
-            )}
-          </button>
+              {/* 未读失败红点 */}
+              {unseenFailures > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: -2,
+                    right: -4,
+                    minWidth: 14,
+                    height: 14,
+                    borderRadius: 7,
+                    backgroundColor: 'var(--danger, #ef4444)',
+                    color: '#fff',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '0 3px',
+                    lineHeight: 1,
+                  }}
+                >
+                  {unseenFailures}
+                </span>
+              )}
+            </button>
+          </TaskDetailPopover>
 
           {/* DBStatus */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

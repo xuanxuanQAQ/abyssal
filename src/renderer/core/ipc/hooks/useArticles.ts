@@ -11,23 +11,27 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAPI } from '../bridge';
 import type { SectionOrder, SectionPatch, ArticleOutline } from '../../../../shared-types/models';
 import { handleError } from '../../errors/errorHandlers';
+import { useViewActive } from '../../context/ViewActiveContext';
 
 // ── 纲要查询 ──
 
 export function useArticleOutlines() {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['articles', 'outlines'],
     queryFn: () => getAPI().db.articles.listOutlines(),
     staleTime: 300_000,
     gcTime: 1_800_000,
+    enabled: viewActive,
   });
 }
 
 export function useArticleOutline(articleId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['articles', 'outline', articleId],
     queryFn: () => getAPI().db.articles.getOutline(articleId!),
-    enabled: articleId !== null,
+    enabled: articleId !== null && viewActive,
     staleTime: 300_000,
     gcTime: 1_800_000,
   });
@@ -36,20 +40,22 @@ export function useArticleOutline(articleId: string | null) {
 // ── 节内容查询 ──
 
 export function useSection(sectionId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['articles', 'section', sectionId],
     queryFn: () => getAPI().db.articles.getSection(sectionId!),
-    enabled: sectionId !== null,
+    enabled: sectionId !== null && viewActive,
     staleTime: 0,
     gcTime: 300_000,
   });
 }
 
 export function useSectionVersions(sectionId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['articles', 'versions', sectionId],
     queryFn: () => getAPI().db.articles.getSectionVersions(sectionId!),
-    enabled: sectionId !== null,
+    enabled: sectionId !== null && viewActive,
     staleTime: 60_000,
     gcTime: 300_000,
   });
@@ -195,10 +201,12 @@ export function useDeleteSection() {
 }
 
 export function useAllCitedPaperIds() {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['articles', 'allCitedPaperIds'],
     queryFn: () => getAPI().db.articles.getAllCitedPaperIds(),
     staleTime: 60_000,
     gcTime: 300_000,
+    enabled: viewActive,
   });
 }

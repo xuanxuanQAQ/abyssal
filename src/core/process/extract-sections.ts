@@ -18,6 +18,8 @@ import type {
   SectionBoundaryList,
 } from '../types/chunk';
 import type { StyledLine } from '../types';
+import type { DocumentStructure, DocumentSection } from '../dla/types';
+import type { Logger } from '../infra/logger';
 
 // ─── §2.2 节标题正则 ───
 
@@ -71,7 +73,8 @@ const LABEL_TO_TYPE: Record<SectionLabel, SectionType | null> = {
 
 // ─── §2.3 References 区域标志正则 ───
 
-const REFERENCES_RE = /^(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
+// 允许可选的章节编号前缀（如 "7. References", "V. REFERENCES", "第五章 参考文献"）
+const REFERENCES_RE = /^(?:(?:\d+|[IVXLC]+)[\.\s)\-:]\s*|(?:第.{1,3}[章节]\s*)|(?:chapter\s+\d+[\.\s:]\s*))?(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
 const APPENDIX_RE = /^(?:appendix|appendices|附录)\s*([A-Z]|\d+)?\.?\s*(.*)/i;
 
 // ─── 行号→字符偏移累计数组 ───
@@ -291,7 +294,9 @@ export interface ExtractSectionsResult {
 export function extractSections(
   fullText: string,
   styledLines?: StyledLine[],
+  logger?: Logger | null,
 ): ExtractSectionsResult {
+  const t0 = Date.now();
   const lines = fullText.split('\n');
   const lineCharOffsets = buildLineCharOffsets(lines);
   const boundaries: SectionBoundaryList = [];
@@ -449,6 +454,126 @@ export function extractSections(
       depth: 1,
     });
   }
+
+  logger?.info('[extractSections] Section detection complete (regex path)', {
+    sections: sectionMap.size,
+    labels: Array.from(sectionMap.keys()),
+    boundaries: boundaries.length,
+    hasAbstract: sectionMap.has('abstract'),
+    hasStyledLines: !!styledLines,
+    referencesLine: referencesStartLine,
+    durationMs: Date.now() - t0,
+  });
+
+  return { sectionMap, sectionMapV2, boundaries };
+}
+
+// ═══ Layout-first section detection (DLA path) ═══
+
+/**
+ * Build section boundaries and maps from a DLA DocumentStructure.
+ *
+ * This replaces regex-based heading detection with visual block-level
+ * title detection from the DLA pipeline. Falls back to 'unknown' when
+ * the structure contains no sections.
+ */
+export function extractSectionsFromLayout(
+  structure: DocumentStructure,
+  fullText: string,
+  logger?: Logger | null,
+): ExtractSectionsResult {
+  const boundaries: SectionBoundaryList = [];
+  const sectionMap: SectionMap = new Map();
+  const sectionMapV2: SectionMapV2 = new Map();
+
+  function collectSection(sec: DocumentSection): void {
+    const label = sec.label;
+    const title = sec.titleBlock.text?.trim() ?? '';
+    const depth = sec.depth;
+
+    // Gather body text from bodyBlocks in reading order
+    const bodyText = sec.bodyBlocks
+      .filter((b) => b.text != null)
+      .map((b) => b.text!)
+      .join('\n\n')
+      .trim();
+
+    // Compute char offsets from all blocks in section
+    const allBlocks = [sec.titleBlock, ...sec.bodyBlocks];
+    const validStarts = allBlocks
+      .filter((b) => b.charStart != null)
+      .map((b) => b.charStart!);
+    const validEnds = allBlocks
+      .filter((b) => b.charEnd != null)
+      .map((b) => b.charEnd!);
+    const charStart =
+      validStarts.length > 0 ? Math.min(...validStarts) : 0;
+    const charEnd =
+      validEnds.length > 0 ? Math.max(...validEnds) : fullText.length;
+
+    const type = LABEL_TO_TYPE[label];
+
+    boundaries.push({
+      lineIndex: sec.titleBlock.readingOrder,
+      label,
+      title,
+      type,
+      charStart,
+      charEnd,
+      depth,
+    });
+
+    if (bodyText.length > 0) {
+      const existing = sectionMap.get(label);
+      const existingV2 = sectionMapV2.get(label);
+      if (existing && existingV2) {
+        sectionMap.set(label, existing + '\n\n' + bodyText);
+        sectionMapV2.set(label, {
+          text: existing + '\n\n' + bodyText,
+          charStart: existingV2.charStart,
+          charEnd,
+        });
+      } else {
+        sectionMap.set(label, bodyText);
+        sectionMapV2.set(label, { text: bodyText, charStart, charEnd });
+      }
+    }
+
+    // Recurse into children
+    for (const child of sec.children) {
+      collectSection(child);
+    }
+  }
+
+  for (const sec of structure.sections) {
+    collectSection(sec);
+  }
+
+  // Fallback: no sections detected
+  if (sectionMap.size === 0) {
+    sectionMap.set('unknown', fullText.trim());
+    sectionMapV2.set('unknown', {
+      text: fullText.trim(),
+      charStart: 0,
+      charEnd: fullText.length,
+    });
+    boundaries.push({
+      lineIndex: 0,
+      label: 'unknown',
+      title: '',
+      type: null,
+      charStart: 0,
+      charEnd: fullText.length,
+      depth: 1,
+    });
+  }
+
+  logger?.info('[extractSections] Section detection complete (DLA path)', {
+    sections: sectionMap.size,
+    labels: Array.from(sectionMap.keys()),
+    boundaries: boundaries.length,
+    inputSections: structure.sections.length,
+  });
 
   return { sectionMap, sectionMapV2, boundaries };
 }

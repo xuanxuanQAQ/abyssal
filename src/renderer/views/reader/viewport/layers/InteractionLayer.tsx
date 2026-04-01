@@ -17,7 +17,7 @@ interface Point {
 }
 
 /**
- * Mouse event capture layer (z-index: 3).
+ * Mouse event capture layer (z-index: 4).
  * Only active in areaHighlight mode.
  */
 const InteractionLayer = React.memo(function InteractionLayer(props: InteractionLayerProps) {
@@ -111,7 +111,7 @@ const InteractionLayer = React.memo(function InteractionLayer(props: Interaction
         top: 0,
         width: cssWidth,
         height: cssHeight,
-        zIndex: 3,
+        zIndex: 4,
         pointerEvents: isActive ? 'auto' : 'none',
         cursor: isActive ? 'crosshair' : undefined,
       }}

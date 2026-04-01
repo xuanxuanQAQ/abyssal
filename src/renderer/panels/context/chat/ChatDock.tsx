@@ -7,14 +7,14 @@
  * 全屏模式：覆盖 ContextBody（由 ContextPanel 的 PanelGroup 驱动）。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Maximize2, Minimize2, Bot, MessageSquare, History, Plus, Trash2 } from 'lucide-react';
+import { Maximize2, Minimize2, Bot, MessageSquare, Trash2 } from 'lucide-react';
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
-import { ChatSessionList } from './ChatSessionList';
 import { useChatSession, persistMessage } from './hooks/useChatSession';
 import { useChatContext } from './hooks/useChatContext';
+import { useEffectiveSource } from '../engine/useEffectiveSource';
 import { ChunkAccumulator } from './streaming/ChunkAccumulator';
 import { useChatStore, type ChatDockMode } from '../../../core/store/useChatStore';
 import { getAPI } from '../../../core/ipc/bridge';
@@ -24,39 +24,33 @@ import type { AgentStreamEvent } from '../../../../shared-types/ipc';
 export const ChatDock = React.memo(function ChatDock() {
   const { t } = useTranslation();
   const {
-    contextKey,
+    sessionKey,
     messages,
     fullyLoaded,
     clearCurrentSession,
     loadMoreHistory,
-    source,
   } = useChatSession();
 
   const chatStreaming = useChatStore((s) => s.chatStreaming);
   const chatDockMode = useChatStore((s) => s.chatDockMode);
   const setChatDockMode = useChatStore((s) => s.setChatDockMode);
 
+  const source = useEffectiveSource();
   const buildChatContext = useChatContext();
-
-  // 用 ref 追踪最新 contextKey，避免 ChunkAccumulator 闭包捕获过时值
-  const contextKeyRef = useRef(contextKey);
-  contextKeyRef.current = contextKey;
 
   const accumulatorRef = useRef<ChunkAccumulator>(
     new ChunkAccumulator({
       onFinalize: (_messageId, content) => {
-        const currentKey = contextKeyRef.current;
-        const session = useChatStore.getState().sessions[currentKey];
+        const session = useChatStore.getState().sessions[sessionKey];
         const msg = session?.messages.find((m) => m.id === _messageId);
         if (msg) {
-          persistMessage({ ...msg, content, status: 'completed' }, currentKey);
+          persistMessage({ ...msg, content, status: 'completed' }, sessionKey);
         }
       },
     })
   );
 
-  // Register agentStream listener ONCE (not per contextKey).
-  // Events carry their own conversationId — no need to re-register on context change.
+  // Register agentStream listener ONCE.
   useEffect(() => {
     const api = getAPI();
     const unsub = api.on.agentStream((event: AgentStreamEvent) => {
@@ -89,7 +83,6 @@ export const ChatDock = React.memo(function ChatDock() {
           break;
 
         case 'error':
-          // Show error as assistant message content
           accumulator.pushChunk(`\n\n**Error:** ${event.message}`);
           accumulator.finalize();
           break;
@@ -119,14 +112,13 @@ export const ChatDock = React.memo(function ChatDock() {
         status: 'sending',
       };
 
-      // Ensure session exists before adding messages
-      useChatStore.getState().ensureSession(contextKey);
+      useChatStore.getState().ensureSession(sessionKey);
       useChatStore.getState().addMessage(userMessage);
-      persistMessage({ ...userMessage, status: 'completed' }, contextKey);
+      persistMessage({ ...userMessage, status: 'completed' }, sessionKey);
+      // ChatContext still carries the context hint (which paper/concept is active)
       const chatContext = buildChatContext();
 
       try {
-        // Create assistant placeholder before sending, so streaming has a target
         const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -153,59 +145,24 @@ export const ChatDock = React.memo(function ChatDock() {
         sendingRef.current = false;
       }
     },
-    [contextKey, buildChatContext]
+    [sessionKey, buildChatContext]
   );
 
   /** 重试失败的用户消息 */
   const handleRetry = useCallback(
     (messageId: string) => {
-      const session = useChatStore.getState().sessions[contextKey];
+      const session = useChatStore.getState().sessions[sessionKey];
       const msg = session?.messages.find((m) => m.id === messageId);
       if (!msg || msg.role !== 'user') return;
       handleSend(msg.content);
     },
-    [contextKey, handleSend]
+    [sessionKey, handleSend]
   );
 
-  const [showSessionList, setShowSessionList] = useState(false);
-
-  const handleSessionSelect = useCallback((selectedKey: string) => {
-    // Switch to selected session by updating store directly
-    useChatStore.getState().ensureSession(selectedKey);
-    useChatStore.getState().setActiveSessionKey(selectedKey);
-    // Load from DB if hot cache is empty
-    getAPI().db.chat.getHistory(selectedKey, { limit: 50 }).then((records) => {
-      const cached = useChatStore.getState().sessions[selectedKey];
-      if (cached && cached.messages.length === 0 && records.length > 0) {
-        const msgs = records.map((r) => ({
-          id: r.id,
-          role: r.role as 'user' | 'assistant',
-          content: r.content,
-          timestamp: r.timestamp,
-          status: 'completed' as const,
-          toolCalls: r.toolCalls ? JSON.parse(r.toolCalls) : undefined,
-          citations: r.citations ? JSON.parse(r.citations) : undefined,
-        }));
-        useChatStore.getState().loadSessionMessages(selectedKey, msgs, msgs.length < 50);
-      }
-    }).catch((err: unknown) => {
-      console.warn('[ChatDock] Failed to load session history:', err);
-    });
-  }, []);
-
   const handleAbort = useCallback(() => {
-    getAPI().chat.abort(contextKey);
-    // Finalize the current streaming message
+    getAPI().chat.abort(sessionKey);
     accumulatorRef.current.finalize();
-  }, [contextKey]);
-
-  const handleNewSession = useCallback(() => {
-    const newKey = `global:${Date.now()}`;
-    useChatStore.getState().ensureSession(newKey);
-    useChatStore.getState().setActiveSessionKey(newKey);
-  }, []);
-
-  const handleClearSession = clearCurrentSession;
+  }, [sessionKey]);
 
   const toggleFullscreen = useCallback(() => {
     const newMode: ChatDockMode = chatDockMode === 'fullscreen' ? 'expanded' : 'fullscreen';
@@ -230,7 +187,6 @@ export const ChatDock = React.memo(function ChatDock() {
           padding: '6px 12px',
           flexShrink: 0,
           borderBottom: '1px solid var(--border-subtle)',
-          position: 'relative',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -257,26 +213,9 @@ export const ChatDock = React.memo(function ChatDock() {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <button
-            onClick={handleNewSession}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-muted)',
-              cursor: 'pointer',
-              padding: 4,
-              borderRadius: 'var(--radius-sm)',
-              display: 'flex',
-              alignItems: 'center',
-              transition: 'color 100ms ease',
-            }}
-            title={t('context.chat.newSession')}
-          >
-            <Plus size={13} />
-          </button>
           {messages.length > 0 && (
             <button
-              onClick={handleClearSession}
+              onClick={clearCurrentSession}
               style={{
                 background: 'none',
                 border: 'none',
@@ -293,23 +232,6 @@ export const ChatDock = React.memo(function ChatDock() {
               <Trash2 size={13} />
             </button>
           )}
-          <button
-            onClick={() => setShowSessionList((v) => !v)}
-            style={{
-              background: showSessionList ? 'var(--bg-surface)' : 'none',
-              border: 'none',
-              color: showSessionList ? 'var(--accent-color)' : 'var(--text-muted)',
-              cursor: 'pointer',
-              padding: 4,
-              borderRadius: 'var(--radius-sm)',
-              display: 'flex',
-              alignItems: 'center',
-              transition: 'color 100ms ease',
-            }}
-            title={t('context.chat.historySessions')}
-          >
-            <History size={13} />
-          </button>
           <button
             onClick={toggleFullscreen}
             style={{
@@ -328,18 +250,9 @@ export const ChatDock = React.memo(function ChatDock() {
             {chatDockMode === 'fullscreen' ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           </button>
         </div>
-
-        {/* 历史会话下拉列表 */}
-        {showSessionList && (
-          <ChatSessionList
-            currentKey={contextKey}
-            onSelect={handleSessionSelect}
-            onClose={() => setShowSessionList(false)}
-          />
-        )}
       </div>
 
-      {/* 历史消息区域 — 始终可见，flex:1 填充中间 */}
+      {/* 历史消息区域 */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {messages.length > 0 ? (
           <ChatHistory
@@ -366,7 +279,7 @@ export const ChatDock = React.memo(function ChatDock() {
         )}
       </div>
 
-      {/* 输入框 — 固定在底部 */}
+      {/* 输入框 */}
       <div style={{ flexShrink: 0, borderTop: '1px solid var(--border-subtle)' }}>
         <ChatInput
           source={source}

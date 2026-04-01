@@ -20,7 +20,7 @@ import type {
   DbInitPayload,
 } from './protocol';
 import { isLifecycleResponse } from './protocol';
-import type { AsyncDbService } from '../core/types/db-service';
+import { type AsyncDbService, DB_SERVICE_METHODS } from '../core/types/db-service';
 
 export type DbHealthStatus = 'connected' | 'degraded' | 'disconnected';
 
@@ -54,9 +54,11 @@ const OWN_METHODS = new Set([
  *
  * 返回的对象是一个 ES6 Proxy：
  * - 访问 DbProxy 自身的方法（start/close/switchWorkspace）→ 直接调用
- * - 访问其他任意属性名（如 addPaper/queryPapers）→ 自动转发到子进程 RPC
+ * - 访问 IDbService 声明的方法（addPaper/queryPapers/…）→ 自动转发到子进程 RPC
+ * - 访问未知属性 → 返回 undefined（而非生成虚假的 RPC 函数）
  *
- * 这消除了手动维护 60+ 方法镜像的需要。
+ * DB_SERVICE_METHODS 由 Record<keyof IDbService, true> 编译期守护，
+ * 保证与 IDbService 接口始终同步。
  */
 export function createDbProxy(options: DbProxyOptions = {}): DbProxyInstance {
   const proxy = new DbProxy(options);
@@ -71,8 +73,12 @@ export function createDbProxy(options: DbProxyOptions = {}): DbProxyInstance {
       if (existing !== undefined) {
         return existing;
       }
-      // 未知属性 → RPC 转发
-      return (...args: unknown[]) => target.call(prop, ...args);
+      // IDbService 声明的方法 → RPC 转发
+      if (DB_SERVICE_METHODS.has(prop)) {
+        return (...args: unknown[]) => target.call(prop, ...args);
+      }
+      // 未知属性 → undefined，使 `if (proxy.nonExistent)` 正确返回 falsy
+      return undefined;
     },
   }) as unknown as DbProxyInstance;
 }
@@ -97,6 +103,11 @@ export class DbProxy {
   private readonly onHealthStatus: ((status: DbHealthStatus) => void) | undefined;
   private initPayload: DbInitPayload | null = null;
   private closed = false;
+
+  // Restart limiting — prevent infinite crash-restart loops
+  private restartTimestamps: number[] = [];
+  private static readonly MAX_RESTARTS = 3;
+  private static readonly RESTART_WINDOW_MS = 60_000; // 1 minute
 
   constructor(options: DbProxyOptions = {}) {
     this.dbProcessPath = options.dbProcessPath
@@ -134,7 +145,13 @@ export class DbProxy {
         env: { ...process.env },
       });
 
-      // Forward subprocess stderr to main process for debugging
+      // Forward subprocess stdout + stderr to main process for debugging
+      if (this.child.stdout) {
+        this.child.stdout.on('data', (data: Buffer) => {
+          const text = data.toString().trim();
+          if (text) console.log(`[db-subprocess] ${text}`);
+        });
+      }
       if (this.child.stderr) {
         this.child.stderr.on('data', (data: Buffer) => {
           const text = data.toString().trim();
@@ -199,13 +216,15 @@ export class DbProxy {
           );
           p.reject(err);
         } else {
-          p.resolve(resp.result);
+          p.resolve(restoreResult(resp.result));
         }
       }
     });
   }
 
   private handleChildCrash(err: Error): void {
+    console.error(`[DbProxy] Subprocess crashed: ${err.message}`);
+
     // 立即同步地 reject 所有待处理请求并清理 timers
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
@@ -222,15 +241,39 @@ export class DbProxy {
 
     // 异步重启（fire-and-forget，后续调用会等待新进程）
     if (!this.closed && this.initPayload) {
+      // Rate-limit restarts: max N restarts within a time window
+      const now = Date.now();
+      this.restartTimestamps = this.restartTimestamps.filter(
+        (t) => now - t < DbProxy.RESTART_WINDOW_MS,
+      );
+
+      if (this.restartTimestamps.length >= DbProxy.MAX_RESTARTS) {
+        console.error(
+          `[DbProxy] Too many restarts (${DbProxy.MAX_RESTARTS} within ${DbProxy.RESTART_WINDOW_MS / 1000}s) — giving up. ` +
+          'Manual restart required.',
+        );
+        this.onHealthStatus?.('disconnected');
+        return;
+      }
+
+      this.restartTimestamps.push(now);
       const payload = this.initPayload;
-      // 延迟 500ms 重启，避免频繁 crash 循环
+      const attempt = this.restartTimestamps.length;
+
+      console.log(`[DbProxy] Scheduling restart attempt ${attempt}/${DbProxy.MAX_RESTARTS}...`);
+
+      // 延迟 500ms 重启
       setTimeout(async () => {
         if (this.closed || this.child) return;
         try {
           await this.spawnChild();
           await this.sendLifecycle('init', payload);
-        } catch {
-          // 重启失败——后续 call() 会收到 'DB subprocess not running'
+          console.log('[DbProxy] Subprocess restarted successfully');
+          this.onHealthStatus?.('connected');
+        } catch (restartErr) {
+          console.error(`[DbProxy] Restart failed: ${(restartErr as Error).message}`);
+          this.onHealthStatus?.('disconnected');
+          // 后续 call() 会收到 'DB subprocess not running'
         }
       }, 500);
     }
@@ -335,11 +378,13 @@ export class DbProxy {
       this.onHealthStatus?.(status);
       if (this.consecutiveFailures >= DbProxy.MAX_CONSECUTIVE_FAILURES) {
         // Force restart — subprocess is unresponsive
+        console.error('[DbProxy] Health check: subprocess unresponsive, force-killing');
         this.consecutiveFailures = 0;
         if (this.child) {
+          // Kill the child — the 'exit' event handler will call handleChildCrash
+          // which handles restart logic with rate limiting.
           this.child.kill('SIGKILL');
-          this.child = null;
-          // handleChildCrash will trigger auto-restart
+          // Don't set this.child = null here; let the exit handler do it.
         }
       }
     }
@@ -374,6 +419,25 @@ export class DbProxy {
       this.child!.send(request);
     });
   }
+}
+
+// ─── 返回值反序列化 ───
+
+function restoreResult(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (obj['__type'] === 'Set' && Array.isArray(obj['data'])) {
+      return new Set(obj['data']);
+    }
+    if (obj['__type'] === 'Map' && Array.isArray(obj['data'])) {
+      return new Map(obj['data'] as [unknown, unknown][]);
+    }
+    if (obj['__type'] === 'Float32Array' && Array.isArray(obj['data'])) {
+      return new Float32Array(obj['data'] as number[]);
+    }
+  }
+  return value;
 }
 
 // ─── 参数序列化 ───

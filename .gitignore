@@ -50,6 +50,9 @@ desktop.ini
 # TypeScript
 *.tsbuildinfo
 
+# Tesseract OCR trained data (large binaries, download separately)
+assets/tesseract/*.traineddata
+
 # Logs
 *.log
 npm-debug.log*

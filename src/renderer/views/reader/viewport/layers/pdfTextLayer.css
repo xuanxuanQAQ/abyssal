@@ -20,7 +20,7 @@
   forced-color-adjust: none;
   transform-origin: 0 0;
   caret-color: CanvasText;
-  z-index: 0;
+  z-index: 2;
 }
 
 .textLayer.highlighting {
@@ -83,6 +83,47 @@
   user-select: none;
 }
 
+.textLayer .endOfContent::before {
+  content: "";
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  cursor: text;
+}
+
 .textLayer.selecting .endOfContent {
   top: 0;
+}
+
+/* ── DLA selection blockers — non-text region overlays ── */
+
+/* During active selection: blockers become transparent to pointer events
+   so the browser's selection can extend through figure/table regions.
+   The endOfContent mechanism handles blank-area anchoring. */
+.textLayer.selecting [data-dla-blocker] {
+  pointer-events: none !important;
+}
+
+/* Capturable blocks (figure/table/formula): subtle hover hint */
+.textLayer .dla-capturable:hover {
+  outline: 2px dashed rgba(59, 130, 246, 0.4);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+
+/* Click-selected state */
+.textLayer .dla-selected {
+  background: rgba(59, 130, 246, 0.15) !important;
+  outline: 2px solid rgba(59, 130, 246, 0.6) !important;
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+
+/* Drag-selection passes over this block */
+.textLayer .dla-drag-highlight {
+  background: rgba(59, 130, 246, 0.25) !important;
+  outline: 2px solid rgba(59, 130, 246, 0.5);
+  outline-offset: -1px;
+  border-radius: 2px;
 }

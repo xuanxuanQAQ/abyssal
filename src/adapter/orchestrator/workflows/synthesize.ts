@@ -24,19 +24,20 @@ import type { ContextBudgetManager } from '../../context-budget/context-budget-m
 import type { Logger } from '../../../core/infra/logger';
 import type { RankedChunk } from '../../../core/types/chunk';
 import {
-  buildMemoSection,
-  buildAdjudicationSection,
-  buildEvidenceGapsSection,
-  buildConceptFrameworkSection,
-  type MemoForPrompt,
-  type AdjudicationEntry,
-  type ConceptForPrompt,
-} from '../prompt-assembler';
+  formatConceptFramework,
+  formatMemos,
+  formatAdjudicationHistory,
+  formatEvidenceGaps,
+  type ConceptForFormat,
+  type MemoForFormat,
+  type AdjudicationForFormat,
+} from '../../prompt-assembler/section-formatter';
 import { countTokens } from '../../llm-client/token-counter';
 import { correctiveRagLoop, type LlmCallFn } from './corrective-rag/corrective-rag-loop';
 import { hasEvidenceDeficiency, defaultPassReport, type QualityReport } from './corrective-rag/quality-report';
 import { validateCitations, extractCitedPaperIds } from './citation/citation-validator';
-import { preformatCitations } from './citation/citation-preformatter';
+import { preformatCitations, type CitationFormatter } from './citation/citation-preformatter';
+import { classifyError } from '../error-classifier';
 
 // ─── Services ───
 
@@ -52,6 +53,9 @@ export interface SynthesizeServices {
   contextBudgetManager: ContextBudgetManager;
   ragService: {
     retrieve: (request: Record<string, unknown>) => Promise<{ chunks: RankedChunk[]; totalTokenCount: number }>;
+  } | null;
+  cslEngine?: {
+    formatCitation: (papers: Array<{ paperId: string; metadata: Record<string, unknown> }>) => Array<{ inlineCitation: string }>;
   } | null;
   logger: Logger;
   workspacePath: string;
@@ -76,11 +80,17 @@ export function createSynthesizeWorkflow(services: SynthesizeServices) {
         await synthesizeConcept(conceptId, {
           dbProxy, llmClient, contextBudgetManager, logger, workspacePath,
           ragService: services.ragService,
+          cslEngine: services.cslEngine ?? null,
           enableCorrectiveRag: services.enableCorrectiveRag ?? true,
           runner,
         });
         runner.reportComplete(conceptId);
       } catch (error) {
+        const classified = classifyError(error);
+        logger.error(`[synthesize] Concept ${conceptId} failed`, error as Error, {
+          category: classified.category,
+          retryable: classified.retryable,
+        });
         runner.reportFailed(conceptId, 'synthesize', error as Error);
       }
     }
@@ -94,6 +104,7 @@ async function synthesizeConcept(
     llmClient: LlmClient;
     contextBudgetManager: ContextBudgetManager;
     ragService: SynthesizeServices['ragService'];
+    cslEngine: SynthesizeServices['cslEngine'];
     logger: Logger;
     workspacePath: string;
     enableCorrectiveRag: boolean;
@@ -125,18 +136,18 @@ async function synthesizeConcept(
     // Continue anyway — will be noted in output
   }
 
-  const conceptName = (concept['nameEn'] ?? concept['name_en']) as string ?? conceptId;
+  const conceptName = (concept['nameEn'] as string) ?? conceptId;
   const conceptDef = (concept['definition'] as string) ?? '';
   const maturity = (concept['maturity'] as 'tentative' | 'working' | 'established') ?? 'working';
 
   // ══ Step 2: Memos & notes ══
   runner.reportProgress({ currentStage: 'collecting_notes' });
   const memos = await dbProxy.getMemosByEntity('concept', conceptId);
-  const memosForPrompt: MemoForPrompt[] = memos.map((m) => ({
+  const memosForPrompt: MemoForFormat[] = memos.map((m) => ({
     text: (m['text'] as string) ?? '',
-    createdAt: (m['createdAt'] as string ?? m['created_at'] as string) ?? '',
-    conceptIds: (m['conceptIds'] as string[] ?? m['concept_ids'] as string[]) ?? [],
-    paperIds: (m['paperIds'] as string[] ?? m['paper_ids'] as string[]) ?? [],
+    createdAt: (m['createdAt'] as string) ?? '',
+    conceptIds: (m['conceptIds'] as string[]) ?? [],
+    paperIds: (m['paperIds'] as string[]) ?? [],
   }));
 
   // ══ Step 3: Broad Context RAG retrieval ══
@@ -201,12 +212,12 @@ async function synthesizeConcept(
   const ragBlock = formatRagPassagesForSynthesize(ragChunks);
 
   // ══ Step 5: Adjudication history (§2.3) ══
-  const adjudicationEntries: AdjudicationEntry[] = [];
+  const adjudicationEntries: AdjudicationForFormat[] = [];
   const reviewedMappings = filteredMappings.filter((m) => m['reviewed'] === 1 || m['reviewed'] === true);
   const knownPaperIds = new Set<string>();
 
   for (const m of reviewedMappings) {
-    const paperId = (m['paperId'] ?? m['paper_id']) as string;
+    const paperId = m['paperId'] as string;
     const paper = await dbProxy.getPaper(paperId);
     if (!paper) continue;
     knownPaperIds.add(paperId);
@@ -218,13 +229,13 @@ async function synthesizeConcept(
       relation: (m['relation'] as string) ?? '',
       confidence: (m['confidence'] as number) ?? 0,
       decision: 'accepted',
-      decisionNote: (m['decisionNote'] ?? m['decision_note']) as string | null,
+      decisionNote: (m['decisionNote'] as string | null) ?? null,
     });
   }
 
   // Also add unreviewed paper IDs for citation validation
   for (const m of filteredMappings) {
-    const paperId = (m['paperId'] ?? m['paper_id']) as string;
+    const paperId = m['paperId'] as string;
     knownPaperIds.add(paperId);
   }
   // Add paper IDs from RAG chunks
@@ -253,24 +264,24 @@ async function synthesizeConcept(
   // ══ Step 7: Prompt assembly (§2.4) ══
   runner.reportProgress({ currentStage: 'prompting' });
 
-  const conceptPrompt: ConceptForPrompt = {
+  const conceptForFormat: ConceptForFormat = {
     id: conceptId,
     nameEn: conceptName,
-    nameZh: (concept['nameZh'] ?? concept['name_zh']) as string ?? '',
+    nameZh: (concept['nameZh'] as string) ?? '',
     definition: conceptDef,
-    searchKeywords: (concept['searchKeywords'] ?? concept['search_keywords']) as string[] ?? [],
+    searchKeywords: (concept['searchKeywords'] as string[]) ?? [],
     maturity,
   };
 
   const systemPrompt = buildSynthesizeSystemPrompt(conceptName, maturity);
-  const conceptSection = buildConceptFrameworkSection([conceptPrompt]);
-  const memoSection = buildMemoSection(memosForPrompt);
-  const adjudicationSection = buildAdjudicationSection(conceptName, adjudicationEntries);
+  const conceptSection = formatConceptFramework([conceptForFormat]);
+  const memoSection = formatMemos(memosForPrompt);
+  const adjudicationSection = formatAdjudicationHistory(conceptName, adjudicationEntries);
 
   // Evidence gaps from CRAG (§1.7-1.8)
   const evidenceGaps = qualityReport.gaps.map((g) => g.description);
   const gapsSection = hasEvidenceDeficiency(qualityReport)
-    ? buildEvidenceGapsSection(conceptName, evidenceGaps)
+    ? formatEvidenceGaps(conceptName, evidenceGaps)
     : '';
 
   const userContent = [
@@ -298,8 +309,32 @@ async function synthesizeConcept(
   }
 
   // Preformat citations to dual-preserve format [[@id]](rendered)
-  const preformatted = preformatCitations(validated.text, null);
-  // TODO: Pass CslEngine formatter for rendered citations when CSL is configured
+  // Build CSL formatter if engine is available
+  let cslFormatter: CitationFormatter | null = null;
+  if (ctx.cslEngine && knownPaperIds.size > 0) {
+    const paperMetaCache = new Map<string, Record<string, unknown>>();
+    for (const pid of knownPaperIds) {
+      const p = await dbProxy.getPaper(pid);
+      if (p) paperMetaCache.set(pid, p);
+    }
+    cslFormatter = {
+      formatInline: (paperId: string) => {
+        const meta = paperMetaCache.get(paperId);
+        if (!meta) return null;
+        const results = ctx.cslEngine!.formatCitation([{ paperId, metadata: meta }]);
+        return results[0]?.inlineCitation ?? null;
+      },
+      formatCluster: (paperIds: string[]) => {
+        const papers = paperIds
+          .filter((id) => paperMetaCache.has(id))
+          .map((id) => ({ paperId: id, metadata: paperMetaCache.get(id)! }));
+        if (papers.length === 0) return null;
+        const results = ctx.cslEngine!.formatCitation(papers);
+        return results.map((r) => r.inlineCitation).join('; ') || null;
+      },
+    };
+  }
+  const preformatted = preformatCitations(validated.text, cslFormatter);
 
   // ══ Step 10: Draft write (idempotent overwrite) ══
   runner.reportProgress({ currentStage: 'writing' });

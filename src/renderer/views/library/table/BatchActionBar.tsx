@@ -5,10 +5,11 @@
  * 操作：取消选择 / 设置相关性 / 获取全文 / 触发分析 / 导出 / 删除。
  */
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { X, ChevronDown } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useBatchUpdateRelevance, useBatchDeletePapers } from '../../../core/ipc/hooks/usePapers';
 import { useAcquireBatch } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
@@ -50,11 +51,32 @@ export function BatchActionBar({
   };
 
   const handleDelete = () => {
-    // TODO: 确认 Dialog
     const ids = getSelectedIds();
+    const confirmed = window.confirm(
+      t('library.batch.deleteConfirm', { count: ids.length })
+    );
+    if (!confirmed) return;
     batchDelete.mutate(ids);
     onDeselect();
   };
+
+  const handleExportBibtex = useCallback(() => {
+    const ids = getSelectedIds();
+    const selectedPapers = papers.filter((p) => ids.includes(p.id));
+    const entries = selectedPapers.map((p) => {
+      const pr = p as unknown as Record<string, unknown>;
+      const key = (pr['bibtexKey'] as string) ?? (pr['id'] as string) ?? 'unknown';
+      const title = (pr['title'] as string) ?? '';
+      const authors = (pr['authors'] as string) ?? '';
+      const year = (pr['year'] as number) ?? 0;
+      const doi = (pr['doi'] as string) ?? '';
+      return `@article{${key},\n  title = {${title}},\n  author = {${authors}},\n  year = {${year}}${doi ? `,\n  doi = {${doi}}` : ''}\n}`;
+    });
+    const bibtex = entries.join('\n\n');
+    navigator.clipboard.writeText(bibtex).then(() => {
+      toast.success(t('library.batch.bibtexCopied', { count: selectedPapers.length }));
+    });
+  }, [getSelectedIds, papers, t]);
 
   return (
     <div
@@ -158,8 +180,7 @@ export function BatchActionBar({
       >
         {startPipeline.isPending ? t('library.batch.analyzing') : t('library.batch.triggerAnalysis')}
       </button>
-      <button style={actionButtonStyle}>
-        {/* TODO: 导出 BibTeX 功能 */}
+      <button style={actionButtonStyle} onClick={handleExportBibtex}>
         {t('library.batch.exportBibtex')}
       </button>
       <button

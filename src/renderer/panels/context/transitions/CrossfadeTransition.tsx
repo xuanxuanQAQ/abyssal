@@ -2,23 +2,25 @@
  * CrossfadeTransition — ContentPane 切换的交叉淡入淡出（§11）
  *
  * 统一动画规范：
- * - 退出：var(--duration-fast) 100ms, opacity→0 + translateY(0→-6px)
- * - 进入：var(--duration-normal) 200ms, ctx-enter keyframe
- * - 缓动：var(--easing-default)
+ * - 退出：100ms, opacity→0 + translateY(0→-6px)
+ * - 进入：200ms, ctx-enter keyframe
+ * - 缓动：cubic-bezier(0.16, 1, 0.3, 1)
  *
  * 当 animationEnabled === false 时，直接硬切。
  * 过渡期间滚动位置重置到顶部。
+ *
+ * 优化：用 CSS transitionend/animationend 事件驱动状态机，
+ * 替代 setTimeout 链，动画在 compositor 线程执行，主线程零阻塞。
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLayout } from '../../../core/context/LayoutContext';
 
-// 与 CSS 变量保持一致（JS 中无法直接读取，镜像定义）
-const EXIT_MS = 100;  // --duration-fast
-const ENTER_MS = 200; // --duration-normal
+const EXIT_MS = 100;
+const ENTER_MS = 200;
+const EASING = 'cubic-bezier(0.16, 1, 0.3, 1)';
 
 interface CrossfadeTransitionProps {
-  /** 变化时触发过渡的标识 key */
   transitionKey: string;
   children: React.ReactNode;
 }
@@ -31,6 +33,9 @@ export function CrossfadeTransition({
   const [displayKey, setDisplayKey] = useState(transitionKey);
   const [phase, setPhase] = useState<'idle' | 'exit' | 'enter'>('idle');
   const containerRef = useRef<HTMLDivElement>(null);
+  const pendingKeyRef = useRef(transitionKey);
+
+  pendingKeyRef.current = transitionKey;
 
   useEffect(() => {
     if (transitionKey === displayKey) return;
@@ -40,40 +45,37 @@ export function CrossfadeTransition({
       return;
     }
 
-    // 开始退出动画
     setPhase('exit');
-
-    const exitTimer = setTimeout(() => {
-      setDisplayKey(transitionKey);
-      setPhase('enter');
-
-      // 重置滚动位置
-      if (containerRef.current) {
-        containerRef.current.scrollTop = 0;
-      }
-
-      const enterTimer = setTimeout(() => {
-        setPhase('idle');
-      }, ENTER_MS);
-
-      return () => clearTimeout(enterTimer);
-    }, EXIT_MS);
-
-    return () => clearTimeout(exitTimer);
+    // 不再用 setTimeout — onTransitionEnd 驱动下一步
   }, [transitionKey, displayKey, animationEnabled]);
+
+  // exit 动画完成 → 切换内容 + 进入动画
+  const handleTransitionEnd = useCallback((e: React.TransitionEvent) => {
+    // opacity 和 transform 都会触发，只处理一次
+    if (phase !== 'exit' || e.propertyName !== 'opacity') return;
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+    setDisplayKey(pendingKeyRef.current);
+    setPhase('enter');
+  }, [phase]);
+
+  // enter 动画完成 → 回到空闲
+  const handleAnimationEnd = useCallback(() => {
+    if (phase !== 'enter') return;
+    setPhase('idle');
+  }, [phase]);
 
   const style: React.CSSProperties =
     phase === 'exit'
       ? {
           opacity: 0,
           transform: 'translateY(-6px)',
-          transition: `opacity ${EXIT_MS}ms cubic-bezier(0.16, 1, 0.3, 1), transform ${EXIT_MS}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+          transition: `opacity ${EXIT_MS}ms ${EASING}, transform ${EXIT_MS}ms ${EASING}`,
         }
       : phase === 'enter'
         ? {
             opacity: 0,
             transform: 'translateY(6px)',
-            animation: `ctx-enter ${ENTER_MS}ms cubic-bezier(0.16, 1, 0.3, 1) forwards`,
+            animation: `ctx-enter ${ENTER_MS}ms ${EASING} forwards`,
           }
         : {};
 
@@ -85,6 +87,8 @@ export function CrossfadeTransition({
         overflow: 'hidden',
         ...style,
       }}
+      onTransitionEnd={handleTransitionEnd}
+      onAnimationEnd={handleAnimationEnd}
     >
       {children}
     </div>

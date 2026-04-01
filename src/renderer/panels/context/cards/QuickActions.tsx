@@ -1,12 +1,12 @@
 /**
  * QuickActions — 论文快速操作按钮组（§3.2 LibraryPaperPane 子卡）
  *
- * 三个操作：分析 / 获取全文 / 打开 PDF
+ * 四个操作：获取全文 / 处理 / 分析 / 打开 PDF
  */
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Microscope, Download, FileText, Loader2 } from 'lucide-react';
+import { Microscope, Download, FileText, Loader2, Cog } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
 import { useAcquireFulltext } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
@@ -31,26 +31,38 @@ export const QuickActions = React.memo(function QuickActions({ paperId }: QuickA
   const startPipeline = useStartPipeline();
   const { data: paper } = usePaper(paperId);
 
+  const startProcess = useStartPipeline();
+
   const isAcquiring = acquireFulltext.isPending;
+  const isProcessing = startProcess.isPending;
   const isAnalyzing = startPipeline.isPending;
   const status = paper?.fulltextStatus;
-  const hasFulltext = status === 'available';
+  const hasFulltext = status === 'available' || !!paper?.fulltextPath;
+  const hasText = !!paper?.textPath;
 
   const actions = [
+    {
+      icon: isAcquiring ? <Loader2 size={14} className="spin" /> : <Download size={14} />,
+      label: t('context.quickActions.acquireFulltext'),
+      disabled: isAcquiring || hasFulltext || status === 'pending',
+      onClick: () => {
+        acquireFulltext.mutate(paperId);
+      },
+    },
+    {
+      icon: isProcessing ? <Loader2 size={14} className="spin" /> : <Cog size={14} />,
+      label: t('context.quickActions.process'),
+      disabled: !hasFulltext || isProcessing || hasText,
+      onClick: () => {
+        startProcess.mutate({ workflow: 'process', config: { paperIds: [paperId] } });
+      },
+    },
     {
       icon: isAnalyzing ? <Loader2 size={14} className="spin" /> : <Microscope size={14} />,
       label: t('context.quickActions.analyze'),
       disabled: !paper || isAnalyzing || paper.analysisStatus === 'in_progress' || !hasFulltext,
       onClick: () => {
         startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paperId] } });
-      },
-    },
-    {
-      icon: isAcquiring ? <Loader2 size={14} className="spin" /> : <Download size={14} />,
-      label: t('context.quickActions.acquireFulltext'),
-      disabled: isAcquiring || status === 'available' || status === 'pending',
-      onClick: () => {
-        acquireFulltext.mutate(paperId);
       },
     },
     {

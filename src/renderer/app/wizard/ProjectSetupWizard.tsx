@@ -48,6 +48,21 @@ export function ProjectSetupWizard({
   const [newConcept, setNewConcept] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  const resetForm = useCallback(() => {
+    setStep('mode');
+    setName('');
+    setStartMode('exploration');
+    setEmbeddingModel('text-embedding-3-small');
+    setConcepts([]);
+    setNewConcept('');
+    setError(null);
+  }, []);
+
+  const handleOpenChange = useCallback((isOpen: boolean) => {
+    if (!isOpen) resetForm();
+    onOpenChange(isOpen);
+  }, [onOpenChange, resetForm]);
+
   const handleModeSelect = useCallback(
     (mode: ProjectStartMode) => {
       setStartMode(mode);
@@ -89,13 +104,12 @@ export function ProjectSetupWizard({
       const project = await getAPI().app.createProject(config);
 
       // 切换到新创建的工作区（热切换，无需重启）
-      const wsPath = (project as unknown as Record<string, unknown>)['workspacePath'] as string | undefined;
-      if (wsPath) {
-        await getAPI().workspace.switch(wsPath);
+      if (project.workspacePath) {
+        await getAPI().workspace.switch(project.workspacePath);
       }
 
       onComplete(project);
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建失败');
       setStep(startMode === 'framework' ? 'framework' : 'exploration');
@@ -108,7 +122,7 @@ export function ProjectSetupWizard({
   }, []);
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
           style={{

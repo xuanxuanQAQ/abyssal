@@ -1,7 +1,7 @@
 /**
  * WritingView — Writing 视图顶层容器（§2.1）
  *
- * 水平 PanelGroup：OutlineTree（220px 默认）+ SectionEditor（弹性填满）。
+ * 水平 PanelGroup：OutlineTree（220px 默认）+ UnifiedEditor（弹性填满）。
  *
  * 状态管理：
  *   - activeArticleId 本地 state：当前编辑的文章 ID
@@ -146,6 +146,18 @@ export function WritingView(): React.JSX.Element {
 
   // ── Keyboard shortcuts ──
   useHotkey('Ctrl+Shift+E', toggleExportDialog);
+
+  // ── Listen for version history open events from OutlineContextMenu ──
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { sectionId: string } | undefined;
+      if (detail?.sectionId) {
+        setVersionHistoryOpen(true);
+      }
+    };
+    window.addEventListener('abyssal:openVersionHistory', handler);
+    return () => window.removeEventListener('abyssal:openVersionHistory', handler);
+  }, []);
 
   // ── Empty state: no article exists ──
   if (!isLoadingList && articles.length === 0) {

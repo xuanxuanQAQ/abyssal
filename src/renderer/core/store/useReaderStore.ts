@@ -19,7 +19,30 @@ type AnnotationTool =
   | 'textNote'
   | 'textConceptTag'
   | 'areaHighlight'
+  | 'smartSelect'
   | null;
+
+/** 用户在 PDF 中选取文本后点击"提问"产生的引用片段 */
+export interface QuotedSelection {
+  text: string;
+  page: number;
+}
+
+/** 图片截图引用（来自 DLA 智能选取） */
+export interface ImageClip {
+  type: string;
+  dataUrl: string;
+  caption?: string;
+  pageNumber: number;
+  bbox: { x: number; y: number; w: number; h: number };
+}
+
+/** 扩展的选取载荷：支持文本 + 图片混合 */
+export interface SelectionPayload {
+  text?: string;
+  images?: ImageClip[];
+  sourcePages: number[];
+}
 
 interface ReaderState {
   currentPage: number;
@@ -28,6 +51,10 @@ interface ReaderState {
   zoomMode: ZoomMode;
   activeAnnotationTool: AnnotationTool;
   highlightColor: HighlightColor;
+  /** 待提问的引用文本（由 SelectionToolbar "提问" 按钮写入，发送后清除） */
+  quotedSelection: QuotedSelection | null;
+  /** 扩展选取载荷（支持图片截图，由 DLA 智能选取写入） */
+  selectionPayload: SelectionPayload | null;
 
   setCurrentPage: (page: number) => void;
   setTotalPages: (total: number) => void;
@@ -35,6 +62,8 @@ interface ReaderState {
   setZoomMode: (mode: ZoomMode) => void;
   setActiveAnnotationTool: (tool: AnnotationTool) => void;
   setHighlightColor: (color: HighlightColor) => void;
+  setQuotedSelection: (sel: QuotedSelection | null) => void;
+  setSelectionPayload: (payload: SelectionPayload | null) => void;
   resetReader: () => void;
 }
 
@@ -45,6 +74,8 @@ const initialReaderState = {
   zoomMode: 'fitWidth' as ZoomMode,
   activeAnnotationTool: null as AnnotationTool,
   highlightColor: 'yellow' as HighlightColor,
+  quotedSelection: null as QuotedSelection | null,
+  selectionPayload: null as SelectionPayload | null,
 };
 
 export const useReaderStore = create<ReaderState>()(
@@ -82,6 +113,16 @@ export const useReaderStore = create<ReaderState>()(
         setHighlightColor: (color) =>
           set((state) => {
             state.highlightColor = color;
+          }),
+
+        setQuotedSelection: (sel) =>
+          set((state) => {
+            state.quotedSelection = sel;
+          }),
+
+        setSelectionPayload: (payload) =>
+          set((state) => {
+            state.selectionPayload = payload;
           }),
 
         resetReader: () =>

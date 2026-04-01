@@ -28,7 +28,7 @@ const INVOKE_CHANNELS = [
   'db:papers:list', 'db:papers:get', 'db:papers:update',
   'db:papers:batchUpdateRelevance', 'db:papers:importBibtex',
   'db:papers:getCounts', 'db:papers:delete', 'db:papers:batchDelete', 'db:papers:resetAnalysis',
-  'db:papers:linkPdf',
+  'db:papers:resetProcess', 'db:papers:resetFulltext', 'db:papers:linkPdf',
   // db:tags
   'db:tags:list', 'db:tags:create', 'db:tags:update', 'db:tags:delete',
   // db:discoverRuns
@@ -101,6 +101,8 @@ const INVOKE_CHANNELS = [
   'app:window:popOut', 'app:window:list',
   // concept keywords & article citation helpers
   'db:concepts:updateKeywords', 'db:articles:getAllCitedPaperIds',
+  // dla (Document Layout Analysis)
+  'dla:analyze', 'dla:getBlocks', 'dla:analyzeDocument',
   // workspace
   'workspace:create', 'workspace:openDialog', 'workspace:listRecent',
   'workspace:getCurrent', 'workspace:switch', 'workspace:removeRecent',
@@ -133,10 +135,14 @@ const PUSH_CHANNELS = [
   'push:noteIndexed',
   'push:dbHealth',
   'push:exportProgress',
+  'push:dlaPageReady',
+  'push:aiCommand',
 ] as const;
 
 const FAF_CHANNELS = [
   'reader:pageChanged',
+  'event:userAction',
+  'event:suggestionResponse',
 ] as const;
 
 // ─── Helpers ───

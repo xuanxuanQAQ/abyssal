@@ -76,7 +76,7 @@ export async function runGenericAnalysis(
       const page = a['page'];
       if (typeof page === 'number') entry.page = page;
       entry.annotationType = (a['type'] as string) ?? 'highlight';
-      entry.selectedText = (a['selectedText'] as string ?? a['selected_text'] as string) ?? '';
+      entry.selectedText = (a['selectedText'] as string) ?? '';
       const comment = a['comment'] as string | undefined;
       if (comment) entry.comment = comment;
       return entry;
@@ -87,11 +87,21 @@ export async function runGenericAnalysis(
   });
 
   // LLM call
+  logger.debug(`[generic] Paper ${paperId}: LLM call starting`, {
+    systemTokens: countTokens(assembled.systemPrompt),
+    userTokens: countTokens(assembled.userMessage),
+  });
+  const llmStart = Date.now();
   const result = await llmClient.complete({
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
     workflowId: 'analyze',
     ...(signal && { signal }),
+  });
+  logger.debug(`[generic] Paper ${paperId}: LLM responded`, {
+    model: result.model,
+    outputLength: result.text.length,
+    latencyMs: Date.now() - llmStart,
   });
 
   // Parse with validation — no conceptLookup (no concepts exist)
@@ -103,12 +113,15 @@ export async function runGenericAnalysis(
   const validated = parseAndValidate(result.text, parseContext, logger);
 
   if (!validated.success) {
+    logger.warn(`[generic] Paper ${paperId}: parse failed`, {
+      outputPreview: result.text.slice(0, 300),
+    });
     // Save raw output for diagnosis
     const rawPath = path.join(workspacePath, 'analyses', `${paperId}.raw.txt`);
     try {
       fs.mkdirSync(path.dirname(rawPath), { recursive: true });
       fs.writeFileSync(rawPath, result.text, 'utf-8');
-    } catch { /* ignore */ }
+    } catch (err) { logger.debug(`Paper ${paperId}: failed to save raw output`, { error: (err as Error).message }); }
 
     return {
       success: false,
@@ -119,6 +132,12 @@ export async function runGenericAnalysis(
       strategy: 'parse_failed',
     };
   }
+
+  logger.debug(`[generic] Paper ${paperId}: parse succeeded`, {
+    strategy: validated.strategy,
+    suggestedConcepts: validated.suggestedConcepts.length,
+    warningCount: validated.warnings.length,
+  });
 
   return {
     success: true,

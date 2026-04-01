@@ -5,7 +5,9 @@
 // 避免纯正则误将有序列表误判为节标题。
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata } from '../types';
+import type { PageCharData, CharWithPosition } from '../dla/types';
 import { PdfCorruptedError, ProcessError, OcrFailedError } from '../types/errors';
 import { countTokens, estimateTokens } from '../infra/token-counter';
 
@@ -89,9 +91,26 @@ async function getOcrScheduler(
     try {
       const Tesseract = await import('tesseract.js');
       const scheduler = Tesseract.createScheduler();
-      // 创建 Worker Pool（Fix: 追踪已创建 worker，失败时清理）
+
+      // Use bundled traineddata from assets/tesseract/ to avoid CDN download.
+      // jsdelivr is often blocked/slow in China, AND tesseract.js detects Electron
+      // as env='electron' (not 'node'), which makes it try to fetch() local file
+      // paths as URLs — crashing on Windows.
+      //
+      // Fix: set `cachePath` to our assets dir. The worker checks the cache
+      // (plain fs.readFile) BEFORE any URL/fetch logic, so it loads directly
+      // from disk without hitting the broken env detection code path.
+      const langDir = path.resolve(__dirname, '..', '..', 'assets', 'tesseract');
+      const hasLocalData = languages.every((l) =>
+        fs.existsSync(path.join(langDir, `${l}.traineddata`)),
+      );
+      const workerOpts = hasLocalData
+        ? { cachePath: langDir, gzip: false }
+        : {};
+
+      // Worker Pool (track created workers for cleanup on failure)
       for (let i = 0; i < OCR_POOL_SIZE; i++) {
-        const worker = await Tesseract.createWorker(languages.join('+'));
+        const worker = await Tesseract.createWorker(languages.join('+'), undefined, workerOpts);
         createdWorkers.push(worker);
         scheduler.addWorker(worker);
       }
@@ -190,6 +209,7 @@ export async function extractText(
   const pageBoundsArea: number[] = []; // 每页面积（平方英寸）
   const scannedPageIndices: number[] = [];
   const allStyledLines: StyledLine[] = [];
+  const allPageCharData: PageCharData[] = [];
 
   try {
     // §1.2: 逐页 mupdf.js 提取
@@ -208,35 +228,59 @@ export async function extractText(
         const areaSqIn = areaPoints / (72 * 72);
         pageBoundsArea.push(areaSqIn);
 
-        // 结构化文本提取（保留字体元数据）
+        // 结构化文本提取（保留字体元数据 + 字符坐标）
         let pageText = '';
         const stext = page.toStructuredText('preserve-whitespace');
+        const pageBounds = bounds; // [x0, y0, x1, y1] in PDF points
+        const pageW = pageBounds[2] - pageBounds[0];
+        const pageH = pageBounds[3] - pageBounds[1];
         try {
           const lines: string[] = [];
           // 逐行收集字符和字体信息
           const lineFontSizes: number[][] = []; // 每行各字符的字体大小
           const lineFontNames: string[][] = []; // 每行各字符的字体名称
+          const pageChars: CharWithPosition[] = [];
 
           lineFontSizes.push([]);
           lineFontNames.push([]);
 
           stext.walk({
-            onChar(c: string, _origin: unknown, font: { getName?(): string } | undefined, size: number | undefined) {
+            onChar(c: string, origin: unknown, font: { getName?(): string } | undefined, size: number | undefined) {
               if (lines.length === 0) { lines.push(''); }
               lines[lines.length - 1] += c;
               const idx = lines.length - 1;
               if (!lineFontSizes[idx]) lineFontSizes[idx] = [];
               if (!lineFontNames[idx]) lineFontNames[idx] = [];
-              lineFontSizes[idx]!.push(size ?? 0);
-              lineFontNames[idx]!.push(
-                (typeof font?.getName === 'function' ? font.getName() : '') ?? '',
-              );
+              const fs = size ?? 0;
+              const fn = (typeof font?.getName === 'function' ? font.getName() : '') ?? '';
+              lineFontSizes[idx]!.push(fs);
+              lineFontNames[idx]!.push(fn);
+
+              // 捕获字符坐标（归一化到 [0,1]）
+              const o = origin as [number, number] | undefined;
+              if (o && pageW > 0 && pageH > 0) {
+                pageChars.push({
+                  char: c,
+                  x: (o[0] - pageBounds[0]) / pageW,
+                  y: (o[1] - pageBounds[1]) / pageH,
+                  fontSize: fs,
+                  isBold: /bold/i.test(fn),
+                  pageIndex: i,
+                });
+              }
             },
             endLine() {
               lines.push('');
               lineFontSizes.push([]);
               lineFontNames.push([]);
             },
+          });
+
+          allPageCharData.push({
+            pageIndex: i,
+            chars: pageChars,
+            pageWidth: pageW,
+            pageHeight: pageH,
           });
           pageText = lines.join('\n');
 
@@ -464,6 +508,7 @@ export async function extractText(
       styledLines: allStyledLines,
       pdfMetadata,
       firstPage,
+      pageCharData: allPageCharData,
     };
   } finally {
     // §1.6: 资源释放

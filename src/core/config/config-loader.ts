@@ -535,6 +535,8 @@ const DEFAULT_LOGGING: LoggingConfig = {
 const DEFAULT_WRITING: WritingConfig = {
   defaultCslStyleId: 'gb-t-7714',
   defaultOutputLanguage: 'zh',
+  cslStylesDir: '',
+  cslLocalesDir: '',
 };
 
 const DEFAULT_PERSONALIZATION: PersonalizationConfig = {
@@ -571,6 +573,7 @@ export const DEFAULT_CONFIG: Omit<AbyssalConfig, 'project' | 'workspace'> & {
   logging: DEFAULT_LOGGING,
   writing: DEFAULT_WRITING,
   personalization: DEFAULT_PERSONALIZATION,
+  ai: { proactiveSuggestions: false },
   webSearch: DEFAULT_WEB_SEARCH,
 };
 
@@ -760,6 +763,16 @@ export function loadUnifiedConfig(opts: LoadUnifiedConfigOptions): Readonly<Abys
     privateDocsDir: 'private_docs',
   };
   config['workspace'] = workspace;
+
+  // 填充 writing.cslStylesDir / cslLocalesDir（从 workspace 路径派生）
+  const writingSection = (config['writing'] ?? {}) as Record<string, unknown>;
+  if (!writingSection['cslStylesDir']) {
+    writingSection['cslStylesDir'] = path.join(workspaceRoot, 'csl', 'styles');
+  }
+  if (!writingSection['cslLocalesDir']) {
+    writingSection['cslLocalesDir'] = path.join(workspaceRoot, 'csl', 'locales');
+  }
+  config['writing'] = writingSection;
 
   const result = config as unknown as AbyssalConfig;
 

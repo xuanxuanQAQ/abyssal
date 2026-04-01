@@ -18,6 +18,7 @@ import type { PaperFilter } from '../../../../shared-types/ipc';
 import type { Paper } from '../../../../shared-types/models';
 import type { Relevance } from '../../../../shared-types/enums';
 import { handleError } from '../../errors/errorHandlers';
+import { useViewActive } from '../../context/ViewActiveContext';
 
 export function stableFilterHash(filter?: PaperFilter): string {
   if (!filter) return 'default';
@@ -27,20 +28,22 @@ export function stableFilterHash(filter?: PaperFilter): string {
 // ── 读查询 ──
 
 export function usePaperList(filter?: PaperFilter) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['papers', 'list', stableFilterHash(filter)],
     queryFn: () => getAPI().db.papers.list(filter),
     staleTime: 30_000,
     gcTime: 300_000,
-    refetchOnWindowFocus: true,
+    enabled: viewActive,
   });
 }
 
 export function usePaper(id: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['papers', 'detail', id],
     queryFn: () => getAPI().db.papers.get(id!),
-    enabled: id !== null,
+    enabled: id !== null && viewActive,
     staleTime: 60_000,
     gcTime: 600_000,
   });
@@ -48,11 +51,13 @@ export function usePaper(id: string | null) {
 
 /** §2.2 聚合计数（智能分组使用） */
 export function usePaperCounts() {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['papers', 'counts'],
     queryFn: () => getAPI().db.papers.getCounts(),
     staleTime: 10_000,
     gcTime: 60_000,
+    enabled: viewActive,
   });
 }
 
@@ -241,6 +246,39 @@ export function useResetAnalysis() {
       queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
       queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
       queryClient.invalidateQueries({ queryKey: ['mappings'] });
+    },
+
+    onError: (err) => handleError(err),
+  });
+}
+
+/** 仅删除处理结果（文本文件），保留 PDF */
+export function useResetProcess() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => getAPI().db.papers.resetProcess(id),
+
+    onSettled: (_data, _err, id) => {
+      queryClient.invalidateQueries({ queryKey: ['papers', 'detail', id] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
+    },
+
+    onError: (err) => handleError(err),
+  });
+}
+
+/** 删除 PDF 和文本文件并重置全文状态 */
+export function useResetFulltext() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => getAPI().db.papers.resetFulltext(id),
+
+    onSettled: (_data, _err, id) => {
+      queryClient.invalidateQueries({ queryKey: ['papers', 'detail', id] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
     },
 
     onError: (err) => handleError(err),

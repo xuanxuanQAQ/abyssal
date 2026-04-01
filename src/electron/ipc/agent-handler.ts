@@ -42,25 +42,30 @@ export function registerAgentHandlers(ctx: AppContext): void {
 
   typedHandler('chat:send', logger, async (_e, message, context?) => {
     const chatCtx = context as ChatContext | undefined;
-    const contextKey = chatCtx?.contextKey ?? 'global';
-    const scoped = scopedKey(ctx.workspaceRoot, contextKey);
+    const contextHint = chatCtx?.contextKey ?? 'global';
+    // Unified conversation per workspace — contextHint is only used for prompt injection
+    const conversationId = 'workspace';
+    const scoped = scopedKey(ctx.workspaceRoot, conversationId);
 
-    // If no agent loop, push an error event so the frontend knows
-    if (!ctx.agentLoop) {
-      logger.warn('Agent Loop not available (no LLM configured)');
+    // Prefer SessionOrchestrator (capability-aware, session-enriched) over legacy AgentLoop
+    const orchestrator = ctx.sessionOrchestrator;
+    const agentLoop = ctx.agentLoop;
+
+    logger.info('[chat:send] Routing', {
+      contextHint,
+      backend: orchestrator ? 'SessionOrchestrator' : agentLoop ? 'AgentLoop' : 'none',
+      msgLen: (message as string).length,
+    });
+
+    if (!orchestrator && !agentLoop) {
+      logger.warn('[chat:send] No AI backend available (no LLM configured)');
       ctx.pushManager?.pushAgentStream({
         type: 'error',
-        conversationId: contextKey,
+        conversationId,
         code: 'NO_LLM',
         message: 'No LLM configured. Add an API key in Settings → API Keys.',
       });
-      return contextKey;
-    }
-
-    let state = conversations.get(scoped);
-    if (!state) {
-      state = { messages: [], conversationId: contextKey };
-      conversations.set(scoped, state);
+      return conversationId;
     }
 
     // Create AbortController for this conversation turn
@@ -68,22 +73,33 @@ export function registerAgentHandlers(ctx: AppContext): void {
     activeAbortControllers.set(scoped, abortController);
 
     try {
-      await ctx.agentLoop.run(message as string, state as any, chatCtx, abortController.signal);
+      if (orchestrator) {
+        // Route through SessionOrchestrator — includes session context, capabilities, proactive rules
+        await orchestrator.handleUserMessage(message as string, contextHint, abortController.signal);
+      } else {
+        // Fallback to legacy AgentLoop
+        let state = conversations.get(scoped);
+        if (!state) {
+          state = { messages: [], conversationId };
+          conversations.set(scoped, state);
+        }
+        await agentLoop!.run(message as string, state as any, chatCtx, abortController.signal);
+      }
     } catch (err) {
       if (abortController.signal.aborted) {
         // Aborted by user — push done event so frontend can finalize
         ctx.pushManager?.pushAgentStream({
           type: 'done',
-          conversationId: contextKey,
+          conversationId,
           fullText: '[Generation stopped by user]',
           usage: { inputTokens: 0, outputTokens: 0 },
         });
       } else {
         const errorMessage = (err as Error).message ?? 'Unknown agent error';
-        logger.warn('Agent loop error', { conversationId: contextKey, error: errorMessage });
+        logger.warn('Agent loop error', { conversationId, error: errorMessage });
         ctx.pushManager?.pushAgentStream({
           type: 'error',
-          conversationId: contextKey,
+          conversationId,
           code: 'AGENT_ERROR',
           message: errorMessage,
         });
@@ -92,7 +108,7 @@ export function registerAgentHandlers(ctx: AppContext): void {
       activeAbortControllers.delete(scoped);
     }
 
-    return contextKey;
+    return conversationId;
   }, { timeoutMs: 120_000 });
 
   typedHandler('chat:abort', logger, async (_e, conversationId?) => {
@@ -152,6 +168,8 @@ export function registerAgentHandlers(ctx: AppContext): void {
     // Delete from both SQLite and in-memory cache
     await ctx.dbProxy.deleteChatSession(contextKey);
     conversations.delete(scoped);
+    // Also clear the orchestrator's in-memory conversation
+    ctx.sessionOrchestrator?.clearConversation();
   });
 
   typedHandler('db:chat:listSessions', logger, async () => {

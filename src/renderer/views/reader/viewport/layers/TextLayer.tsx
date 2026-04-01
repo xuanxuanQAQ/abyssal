@@ -1,7 +1,17 @@
 import React, { useRef, useEffect } from 'react';
 import { TextLayer as PDFJSTextLayer } from 'pdfjs-dist';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
+import type { ContentBlockDTO } from '../../../../../shared-types/models';
 import './pdfTextLayer.css';
+
+/** Block types where text selection should be suppressed */
+const NON_TEXT_BLOCK_TYPES = new Set([
+  'figure', 'figure_caption', 'table', 'table_caption',
+  'table_footnote', 'formula', 'formula_caption', 'abandoned',
+]);
+
+/** Block types worth capturing as images */
+const CAPTURABLE_TYPES = new Set(['figure', 'table', 'formula']);
 
 export interface TextLayerProps {
   pageNumber: number;
@@ -10,35 +20,134 @@ export interface TextLayerProps {
   scale: number;
   getPage: (pageNumber: number) => Promise<any>;
   isInRenderWindow: boolean;
+  blocks?: ContentBlockDTO[];
+  onBlockClick?: (block: ContentBlockDTO) => void;
+}
+
+// ---------------------------------------------------------------------------
+// DLA overlay helpers
+// ---------------------------------------------------------------------------
+
+function addSelectionBlockers(
+  container: HTMLElement,
+  nonTextBlocks: ContentBlockDTO[],
+  cssWidth: number,
+  cssHeight: number,
+): void {
+  if (nonTextBlocks.length === 0 || cssWidth === 0 || cssHeight === 0) return;
+
+  container.querySelectorAll('[data-dla-blocker]').forEach((el) => el.remove());
+
+  for (const block of nonTextBlocks) {
+    const div = document.createElement('div');
+    div.setAttribute('data-dla-blocker', '1');
+    div.setAttribute('data-block-type', block.type);
+    div.setAttribute('data-bbox', JSON.stringify(block.bbox));
+    div.style.position = 'absolute';
+    div.style.left = `${block.bbox.x * cssWidth}px`;
+    div.style.top = `${block.bbox.y * cssHeight}px`;
+    div.style.width = `${block.bbox.w * cssWidth}px`;
+    div.style.height = `${block.bbox.h * cssHeight}px`;
+    div.style.userSelect = 'none';
+    (div.style as any).webkitUserSelect = 'none';
+    div.style.zIndex = '10';
+
+    if (CAPTURABLE_TYPES.has(block.type)) {
+      div.style.cursor = 'pointer';
+      div.classList.add('dla-capturable');
+    } else {
+      div.style.cursor = 'default';
+    }
+    // pointer-events handled via CSS: auto normally, none during .selecting
+    div.style.pointerEvents = 'auto';
+    container.appendChild(div);
+  }
 }
 
 /**
- * Transparent text DOM layer (z-index: 1) for native text selection.
+ * Disable user-select on OCR spans that fall inside blocker regions.
+ * Uses getBoundingClientRect() for accurate position matching
+ * (pdf.js positions spans via CSS transform, not style.left).
  */
+function maskSpansUnderBlockers(container: HTMLElement): void {
+  const blockers = container.querySelectorAll<HTMLElement>('[data-dla-blocker]');
+  if (blockers.length === 0) return;
+
+  // Collect blocker rects once
+  const blockerRects: DOMRect[] = [];
+  for (const b of blockers) blockerRects.push(b.getBoundingClientRect());
+
+  const allSpans = container.querySelectorAll<HTMLElement>('span');
+  for (const span of allSpans) {
+    if (
+      span.classList.contains('markedContent') ||
+      span.getAttribute('data-dla-masked') === '1'
+    ) continue;
+
+    const rect = span.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) continue;
+
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    for (const bRect of blockerRects) {
+      if (cx >= bRect.left && cx <= bRect.right && cy >= bRect.top && cy <= bRect.bottom) {
+        span.style.userSelect = 'none';
+        (span.style as any).webkitUserSelect = 'none';
+        span.setAttribute('data-dla-masked', '1');
+        break;
+      }
+    }
+  }
+}
+
+function applyDLA(
+  container: HTMLElement,
+  blocks: ContentBlockDTO[],
+  cssWidth: number,
+  cssHeight: number,
+): void {
+  if (blocks.length === 0) return;
+  const nonTextBlocks = blocks.filter(b => NON_TEXT_BLOCK_TYPES.has(b.type));
+  addSelectionBlockers(container, nonTextBlocks, cssWidth, cssHeight);
+  // Must run after blockers are in the DOM so their rects are available
+  maskSpansUnderBlockers(container);
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
-  const { pageNumber, cssWidth, cssHeight, scale, getPage, isInRenderWindow } = props;
+  const {
+    pageNumber,
+    cssWidth,
+    cssHeight,
+    scale,
+    getPage,
+    isInRenderWindow,
+    blocks = [],
+    onBlockClick,
+  } = props;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const activeAnnotationTool = useReaderStore((s) => s.activeAnnotationTool);
 
-  useEffect(() => {
-    if (!isInRenderWindow) {
-      return;
-    }
+  const blocksRef = useRef<ContentBlockDTO[]>(blocks);
+  blocksRef.current = blocks;
 
+  const onBlockClickRef = useRef(onBlockClick);
+  onBlockClickRef.current = onBlockClick;
+
+  // ---- Effect 1: Render text layer ----
+  useEffect(() => {
+    if (!isInRenderWindow) return;
     const container = containerRef.current;
-    if (!container) {
-      return;
-    }
+    if (!container) return;
 
     let cancelled = false;
 
     const renderTextLayer = async () => {
-      // Cleanup old text layer content
-      while (container.firstChild) {
-        container.removeChild(container.firstChild);
-      }
-
       const page = await getPage(pageNumber);
       if (cancelled) return;
 
@@ -47,58 +156,213 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
 
       const viewport = page.getViewport({ scale });
 
-      // pdf.js v4.x uses CSS custom property --scale-factor for span positioning
-      // and container sizing. Must be set before constructing PDFJSTextLayer.
-      container.style.setProperty('--scale-factor', String(scale));
-
-      console.log(`[TextLayer] page=${pageNumber}`, {
-        scale,
-        scaleFactor: scale,
-        viewportWidth: viewport.width,
-        viewportHeight: viewport.height,
-        cssWidth,
-        cssHeight,
-      });
+      const tempContainer = document.createElement('div');
+      tempContainer.style.setProperty('--scale-factor', String(scale));
 
       const textLayer = new PDFJSTextLayer({
         textContentSource: textContent,
-        container,
+        container: tempContainer,
         viewport,
       });
 
       await textLayer.render();
+      if (cancelled) return;
 
-      // Log first span to verify alignment
-      const spans = container.querySelectorAll('span');
-      if (spans.length > 0) {
-        const s = spans[0]!;
-        const cs = getComputedStyle(s);
-        console.log(`[TextLayer] first span:`, {
-          fontSize: cs.fontSize,
-          left: cs.left,
-          top: cs.top,
-          text: s.textContent?.slice(0, 30),
-        });
+      while (container.firstChild) container.removeChild(container.firstChild);
+      container.style.setProperty('--scale-factor', String(scale));
+      while (tempContainer.firstChild) {
+        container.appendChild(tempContainer.firstChild);
       }
+
+      if (!container.querySelector('.endOfContent')) {
+        const end = document.createElement('div');
+        end.className = 'endOfContent';
+        container.appendChild(end);
+      }
+
+      applyDLA(container, blocksRef.current, cssWidth, cssHeight);
     };
 
     renderTextLayer();
+    return () => { cancelled = true; };
+  }, [isInRenderWindow, pageNumber, scale, getPage, cssWidth, cssHeight]);
 
-    return () => {
-      cancelled = true;
+  // ---- Effect 2: Re-apply DLA when blocks arrive after render ----
+  useEffect(() => {
+    if (!isInRenderWindow) return;
+    const container = containerRef.current;
+    if (!container || container.childElementCount === 0) return;
+    if (blocks.length === 0) return;
+
+    applyDLA(container, blocks, cssWidth, cssHeight);
+  }, [isInRenderWindow, blocks, cssWidth, cssHeight]);
+
+  // ---- Effect 3: Selection management ----
+  // Implements three mechanisms:
+  // a) Toggle .selecting class (activates endOfContent cover + disables blocker pointer-events via CSS)
+  // b) Dynamic endOfContent repositioning (the key to preventing selection jumping)
+  // c) Highlight blocker divs that overlap the current selection range
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !isInRenderWindow) return;
+
+    // Track which column the mousedown started in (more reliable than sel.anchorNode
+    // which often falls outside the container due to endOfContent repositioning)
+    let startCol: 'L' | 'R' | null = null;
+
+    // --- a) mousedown: only start text-selection mode if not clicking a blocker ---
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.hasAttribute('data-dla-blocker')) {
+        // Don't enter selecting mode — let the click handler deal with it
+        return;
+      }
+      container.classList.add('selecting');
+      const cRect = container.getBoundingClientRect();
+      startCol = e.clientX < cRect.left + cRect.width / 2 ? 'L' : 'R';
     };
-  }, [isInRenderWindow, pageNumber, scale, getPage]);
 
-  if (!isInRenderWindow) {
-    return null;
-  }
+    const onUp = () => {
+      container.classList.remove('selecting');
+      // Restore endOfContent to the end of the container
+      const endDiv = container.querySelector('.endOfContent');
+      if (endDiv) container.appendChild(endDiv);
+      // Keep dla-drag-highlight visible — cleared when selection is dismissed
+    };
 
-  // Determine pointer-events based on active annotation tool
+    // --- b) + c) selectionchange: reposition endOfContent + highlight blockers ---
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) {
+        container.classList.remove('selecting');
+        container.querySelectorAll('.dla-drag-highlight').forEach(
+          (el) => el.classList.remove('dla-drag-highlight'),
+        );
+        startCol = null;
+        return;
+      }
+
+      const range = sel.getRangeAt(0);
+
+      // Check if this selection involves our textLayer
+      if (!range.intersectsNode(container)) {
+        container.classList.remove('selecting');
+        container.querySelectorAll('.dla-drag-highlight').forEach(
+          (el) => el.classList.remove('dla-drag-highlight'),
+        );
+        return;
+      }
+
+      // Ensure selecting class is active
+      container.classList.add('selecting');
+
+      // --- Dynamic endOfContent repositioning (pdf.js core mechanism) ---
+      const endDiv = container.querySelector('.endOfContent');
+      if (endDiv) {
+        let anchor: Node | null = sel.focusNode;
+        if (anchor?.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
+
+        if (
+          anchor &&
+          anchor !== endDiv &&
+          anchor instanceof HTMLElement &&
+          container.contains(anchor) &&
+          !anchor.hasAttribute('data-dla-blocker')
+        ) {
+          const parent = anchor.parentElement;
+          if (parent && container.contains(parent)) {
+            try {
+              parent.insertBefore(endDiv, anchor.nextSibling);
+            } catch {
+              container.appendChild(endDiv);
+            }
+          }
+        }
+      }
+
+      // --- Highlight blockers (column-aware via mousedown position) ---
+      // Both sel.anchorNode and sel.focusNode are unreliable for column detection
+      // in absolutely-positioned pdf.js text (DOM order ≠ visual position).
+      // Use the mousedown clientX (startCol) as the sole column constraint.
+      const selRect = range.getBoundingClientRect();
+      if (selRect.height > 0) {
+        const cRect = container.getBoundingClientRect();
+        const pageMidX = cRect.left + cRect.width / 2;
+
+        const blockers = container.querySelectorAll<HTMLElement>('[data-dla-blocker].dla-capturable');
+        for (const blocker of blockers) {
+          const bRect = blocker.getBoundingClientRect();
+          const vOverlap = bRect.bottom > selRect.top && bRect.top < selRect.bottom;
+
+          let hOk = true;
+          if (startCol) {
+            // Cross-column blocks (>50% page width) bypass column check
+            const isCrossCol = bRect.width > cRect.width * 0.5;
+            const blockerCol: 'L' | 'R' =
+              (bRect.left + bRect.right) / 2 < pageMidX ? 'L' : 'R';
+            hOk = isCrossCol || blockerCol === startCol;
+          }
+
+          if (vOverlap && hOk) {
+            blocker.classList.add('dla-drag-highlight');
+          } else {
+            blocker.classList.remove('dla-drag-highlight');
+          }
+        }
+      }
+    };
+
+    // --- Click on capturable blocker → select block ---
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.hasAttribute('data-dla-blocker')) return;
+      if (!target.classList.contains('dla-capturable')) return;
+
+      e.stopPropagation();
+      e.preventDefault();
+
+      const wasSelected = target.classList.contains('dla-selected');
+      container.querySelectorAll('.dla-selected').forEach(
+        (el) => el.classList.remove('dla-selected'),
+      );
+
+      if (!wasSelected) {
+        target.classList.add('dla-selected');
+        const blockType = target.getAttribute('data-block-type') ?? 'figure';
+        const bboxStr = target.getAttribute('data-bbox');
+        if (bboxStr && onBlockClickRef.current) {
+          try {
+            const bbox = JSON.parse(bboxStr);
+            onBlockClickRef.current({
+              type: blockType as ContentBlockDTO['type'],
+              bbox,
+              confidence: 1,
+              pageIndex: pageNumber - 1,
+            });
+          } catch { /* ignore */ }
+        }
+      }
+    };
+
+    container.addEventListener('mousedown', onDown);
+    container.addEventListener('click', onClick);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      container.removeEventListener('mousedown', onDown);
+      container.removeEventListener('click', onClick);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('selectionchange', onSelectionChange);
+      container.classList.remove('selecting');
+    };
+  }, [isInRenderWindow, pageNumber]);
+
+  if (!isInRenderWindow) return null;
+
   let pointerEvents: React.CSSProperties['pointerEvents'];
   if (activeAnnotationTool === 'areaHighlight' || activeAnnotationTool === 'hand') {
     pointerEvents = 'none';
   } else {
-    // null, textHighlight, textNote, textConceptTag → auto (selection works)
     pointerEvents = 'auto';
   }
 
@@ -107,9 +371,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       ref={containerRef}
       data-page={pageNumber}
       className="textLayer"
-      style={{
-        pointerEvents,
-      }}
+      style={{ pointerEvents }}
     />
   );
 });

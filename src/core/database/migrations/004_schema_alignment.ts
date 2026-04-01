@@ -18,8 +18,6 @@ function safeAddColumn(db: Database.Database, table: string, column: string, typ
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
-// TODO: analysis_status 旧值→新值映射需与上层 Orchestrator 状态机对齐
-
 /**
  * analysis_status 值迁移映射。
  * 旧值 → 新值（规范 §1.2）。

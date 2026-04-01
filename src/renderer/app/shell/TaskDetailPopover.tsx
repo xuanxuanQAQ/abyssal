@@ -14,16 +14,7 @@ import { useAppStore } from '../../core/store';
 import { getAPI } from '../../core/ipc/bridge';
 import type { TaskUIState } from '../../../shared-types/models';
 import { Z_INDEX } from '../../styles/zIndex';
-
-const WORKFLOW_KEYS: Record<string, string> = {
-  discover: 'statusBar.workflows.discover',
-  acquire: 'statusBar.workflows.acquire',
-  analyze: 'statusBar.workflows.analyze',
-  synthesize: 'statusBar.workflows.synthesize',
-  article: 'statusBar.workflows.article',
-  bibliography: 'statusBar.workflows.bibliography',
-  generate: 'statusBar.workflows.generate',
-};
+import { WORKFLOW_I18N_KEYS } from '../../core/constants/workflow';
 
 const STATUS_KEYS: Record<string, string> = {
   running: 'workflowMonitor.running',
@@ -156,7 +147,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
               >
                 {/* 工作流名称 */}
                 <span style={{ flex: 1, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {WORKFLOW_KEYS[task.workflow] ? t(WORKFLOW_KEYS[task.workflow]!) : task.workflow} — {task.currentStep || t('taskDetail.preparing')}
+                  {WORKFLOW_I18N_KEYS[task.workflow] ? t(WORKFLOW_I18N_KEYS[task.workflow]!) : task.workflow} — {task.currentStep || t('taskDetail.preparing')}
                 </span>
 
                 {/* 进度条 */}
@@ -259,7 +250,7 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
                         justifyContent: 'space-between',
                       }}
                     >
-                      <span>{WORKFLOW_KEYS[task.workflow] ? t(WORKFLOW_KEYS[task.workflow]!) : task.workflow}</span>
+                      <span>{WORKFLOW_I18N_KEYS[task.workflow] ? t(WORKFLOW_I18N_KEYS[task.workflow]!) : task.workflow}</span>
                       <span>{STATUS_KEYS[task.status] ? t(STATUS_KEYS[task.status]!) : task.status}</span>
                     </div>
                   ))}

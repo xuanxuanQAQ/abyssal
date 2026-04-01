@@ -14,6 +14,7 @@ import {
   useDeleteSection,
   useUpdateSection,
 } from '../../../core/ipc/hooks/useArticles';
+import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import { useAppStore, type AppStoreState } from '../../../core/store';
 import type { SectionStatus } from '../../../../shared-types/enums';
 
@@ -75,17 +76,21 @@ export function OutlineContextMenu({
   const createSection = useCreateSection();
   const deleteSection = useDeleteSection();
   const updateSection = useUpdateSection();
+  const startPipeline = useStartPipeline();
   const selectSection = useAppStore((s: AppStoreState) => s.selectSection);
 
   const handleAIGenerate = useCallback(() => {
-    // TODO: pipeline.start backend integration
     selectSection(sectionId);
-  }, [sectionId, selectSection]);
+    startPipeline.mutate({ workflow: 'generate', config: { sectionId } });
+  }, [sectionId, selectSection, startPipeline]);
 
   const handleWritingInstructions = useCallback(() => {
-    // TODO: open Dialog to edit writingInstructions
     selectSection(sectionId);
-  }, [sectionId, selectSection]);
+    const instructions = window.prompt('写作指令 / Writing instructions:');
+    if (instructions !== null) {
+      updateSection.mutate({ sectionId, patch: { writingInstructions: instructions } });
+    }
+  }, [sectionId, selectSection, updateSection]);
 
   const handleAddChild = useCallback(() => {
     createSection.mutate({
@@ -112,8 +117,8 @@ export function OutlineContextMenu({
   }, [articleId, parentId, sortIndex, createSection]);
 
   const handleVersionHistory = useCallback(() => {
-    // TODO: open VersionHistoryDialog
     selectSection(sectionId);
+    window.dispatchEvent(new CustomEvent('abyssal:openVersionHistory', { detail: { sectionId } }));
   }, [sectionId, selectSection]);
 
   const handleSetStatus = useCallback(

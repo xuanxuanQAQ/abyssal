@@ -1,8 +1,8 @@
 /**
  * ImportPreview — 解析预览 + 去重标记（§10.2）
  *
- * 预留组件，供 FileImportTab 在解析后展示结果。
- * TODO: 需要主进程解析 API 返回 ParseResult[]。
+ * 供 FileImportTab 在解析后展示结果。
+ * 接受 ParsedEntry[] 数据，显示去重标记并确认导入。
  */
 
 import React from 'react';

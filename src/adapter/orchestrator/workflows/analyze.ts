@@ -24,6 +24,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
 import type { WorkflowOptions, WorkflowRunnerContext } from '../workflow-runner';
@@ -33,10 +34,10 @@ import type { Logger } from '../../../core/infra/logger';
 import { PaperNotFoundError } from '../../../core/types/errors';
 
 import {
-  buildConceptFrameworkSection,
-  type ConceptForPrompt,
-  type MemoForPrompt,
-} from '../prompt-assembler';
+  formatConceptFramework,
+  type ConceptForFormat,
+  type MemoForFormat,
+} from '../../prompt-assembler/section-formatter';
 
 import {
   parseAndValidate,
@@ -81,6 +82,8 @@ export interface AnalyzeServices {
     getCitationsTo?: (paperId: string) => Promise<string[]>;
     countMappingsForConceptInPapers?: (conceptId: string, paperIds: string[]) => Promise<number>;
     countAnnotationsForPaperConcept?: (paperId: string, conceptId: string) => Promise<number>;
+    batchCountAnnotationsByPaper?: (paperId: string) => Promise<Map<string, number>>;
+    batchCountMappingsByPapers?: (paperIds: string[]) => Promise<Map<string, number>>;
     computeRelationsForPaper?: (paperId: string, semanticSearchFn: unknown) => Promise<void>;
     getSuggestedConceptByTerm?: (termNormalized: string) => Promise<Record<string, unknown> | null>;
     insertSuggestedConcept?: (data: Record<string, unknown>) => Promise<void>;
@@ -149,6 +152,11 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     }
 
     runner.setTotal(paperIds.length);
+    logger.info(`[analyze] Batch starting`, {
+      paperCount: paperIds.length,
+      frameworkState,
+      concurrency: options.concurrency ?? 3,
+    });
     if (paperIds.length === 0) return;
 
     // Load concept framework once (shared across papers)
@@ -156,20 +164,21 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     const allConcepts = (await dbProxy.getAllConcepts()) as Array<Record<string, unknown>>;
     const conceptsForSubset: ConceptForSubset[] = allConcepts
       .filter((c) => !c['deprecated'])
-      .map((c) => ({
-        id: c['id'] as string,
-        nameEn: c['nameEn'] as string ?? c['name_en'] as string ?? '',
-        nameZh: c['nameZh'] as string ?? c['name_zh'] as string ?? '',
-        definition: c['definition'] as string ?? '',
-        searchKeywords: (c['searchKeywords'] as string[] ?? c['search_keywords'] as string[]) ?? [],
-        maturity: c['maturity'] as 'tentative' | 'working' | 'established',
-        parentId: (c['parentId'] as string ?? c['parent_id'] as string) ?? null,
-      }));
-    // ConceptForPrompt 兼容别名
-    const conceptsForPrompt = conceptsForSubset as unknown as ConceptForPrompt[];
+      .map((c) => mapConceptRecord(c));
+    const conceptsForPrompt: ConceptForFormat[] = conceptsForSubset.map((c) => ({
+      id: c.id, nameEn: c.nameEn, nameZh: c.nameZh,
+      definition: c.definition, searchKeywords: c.searchKeywords, maturity: c.maturity,
+    }));
 
     // Concept version fingerprint: detect if concepts changed during batch
     const conceptSnapshotHash = computeConceptHash(conceptsForSubset);
+    const maturityCounts = { tentative: 0, working: 0, established: 0 };
+    for (const c of conceptsForSubset) maturityCounts[c.maturity]++;
+    logger.info(`[analyze] Concept framework snapshot`, {
+      totalConcepts: conceptsForSubset.length,
+      ...maturityCounts,
+      snapshotHash: conceptSnapshotHash,
+    });
 
     // Resolve seed types for model routing
     let seedPaperIds = new Set<string>();
@@ -178,9 +187,9 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
       try {
         const seeds = await dbProxy.getSeeds();
         for (const s of seeds) {
-          const pid = (s['paperId'] as string ?? s['paper_id'] as string);
+          const pid = s['paperId'] as string;
           seedPaperIds.add(pid);
-          const stype = (s['seedType'] as string ?? s['seed_type'] as string);
+          const stype = s['seedType'] as string;
           if (stype === 'axiom') axiomPaperIds.add(pid);
         }
       } catch (err) {
@@ -188,41 +197,108 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
       }
     }
 
-    // Pre-fetch citation neighbors for all papers (avoid async/sync mismatch)
+    // Pre-fetch citation neighbors for all papers (parallelized)
     const citationCache = new Map<string, string[]>();
     if (dbProxy.getCitationsFrom && dbProxy.getCitationsTo) {
-      for (const pid of paperIds) {
+      const citationPromises = paperIds.map(async (pid) => {
         try {
-          const from = await dbProxy.getCitationsFrom(pid);
-          const to = await dbProxy.getCitationsTo(pid);
+          const [from, to] = await Promise.all([
+            dbProxy.getCitationsFrom!(pid),
+            dbProxy.getCitationsTo!(pid),
+          ]);
           citationCache.set(pid, [...new Set([...from, ...to])]);
         } catch (err) {
           logger.debug(`Citation fetch failed for ${pid}`, { error: (err as Error).message });
         }
-      }
+      });
+      await Promise.all(citationPromises);
+      logger.debug(`[analyze] Citation cache pre-fetched`, { papers: paperIds.length, cached: citationCache.size });
     }
 
-    // Pre-fetch annotation counts and mapping counts for all concepts × papers
-    // so the sync SubsetSelectorDb can return real values instead of 0.
+    // Pre-fetch annotation counts and mapping counts for subset selection.
+    // Uses batch queries (1 SQL per paper) instead of Cartesian product (papers × concepts).
     const annotationCountCache = new Map<string, number>(); // `${paperId}:${conceptId}` → count
-    const mappingCountCache = new Map<string, number>(); // `${conceptId}:${paperIdsHash}` → count
+    const mappingCountCache = new Map<string, number>(); // `${conceptId}:${neighborKey}` → count
 
-    // Pre-populate annotation count cache for first batch of papers
-    if (dbProxy.countAnnotationsForPaperConcept && paperIds.length > 0 && conceptsForSubset.length > 0) {
-      const batchSize = Math.min(paperIds.length, 10);
-      const conceptSample = conceptsForSubset.slice(0, 20);
-      const promises: Array<Promise<void>> = [];
-      for (const pid of paperIds.slice(0, batchSize)) {
-        for (const c of conceptSample) {
-          const cacheKey = `${pid}:${c.id}`;
-          promises.push(
-            dbProxy.countAnnotationsForPaperConcept(pid, c.id)
-              .then((count: number) => { annotationCountCache.set(cacheKey, count); })
-              .catch(() => { /* ignore */ }),
-          );
+    if (paperIds.length > 0 && conceptsForSubset.length > 0) {
+      // Batch annotation counts: 1 query per paper (GROUP BY concept_id)
+      if (dbProxy.batchCountAnnotationsByPaper) {
+        const promises = paperIds.map(async (pid) => {
+          try {
+            const counts = await dbProxy.batchCountAnnotationsByPaper!(pid);
+            for (const [conceptId, count] of counts) {
+              annotationCountCache.set(`${pid}:${conceptId}`, count);
+            }
+          } catch (err) {
+            logger.debug(`Annotation batch pre-fetch failed for ${pid}`, { error: (err as Error).message });
+          }
+        });
+        await Promise.all(promises);
+      } else if (dbProxy.countAnnotationsForPaperConcept) {
+        // Fallback: individual queries (for backward compatibility)
+        const promises: Array<Promise<void>> = [];
+        for (const pid of paperIds) {
+          for (const c of conceptsForSubset) {
+            promises.push(
+              dbProxy.countAnnotationsForPaperConcept(pid, c.id)
+                .then((count: number) => { if (count > 0) annotationCountCache.set(`${pid}:${c.id}`, count); })
+                .catch((err: unknown) => { logger.debug(`Annotation count failed: ${pid}:${c.id}`, { error: (err as Error).message }); }),
+            );
+          }
         }
+        await Promise.all(promises);
       }
-      await Promise.all(promises);
+      logger.debug(`[analyze] Annotation count cache pre-fetched`, { nonZeroEntries: annotationCountCache.size });
+
+      // Batch mapping counts: 1 query per unique neighbor set (GROUP BY concept_id)
+      if (citationCache.size > 0) {
+        if (dbProxy.batchCountMappingsByPapers) {
+          // Deduplicate neighbor sets to avoid redundant queries
+          const processedSets = new Set<string>();
+          const promises: Array<Promise<void>> = [];
+          for (const pid of paperIds) {
+            const neighbors = citationCache.get(pid);
+            if (!neighbors || neighbors.length === 0) continue;
+            const sortedNeighbors = [...neighbors].sort();
+            const setKey = sortedNeighbors.join(',');
+            if (processedSets.has(setKey)) continue;
+            processedSets.add(setKey);
+            promises.push(
+              dbProxy.batchCountMappingsByPapers!(sortedNeighbors)
+                .then((counts) => {
+                  for (const [conceptId, count] of counts) {
+                    mappingCountCache.set(`${conceptId}:${setKey}`, count);
+                  }
+                })
+                .catch((err: unknown) => { logger.debug(`Mapping batch pre-fetch failed`, { error: (err as Error).message }); }),
+            );
+          }
+          await Promise.all(promises);
+        } else if (dbProxy.countMappingsForConceptInPapers) {
+          // Fallback: individual queries
+          const uniqueNeighborSets = new Map<string, string[]>();
+          for (const pid of paperIds) {
+            const neighbors = citationCache.get(pid);
+            if (neighbors && neighbors.length > 0) uniqueNeighborSets.set(pid, neighbors);
+          }
+          const promises: Array<Promise<void>> = [];
+          for (const [, neighbors] of uniqueNeighborSets) {
+            for (const c of conceptsForSubset) {
+              promises.push(
+                dbProxy.countMappingsForConceptInPapers(c.id, neighbors)
+                  .then((count: number) => {
+                    if (count > 0) {
+                      mappingCountCache.set(`${c.id}:${neighbors.sort().join(',')}`, count);
+                    }
+                  })
+                  .catch((err: unknown) => { logger.debug(`Mapping count failed: ${c.id}`, { error: (err as Error).message }); }),
+              );
+            }
+          }
+          await Promise.all(promises);
+        }
+        logger.debug(`[analyze] Mapping count cache pre-fetched`, { nonZeroEntries: mappingCountCache.size });
+      }
     }
 
     // Build sync subset selector DB adapter with pre-fetched data
@@ -245,6 +321,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     const isZeroConcepts = frameworkState === 'zero_concepts';
     const concurrency = options.concurrency ?? 3;
     const upgradeQueue: string[] = []; // Papers needing upgrade from intermediate → full
+    const upgradeQueueSeen = new Set<string>(); // Dedup guard for upgradeQueue
     const completedPaperIds: string[] = []; // Track for post-batch relation computation
     const ragService = services.ragService ?? null;
 
@@ -276,6 +353,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             seedPaperIds,
             axiomPaperIds,
             upgradeQueue,
+            upgradeQueueSeen,
             pushNotifier: services.pushNotifier ?? null,
             modelRouterConfig: services.modelRouterConfig,
             force: false,
@@ -291,12 +369,19 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
               analysisStatus: 'failed',
               failureReason: (error as Error).message.slice(0, 200),
             });
-          } catch { /* ignore db error during error handling */ }
+          } catch (dbErr) { logger.debug(`Paper ${paperId}: status update failed during error handling`, { error: (dbErr as Error).message }); }
         }
       }
     };
 
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+    logger.info(`[analyze] Worker pool finished`, {
+      completed: completedPaperIds.length,
+      failed: runner.progress.failedItems,
+      skipped: runner.progress.skippedItems,
+      upgradeQueueSize: upgradeQueue.length,
+    });
 
     // ── Post-batch: deferred relation computation ──
     // Relations are computed after ALL papers are analyzed, not per-paper.
@@ -339,6 +424,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             seedPaperIds,
             axiomPaperIds,
             upgradeQueue: [], // prevent recursive upgrades
+            upgradeQueueSeen: new Set(), // empty — no further upgrades
             pushNotifier: services.pushNotifier ?? null,
             modelRouterConfig: services.modelRouterConfig,
             force: true,
@@ -365,7 +451,7 @@ async function analyzeSinglePaper(
     logger: Logger;
     workspacePath: string;
     frameworkState: FrameworkState;
-    conceptsForPrompt: ConceptForPrompt[];
+    conceptsForPrompt: ConceptForFormat[];
     conceptsForSubset: ConceptForSubset[];
     isZeroConcepts: boolean;
     runner: WorkflowRunnerContext;
@@ -375,6 +461,7 @@ async function analyzeSinglePaper(
     seedPaperIds: Set<string>;
     axiomPaperIds: Set<string>;
     upgradeQueue: string[];
+    upgradeQueueSeen: Set<string>;
     pushNotifier: PushNotifier | null;
     modelRouterConfig: { frontierModel: string; lowCostModel: string } | undefined;
     force: boolean;
@@ -388,13 +475,13 @@ async function analyzeSinglePaper(
   const paper = await dbProxy.getPaper(paperId);
   if (!paper) throw new PaperNotFoundError({ message: `Paper not found: ${paperId}` });
 
-  const analysisStatus = paper['analysisStatus'] ?? paper['analysis_status'];
+  const analysisStatus = paper['analysisStatus'] as string | undefined;
   if (analysisStatus === 'completed' && !ctx.force) {
     runner.reportSkipped(paperId);
     return;
   }
 
-  const fulltextStatus = paper['fulltextStatus'] ?? paper['fulltext_status'];
+  const fulltextStatus = paper['fulltextStatus'] as string | undefined;
   if (fulltextStatus !== 'acquired' && fulltextStatus !== 'available') {
     logger.warn(`Paper ${paperId}: fulltext not acquired, skipping`);
     runner.reportSkipped(paperId);
@@ -406,18 +493,27 @@ async function analyzeSinglePaper(
   const textPath = path.join(workspacePath, 'texts', `${paperId}.txt`);
   let fullText = '';
   try {
-    fullText = fs.readFileSync(textPath, 'utf-8');
+    fullText = await fsp.readFile(textPath, 'utf-8');
   } catch {
     logger.warn(`Paper ${paperId}: fulltext file not found at ${textPath}`);
   }
 
   const paperTitle = (paper['title'] as string) ?? '';
-  const paperType = (paper['paperType'] as string ?? paper['paper_type'] as string) ?? 'unknown';
+  const paperType = (paper['paperType'] as string) ?? 'unknown';
   const relevance = (paper['relevance'] as string) ?? 'medium';
+
+  logger.debug(`[analyze] Paper ${paperId}: starting`, {
+    paperTitle: paperTitle.slice(0, 80),
+    paperType,
+    relevance,
+    fulltextLength: fullText.length,
+    isZeroConcepts: ctx.isZeroConcepts,
+  });
 
   // ══ §1.3: Mode dispatch ══
   if (ctx.isZeroConcepts) {
     // ── Generic analysis mode (§5) ──
+    logger.debug(`[analyze] Paper ${paperId}: mode=generic (zero concepts)`);
     runner.reportProgress({ currentStage: 'generic_analysis' });
 
     const memos = await collectMemos(dbProxy, paperId);
@@ -473,6 +569,14 @@ async function analyzeSinglePaper(
   };
 
   const route = resolveAnalysisRoute(features, ctx.modelRouterConfig);
+  logger.debug(`[analyze] Paper ${paperId}: route decision`, {
+    mode: route.mode,
+    model: route.model,
+    reason: route.reason,
+    relevance,
+    paperType,
+    seedType,
+  });
 
   if (route.mode === 'skip') {
     runner.reportSkipped(paperId);
@@ -491,7 +595,8 @@ async function analyzeSinglePaper(
 
     if (intermediateResult) {
       await dbProxy.updatePaper(paperId, { analysisStatus: 'intermediate' as any });
-      if (intermediateResult.recommendDeepAnalysis) {
+      if (intermediateResult.recommendDeepAnalysis && !ctx.upgradeQueueSeen.has(paperId)) {
+        ctx.upgradeQueueSeen.add(paperId);
         ctx.upgradeQueue.push(paperId);
       }
     } else {
@@ -509,7 +614,17 @@ async function analyzeSinglePaper(
   const subsetResult = await filterConceptSubsetAsync(
     ctx.conceptsForSubset, paperCtx, ctx.subsetDb, ctx.embedder,
   );
-  const conceptSubset = subsetResult.concepts as unknown as ConceptForPrompt[];
+  const conceptSubset: ConceptForFormat[] = subsetResult.concepts.map((c) => ({
+    id: c.id, nameEn: c.nameEn, nameZh: c.nameZh,
+    definition: c.definition, searchKeywords: c.searchKeywords, maturity: c.maturity,
+  }));
+  logger.debug(`[analyze] Paper ${paperId}: concept subset selected`, {
+    totalConcepts: ctx.conceptsForSubset.length,
+    selectedConcepts: conceptSubset.length,
+    fullInjection: subsetResult.fullInjection,
+    hasCrossDisciplineInstruction: !!subsetResult.extraInstruction,
+    selectedIds: conceptSubset.slice(0, 5).map((c) => c.id),
+  });
 
   // ── Step 3: Memo collection ──
   const memosForPrompt = await collectMemos(dbProxy, paperId);
@@ -551,7 +666,7 @@ async function analyzeSinglePaper(
   // ── Step 6: CBM decision ──
   runner.reportProgress({ currentStage: 'budgeting' });
 
-  const conceptFrameworkText = buildConceptFrameworkSection(conceptSubset);
+  const conceptFrameworkText = formatConceptFramework(conceptSubset);
   const memoText = memosForPrompt.map((m) => m.text).join('\n');
   const conceptMaturities = conceptSubset.map((c) => c.maturity);
   const ragText = ragPassages.map((p) => p.text).join('\n');
@@ -585,6 +700,15 @@ async function analyzeSinglePaper(
     sources: sources as any,
     conceptMaturities,
     frameworkState: ctx.frameworkState,
+  });
+  logger.debug(`[analyze] Paper ${paperId}: budget allocated`, {
+    strategy: allocation.strategy,
+    totalBudget: allocation.totalBudget,
+    outputReserve: allocation.outputReserve,
+    sources: sources.map((s) => ({ type: s.sourceType, tokens: s.estimatedTokens })),
+    ragPassages: ragPassages.length,
+    memoCount: memosForPrompt.length,
+    annotationCount: annotationsForFormat.length,
   });
 
   // ── Step 7: Prompt assembly (§4 maturity-aware) ──
@@ -630,11 +754,30 @@ async function analyzeSinglePaper(
   // ── Step 8: LLM call ──
   runner.reportProgress({ currentStage: 'analyzing' });
 
+  const systemTokens = countTokens(assembled.systemPrompt);
+  const userTokens = countTokens(assembled.userMessage);
+  logger.debug(`[analyze] Paper ${paperId}: LLM call starting`, {
+    model: route.model,
+    systemPromptTokens: systemTokens,
+    userMessageTokens: userTokens,
+    totalInputTokens: systemTokens + userTokens,
+  });
+
+  const llmStartMs = Date.now();
   const result = await llmClient.complete({
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
     workflowId: 'analyze',
     signal: runner.signal,
+  });
+  const llmLatencyMs = Date.now() - llmStartMs;
+
+  logger.info(`[analyze] Paper ${paperId}: LLM responded`, {
+    model: result.model,
+    outputLength: result.text.length,
+    outputTokens: countTokens(result.text),
+    latencyMs: llmLatencyMs,
+    hasReasoning: !!result.reasoning,
   });
 
   // ── Step 9: Output parsing with validation ──
@@ -658,7 +801,7 @@ async function analyzeSinglePaper(
     try {
       fs.mkdirSync(path.dirname(rawPath), { recursive: true });
       fs.writeFileSync(rawPath, result.text, 'utf-8');
-    } catch { /* ignore */ }
+    } catch (err) { logger.debug(`Paper ${paperId}: failed to save raw output`, { error: (err as Error).message }); }
 
     const diagnostic = buildParseDiagnostic(result.text);
     logger.warn(`Paper ${paperId}: parse_failed`, diagnostic);
@@ -666,8 +809,17 @@ async function analyzeSinglePaper(
     return;
   }
 
+  logger.debug(`[analyze] Paper ${paperId}: parse succeeded`, {
+    strategy: validated.strategy,
+    repairRules: validated.repairRules,
+    conceptMappings: validated.conceptMappings.length,
+    suggestedConcepts: validated.suggestedConcepts.length,
+    warningCount: validated.warnings.length,
+    bodyLength: validated.body.length,
+  });
+
   if (validated.warnings.length > 0) {
-    logger.warn(`Paper ${paperId}: validation warnings`, {
+    logger.warn(`[analyze] Paper ${paperId}: validation warnings`, {
       warnings: validated.warnings, strategy: validated.strategy, repairRules: validated.repairRules,
     });
   }
@@ -711,6 +863,7 @@ async function analyzeSinglePaper(
   }));
 
   // Preferred: single transaction for mappings + status update
+  logger.debug(`[analyze] Paper ${paperId}: writing ${mappingsForDb.length} concept mappings`);
   try {
     await dbProxy.completeAnalysis(paperId, mappingsForDb, 'completed');
   } catch (err) {
@@ -733,13 +886,13 @@ async function analyzeSinglePaper(
   // 10b: Analysis report (file write — outside transaction)
   const reportPath = writeReport(paperId, validated.body, workspacePath);
   if (reportPath) {
-    try { await dbProxy.updatePaper(paperId, { analysisPath: reportPath }); } catch { /* non-critical */ }
+    try { await dbProxy.updatePaper(paperId, { analysisPath: reportPath }); } catch (err) { logger.debug(`Paper ${paperId}: analysisPath update failed`, { error: (err as Error).message }); }
   }
 
   // Store reasoning chain if available
   if (result.reasoning) {
     const reasoningPath = path.join(workspacePath, 'analyses', `${paperId}.reasoning.txt`);
-    try { fs.writeFileSync(reasoningPath, result.reasoning, 'utf-8'); } catch { /* ignore */ }
+    try { fs.writeFileSync(reasoningPath, result.reasoning, 'utf-8'); } catch (err) { logger.debug(`Paper ${paperId}: reasoning write failed`, { error: (err as Error).message }); }
   }
 
   // Relations are NOT computed per-paper — O(N²) cost with hot concepts.
@@ -752,13 +905,13 @@ async function analyzeSinglePaper(
 async function collectMemos(
   dbProxy: AnalyzeServices['dbProxy'],
   paperId: string,
-): Promise<MemoForPrompt[]> {
+): Promise<MemoForFormat[]> {
   const memos = await dbProxy.getMemosByEntity('paper', paperId);
   return memos.map((m) => ({
     text: (m['text'] as string) ?? '',
-    createdAt: (m['createdAt'] as string ?? m['created_at'] as string) ?? '',
-    conceptIds: (m['conceptIds'] as string[] ?? m['concept_ids'] as string[]) ?? [],
-    paperIds: (m['paperIds'] as string[] ?? m['paper_ids'] as string[]) ?? [],
+    createdAt: (m['createdAt'] as string) ?? '',
+    conceptIds: (m['conceptIds'] as string[]) ?? [],
+    paperIds: (m['paperIds'] as string[]) ?? [],
   }));
 }
 
@@ -768,13 +921,13 @@ function formatRawAnnotations(raw: Array<Record<string, unknown>>): AnnotationFo
       const entry: AnnotationForFormat = {};
       const page = a['page'];
       if (typeof page === 'number') entry.page = page;
-      entry.annotationType = (a['type'] as string ?? a['annotation_type'] as string) ?? 'highlight';
-      entry.selectedText = (a['selectedText'] as string ?? a['selected_text'] as string) ?? '';
+      entry.annotationType = (a['type'] as string) ?? 'highlight';
+      entry.selectedText = (a['selectedText'] as string) ?? '';
       const comment = a['comment'] as string | undefined;
       if (comment) entry.comment = comment;
-      const conceptId = (a['conceptId'] as string ?? a['concept_id'] as string) || undefined;
+      const conceptId = (a['conceptId'] as string) || undefined;
       if (conceptId) entry.conceptId = conceptId;
-      const conceptName = (a['conceptName'] as string ?? a['concept_name'] as string) || undefined;
+      const conceptName = (a['conceptName'] as string) || undefined;
       if (conceptName) entry.conceptName = conceptName;
       return entry;
     })
@@ -788,12 +941,23 @@ async function writeSuggestions(
   pushNotifier: PushNotifier | null,
   logger: Logger,
 ): Promise<void> {
+  if (suggestions.length === 0) return;
+
+  logger.debug(`[analyze] Paper ${paperId}: writing ${suggestions.length} concept suggestions`, {
+    terms: suggestions.map((s) => s.term),
+  });
+
   // Try aggregator if enhanced DB methods available
   // Note: aggregateSuggestions expects sync DB methods. The dbProxy methods are
   // async wrappers around sync DatabaseService — safe to call with `as any`.
   if (dbProxy.getSuggestedConceptByTerm) {
     try {
-      await aggregateSuggestions(suggestions, paperId, dbProxy as any, pushNotifier);
+      const result = await aggregateSuggestions(suggestions, paperId, dbProxy as any, pushNotifier);
+      logger.debug(`[analyze] Paper ${paperId}: suggestion aggregation done`, {
+        new: result.newSuggestions,
+        updated: result.updatedSuggestions,
+        notifications: result.notificationsSent,
+      });
       return;
     } catch (err) {
       logger.debug(`Suggestion aggregator failed for paper ${paperId}, falling back to simple write`, { error: (err as Error).message });
@@ -835,9 +999,9 @@ function writeReport(paperId: string, body: string, workspacePath: string): stri
  * Used to detect if concepts were modified during a batch analysis run.
  */
 function computeConceptHash(concepts: ConceptForSubset[]): string {
-  // Sort by ID for determinism, then hash IDs + definitions
+  // Sort by ID for determinism, then hash IDs + definition content + maturity
   const sorted = [...concepts].sort((a, b) => a.id.localeCompare(b.id));
-  const payload = sorted.map((c) => `${c.id}:${c.maturity}:${c.definition.length}`).join('|');
+  const payload = sorted.map((c) => `${c.id}:${c.maturity}:${c.definition}`).join('|');
   // Simple djb2 hash — sufficient for staleness detection, not crypto
   let hash = 5381;
   for (let i = 0; i < payload.length; i++) {
@@ -858,17 +1022,25 @@ async function checkConceptStaleness(
     const current = (await dbProxy.getAllConcepts()) as Array<Record<string, unknown>>;
     const currentSubset: ConceptForSubset[] = current
       .filter((c) => !c['deprecated'])
-      .map((c) => ({
-        id: c['id'] as string,
-        nameEn: c['nameEn'] as string ?? c['name_en'] as string ?? '',
-        nameZh: c['nameZh'] as string ?? c['name_zh'] as string ?? '',
-        definition: c['definition'] as string ?? '',
-        searchKeywords: (c['searchKeywords'] as string[] ?? c['search_keywords'] as string[]) ?? [],
-        maturity: c['maturity'] as 'tentative' | 'working' | 'established',
-        parentId: (c['parentId'] as string ?? c['parent_id'] as string) ?? null,
-      }));
+      .map((c) => mapConceptRecord(c));
     return computeConceptHash(currentSubset) !== snapshotHash;
   } catch {
     return false; // If check fails, assume not stale
   }
+}
+
+/**
+ * Map a raw DB concept record to ConceptForSubset.
+ * DAO layer guarantees camelCase via fromRow(); snake_case fallbacks are not needed.
+ */
+function mapConceptRecord(c: Record<string, unknown>): ConceptForSubset {
+  return {
+    id: c['id'] as string,
+    nameEn: (c['nameEn'] as string) ?? '',
+    nameZh: (c['nameZh'] as string) ?? '',
+    definition: (c['definition'] as string) ?? '',
+    searchKeywords: (c['searchKeywords'] as string[]) ?? [],
+    maturity: c['maturity'] as 'tentative' | 'working' | 'established',
+    parentId: (c['parentId'] as string) ?? null,
+  };
 }

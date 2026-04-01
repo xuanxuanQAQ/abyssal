@@ -18,6 +18,7 @@ import { retrieve } from './retriever';
 import type { LlmCallFn } from './corrective-rag';
 import { checkEmbeddingConsistency } from '../database/embedding-migration';
 import { rowToRankedChunk, memoToRankedChunk } from './chunk-mappers';
+import { hasLayoutColumns } from '../database/prepared-statements';
 
 // ─── 类型重导出 ───
 
@@ -38,6 +39,8 @@ export interface MetadataFilters {
   sectionTypes?: SectionType[] | null | undefined;
   yearRange?: { min?: number | undefined; max?: number | undefined } | null | undefined;
   relevance?: Relevance[] | null | undefined;
+  /** DLA block type filter (e.g., ['text', 'title'] to exclude figure/table chunks) */
+  blockTypes?: string[] | null | undefined;
 }
 
 // ─── 高信息密度节类型（用于 searchByConcept 的 sectionType 偏好） ───
@@ -135,6 +138,32 @@ export class RagService {
     );
   }
 
+  /**
+   * 嵌入 + 索引一体化方法——供 acquire 管线使用。
+   * 内部先调 embedder 生成向量，再写入 chunk 索引。
+   */
+  async embedAndIndexChunks(chunks: TextChunk[]): Promise<IndexResult> {
+    const t0 = Date.now();
+    this.logger.info('[RagService] embedAndIndexChunks start', { chunkCount: chunks.length });
+
+    const texts = chunks.map((c) => c.text);
+    const embeddings = await this.embedder.embed(texts);
+    const tEmbed = Date.now();
+    this.logger.info('[RagService] Embedding complete', {
+      chunkCount: chunks.length,
+      embeddingDim: embeddings[0]?.length ?? 0,
+      embedDurationMs: tEmbed - t0,
+    });
+
+    const result = await this.indexChunks(chunks, embeddings);
+    this.logger.info('[RagService] Index complete', {
+      indexed: result.indexed,
+      skipped: result.skipped,
+      totalDurationMs: Date.now() - t0,
+    });
+    return result;
+  }
+
   // ════════════════════════════════════════
   // §3-5 三阶段检索
   // ════════════════════════════════════════
@@ -167,6 +196,15 @@ export class RagService {
     topK: number = 10,
     filters: MetadataFilters = {},
   ): Promise<RankedChunk[]> {
+    const t0 = Date.now();
+    this.logger.debug('[RagService] searchSemantic', {
+      queryPreview: queryText.slice(0, 60),
+      topK,
+      filters: {
+        paperIds: filters.paperIds?.length ?? 0,
+        blockTypes: filters.blockTypes ?? null,
+      },
+    });
     const queryVec = await this.embedder.embedSingle(queryText);
 
     // 防御：校验 embedding 维度与配置一致
@@ -196,6 +234,10 @@ export class RagService {
       conditions.push(`c.paper_id IN (SELECT value FROM json_each(?))`);
       params.push(JSON.stringify(filters.paperIds));
     }
+    if (hasLayoutColumns(db) && filters.blockTypes && filters.blockTypes.length > 0) {
+      conditions.push(`c.block_type IN (${filters.blockTypes.map(() => '?').join(',')})`);
+      params.push(...filters.blockTypes);
+    }
 
     const whereExtra = conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : '';
 
@@ -208,15 +250,23 @@ export class RagService {
       ORDER BY v.distance ASC
     `).all(...params) as Array<Record<string, unknown>>;
 
-    return rows.slice(0, topK).map((row) =>
+    const results = rows.slice(0, topK).map((row) =>
       rowToRankedChunk(row, 0, 'vector', {
         rawL2Distance: row['distance'] as number,
-        // rowToRankedChunk 不做 l2→score 转换，此处覆盖 score
       }),
     ).map((c) => ({
       ...c,
       score: c.rawL2Distance != null ? 1 / (1 + c.rawL2Distance) : 0,
     }));
+
+    this.logger.info('[RagService] searchSemantic complete', {
+      rows: rows.length,
+      returned: results.length,
+      topScore: results[0]?.score ?? 0,
+      durationMs: Date.now() - t0,
+    });
+
+    return results;
   }
 
   /** §8.2 按概念检索 */
@@ -224,8 +274,13 @@ export class RagService {
     conceptId: ConceptId,
     topK: number = 10,
   ): Promise<RankedChunk[]> {
+    const t0 = Date.now();
     const concept = this.dbService.getConcept(conceptId);
-    if (!concept) return [];
+    if (!concept) {
+      this.logger.warn('[RagService] searchByConcept: concept not found', { conceptId });
+      return [];
+    }
+    this.logger.debug('[RagService] searchByConcept', { conceptId, conceptName: concept.nameEn, topK });
 
     // 精确映射路径——偏好高信息密度段落（results/discussion/methods/conclusion）
     const mappings = this.dbService.getMappingsByConcept(conceptId);
@@ -269,7 +324,16 @@ export class RagService {
       }
     }
 
-    return all.sort((a, b) => b.score - a.score).slice(0, topK);
+    const results = all.sort((a, b) => b.score - a.score).slice(0, topK);
+    this.logger.info('[RagService] searchByConcept complete', {
+      conceptId,
+      mappedChunks: mappedChunks.length,
+      vectorHits: vectorResults.length,
+      memoHits: memoChunks.length,
+      returned: results.length,
+      durationMs: Date.now() - t0,
+    });
+    return results;
   }
 
   /** §8.3 搜索相似论文 */
@@ -277,9 +341,13 @@ export class RagService {
     paperId: PaperId,
     topK: number = 10,
   ): Promise<RankedChunk[]> {
+    this.logger.debug('[RagService] searchSimilar', { paperId: paperId.slice(0, 8), topK });
     const chunks = this.dbService.getChunksByPaper(paperId);
     const abstractChunk = chunks.find((c) => c.sectionLabel === 'abstract') ?? chunks[0];
-    if (!abstractChunk) return [];
+    if (!abstractChunk) {
+      this.logger.warn('[RagService] searchSimilar: no chunks for paper', { paperId: paperId.slice(0, 8) });
+      return [];
+    }
 
     const results = await this.searchSemantic(abstractChunk.text, topK * 3, {
       sources: ['paper'],

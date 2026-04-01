@@ -8,28 +8,33 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAPI } from '../bridge';
 import type { NewNote, NoteFilter, NoteMeta, ConceptDraft } from '../../../../shared-types/models';
 import { handleError } from '../../errors/errorHandlers';
+import { useViewActive } from '../../context/ViewActiveContext';
 
 export function useNoteList(filter?: NoteFilter) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['notes', filter ?? {}],
     queryFn: () => getAPI().db.notes.list(filter),
     staleTime: 30_000,
+    enabled: viewActive,
   });
 }
 
 export function useNote(noteId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['notes', 'detail', noteId],
     queryFn: () => getAPI().db.notes.get(noteId!),
-    enabled: !!noteId,
+    enabled: !!noteId && viewActive,
   });
 }
 
 export function useNoteFileContent(noteId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['notes', 'file', noteId],
     queryFn: () => getAPI().fs.readNoteFile(noteId!),
-    enabled: !!noteId,
+    enabled: !!noteId && viewActive,
     staleTime: 0,
   });
 }

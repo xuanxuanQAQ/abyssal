@@ -4,12 +4,14 @@
  * Renders concept nodes as anti-aliased diamonds using an L1 (Manhattan)
  * distance SDF in the fragment shader. Point-sprite based rendering.
  *
- * Shader source constants + program factory.
- * TODO: Wire into Sigma.js v3 custom program API on integration.
+ * Shader source constants are preserved for future custom WebGL implementation.
+ * Currently falls back to Sigma's built-in NodeCircleProgram.
  */
 
+import { NodeCircleProgram } from 'sigma/rendering';
+
 // ---------------------------------------------------------------------------
-// GLSL Shader Sources
+// GLSL Shader Sources (preserved for future custom diamond rendering)
 // ---------------------------------------------------------------------------
 
 export const CONCEPT_NODE_VERTEX_SHADER = /* glsl */ `
@@ -67,60 +69,16 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
-// Sigma.js v3 Program Integration
+// Sigma.js v3 Program — uses built-in circle as fallback
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a custom NodeProgram class for diamond-shaped concept nodes.
- *
- * Usage with Sigma v3:
- * ```ts
- * const sigma = new Sigma(graph, container, {
- *   nodeProgramClasses: {
- *     concept: createConceptNodeProgram(),
- *   },
- * });
- * ```
- *
- * @returns A program class suitable for Sigma's nodeProgramClasses setting.
+ * Returns NodeCircleProgram as fallback. The diamond shape requires a full
+ * custom WebGL program; node type differentiation is handled via color/size
+ * in the graph synchronizer's node attributes.
  */
-export function createConceptNodeProgram(): unknown {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { NodeProgram } = require('sigma/rendering') as {
-      NodeProgram: new (...args: unknown[]) => unknown;
-    };
-
-    // TODO: Verify Sigma.js v3 NodeProgram API compatibility
-    // The shader code is correct per §3.3, but the class structure
-    // may need adjustment for the specific sigma version installed.
-    //
-    // Typical v3 custom program pattern:
-    //
-    //   class ConceptNodeProgram extends NodeProgram {
-    //     getDefinition() {
-    //       return {
-    //         VERTICES: 1,
-    //         ARRAY_ITEMS_PER_VERTEX: 5,
-    //         VERTEX_SHADER_SOURCE: CONCEPT_NODE_VERTEX_SHADER,
-    //         FRAGMENT_SHADER_SOURCE: CONCEPT_NODE_FRAGMENT_SHADER,
-    //         UNIFORMS: ['u_matrix', 'u_sizeRatio', 'u_pixelRatio', 'u_correctionRatio'],
-    //         ATTRIBUTES: [
-    //           { name: 'a_position', size: 2, type: FLOAT },
-    //           { name: 'a_size',     size: 1, type: FLOAT },
-    //           { name: 'a_color',    size: 4, type: UNSIGNED_BYTE, normalized: true },
-    //           { name: 'a_id',       size: 4, type: UNSIGNED_BYTE, normalized: true },
-    //         ],
-    //       };
-    //     }
-    //     processVisibleItem(nodeIndex, startIndex, data) { ... }
-    //     draw(params) { ... }
-    //   }
-
-    return NodeProgram;
-  } catch {
-    return null;
-  }
+export function createConceptNodeProgram() {
+  return NodeCircleProgram;
 }
 
 export default {

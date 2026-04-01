@@ -7,7 +7,7 @@ export interface ThumbnailItemProps {
   isCurrent: boolean;
   hasAnnotations: boolean;
   annotationColor: string | null;
-  renderThumbnail: (canvas: HTMLCanvasElement, pageNumber: number) => Promise<void>;
+  renderThumbnail: (canvas: HTMLCanvasElement, pageNumber: number) => { promise: Promise<void>; cancel: () => void };
   onClick: (pageNumber: number) => void;
 }
 
@@ -28,7 +28,9 @@ const ThumbnailItem = React.memo(function ThumbnailItem(props: ThumbnailItemProp
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    void renderThumbnail(canvas, pageNumber);
+    const task = renderThumbnail(canvas, pageNumber);
+    task.promise.catch(() => { /* cancelled */ });
+    return () => { task.cancel(); };
     // Only render once on mount
   }, []);
 

@@ -1,10 +1,13 @@
 /**
- * useChatSession — 会话管理（§5.1 热缓存 + SQLite 分层读写）
+ * useChatSession — 统一会话管理（单一连续对话）
+ *
+ * 核心设计变更：一个 workspace 维护一个连续对话。
+ * 切换上下文面板（论文→图谱→概念）不会切割对话历史，
+ * 只是系统提示词中注入的上下文随焦点自动变化。
  *
  * 数据流规则：
  * - 写入路径：Zustand 同步写入 + IPC 异步落库（并行）
  * - 读取路径：热缓存优先 → TanStack Query 从数据库加载
- * - 热缓存淘汰：LRU 4 会话，淘汰只移除内存引用
  */
 
 import { useEffect, useCallback } from 'react';
@@ -12,9 +15,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useChatStore } from '../../../../core/store/useChatStore';
 import { getAPI } from '../../../../core/ipc/bridge';
-import { contextSourceKey } from '../../engine/contextSourceKey';
-import { useEffectiveSource } from '../../engine/useEffectiveSource';
 import type { ChatMessage, ChatMessageRecord } from '../../../../../shared-types/models';
+
+/** Fixed session key — all messages belong to one continuous conversation */
+const SESSION_KEY = 'workspace';
 
 /**
  * ChatMessageRecord → ChatMessage 转换
@@ -62,97 +66,86 @@ export function persistMessage(msg: ChatMessage, contextKey: string): void {
 }
 
 export function useChatSession() {
-  const source = useEffectiveSource();
-  const key = contextSourceKey(source);
   const queryClient = useQueryClient();
 
   const {
-    activeSessionKey,
     sessions,
-    setActiveSessionKey,
     ensureSession,
     loadSessionMessages,
+    setActiveSessionKey,
   } = useChatStore();
 
   // 从数据库加载历史（当热缓存未命中时）
   const { data: dbHistory } = useQuery({
-    queryKey: ['chat', 'history', key],
+    queryKey: ['chat', 'history', SESSION_KEY],
     queryFn: async () => {
-      const records = await getAPI().db.chat.getHistory(key, { limit: 50 });
+      const records = await getAPI().db.chat.getHistory(SESSION_KEY, { limit: 50 });
       return records.map(recordToMessage);
     },
     staleTime: Infinity,
     gcTime: 300_000,
-    // 仅当热缓存中没有该会话时才启用
-    enabled: !sessions[key],
+    enabled: !sessions[SESSION_KEY],
   });
 
-  // ContextSource 变化时切换会话 + dbHistory 就绪时填充热缓存（合并为单一 effect 防止竞态）
+  // 初始化统一会话 + 从 DB 填充热缓存
   useEffect(() => {
-    // Always ensure session exists (fixes first-load when key === activeSessionKey)
-    ensureSession(key);
+    ensureSession(SESSION_KEY);
+    setActiveSessionKey(SESSION_KEY);
 
-    if (key !== activeSessionKey) {
-      setActiveSessionKey(key);
-    }
-
-    // 如果热缓存为空且数据库有数据，加载到热缓存
     if (dbHistory && dbHistory.length > 0) {
-      const cached = useChatStore.getState().sessions[key];
+      const cached = useChatStore.getState().sessions[SESSION_KEY];
       if (cached && cached.messages.length === 0) {
-        loadSessionMessages(key, dbHistory, dbHistory.length < 50);
+        loadSessionMessages(SESSION_KEY, dbHistory, dbHistory.length < 50);
       }
     }
-  }, [key, activeSessionKey, setActiveSessionKey, ensureSession, loadSessionMessages, dbHistory]);
+  }, [ensureSession, setActiveSessionKey, loadSessionMessages, dbHistory]);
 
-  /** 清除当前会话（UI + 数据库） */
+  /** 清除对话（UI + 数据库 + 后端内存） */
   const clearCurrentSession = useCallback(() => {
-    useChatStore.getState().clearSession(key);
-    getAPI().db.chat.deleteSession(key).catch((err: unknown) => {
+    useChatStore.getState().clearSession(SESSION_KEY);
+    getAPI().db.chat.deleteSession(SESSION_KEY).catch((err: unknown) => {
       console.error('[ChatSession] Failed to delete session:', err);
     });
-    queryClient.removeQueries({ queryKey: ['chat', 'history', key] });
-  }, [key, queryClient]);
+    queryClient.removeQueries({ queryKey: ['chat', 'history', SESSION_KEY] });
+  }, [queryClient]);
 
   /** 加载更早的历史消息 */
   const loadMoreHistory = useCallback(async () => {
-    const session = useChatStore.getState().sessions[key];
+    const session = useChatStore.getState().sessions[SESSION_KEY];
     if (!session || session.fullyLoaded) return;
 
     const oldestMsg = session.messages[0];
     const beforeTimestamp = oldestMsg?.timestamp ?? Date.now();
 
     try {
-      const records = await getAPI().db.chat.getHistory(key, {
+      const records = await getAPI().db.chat.getHistory(SESSION_KEY, {
         limit: 50,
         beforeTimestamp,
       });
       const olderMessages = records.map(recordToMessage);
       const isFullyLoaded = olderMessages.length < 50;
 
-      // Re-read session after async gap to avoid stale reference
-      const currentSession = useChatStore.getState().sessions[key];
+      const currentSession = useChatStore.getState().sessions[SESSION_KEY];
       const existingMessages = currentSession?.messages ?? [];
 
-      // Single atomic update: prepend older messages + set fullyLoaded
       useChatStore.getState().loadSessionMessages(
-        key,
+        SESSION_KEY,
         [...olderMessages, ...existingMessages],
         isFullyLoaded,
       );
     } catch (err) {
       console.error('[ChatSession] Failed to load more history:', err);
     }
-  }, [key]);
+  }, []);
 
-  const currentSession = sessions[activeSessionKey];
+  const currentSession = sessions[SESSION_KEY];
 
   return {
-    contextKey: key,
+    /** Fixed session key for store/persistence operations */
+    sessionKey: SESSION_KEY,
     messages: currentSession?.messages ?? [],
     fullyLoaded: currentSession?.fullyLoaded ?? false,
     clearCurrentSession,
     loadMoreHistory,
-    source,
   };
 }

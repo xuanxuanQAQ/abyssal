@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Clock, Check, AlertCircle } from 'lucide-react';
-import { ToolCallCard } from './ToolCallCard';
+import { ToolCallGroup } from './ToolCallGroup';
 import type { ChatMessage } from '../../../../shared-types/models';
 
 interface ChatBubbleProps {
@@ -75,10 +75,10 @@ function ChatBubbleInner({ message, onRetry }: ChatBubbleProps) {
           wordBreak: 'break-word',
         }}
       >
-        {/* Tool Calls（在文本之前/之间渲染） */}
-        {message.toolCalls?.map((tc, i) => (
-          <ToolCallCard key={`${tc.name}-${i}`} toolCall={tc} />
-        ))}
+        {/* Tool Calls — 折叠为紧凑步骤组 */}
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <ToolCallGroup toolCalls={message.toolCalls} />
+        )}
 
         {/* Markdown 内容 */}
         {displayContent && (

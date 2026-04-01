@@ -343,7 +343,7 @@ export function createDiscoverWorkflow(services: DiscoverServices) {
             if (c.discoveredVia !== 'concept_search') {
               try {
                 await dbProxy.addCitation(c.discoveredFrom, c.paper.id);
-              } catch { /* ignore dup citations */ }
+              } catch (dupErr) { logger.debug(`Citation ${c.discoveredFrom} → ${c.paper.id} already exists`, { error: (dupErr as Error).message }); }
             }
           });
           ingested++;
@@ -513,7 +513,7 @@ function parseScreeningResponse(
       }
       return results;
     }
-  } catch { /* fall through to regex */ }
+  } catch { /* JSON parse failed — fall through to regex extraction */ }
 
   // Regex fallback
   for (let i = 0; i < batchSize; i++) {

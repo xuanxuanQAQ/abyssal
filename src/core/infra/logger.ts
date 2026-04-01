@@ -86,10 +86,12 @@ export class FileLogger implements Logger {
   private readonly logDir: string;
   private readonly _fs: typeof import('node:fs');
   private readonly _path: typeof import('node:path');
+  private readonly _mirrorToConsole: boolean;
 
-  constructor(logDir: string, level: LogLevel = 'info') {
+  constructor(logDir: string, level: LogLevel = 'info', mirrorToConsole = false) {
     this.logDir = logDir;
     this.minLevel = LEVEL_SEVERITY[level];
+    this._mirrorToConsole = mirrorToConsole;
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     this._fs = require('node:fs');
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -135,6 +137,17 @@ export class FileLogger implements Logger {
       ...(error ? { err: error.message } : {}),
       ...(ctx && Object.keys(ctx).length > 0 ? { ctx } : {}),
     });
+
+    // Mirror to console in dev mode so logs are visible in DevTools / terminal
+    if (this._mirrorToConsole) {
+      const consoleFn = level === 'error' ? console.error
+        : level === 'warn' ? console.warn
+        : level === 'debug' ? console.debug
+        : console.log;
+      const errStr = error ? ` [${error.name}: ${error.message}]` : '';
+      const ctxStr = ctx && Object.keys(ctx).length > 0 ? ' ' + JSON.stringify(ctx) : '';
+      consoleFn(`[${level.toUpperCase()}] ${msg}${errStr}${ctxStr}`);
+    }
 
     try {
       const date = new Date().toISOString().slice(0, 10);

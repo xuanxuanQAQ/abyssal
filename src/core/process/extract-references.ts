@@ -2,10 +2,19 @@
 // §3: 区域定位 + 条目分割 + DOI/年份正则
 
 import type { ExtractedReference } from '../types';
+import type { Logger } from '../infra/logger';
+import type { DocumentStructure } from '../dla/types';
 
 // ─── §3.2 区域定位正则 ───
 
-const REFERENCES_HEAD_RE = /^(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
+// 允许可选的章节编号前缀：
+//   "7. References", "V. REFERENCES", "第五章 参考文献", "5 参考文献"
+const SECTION_NUM_PREFIX = /^(?:(?:\d+|[IVXLC]+)[\.\s)\-:]\s*|(?:第.{1,3}[章节]\s*)|(?:chapter\s+\d+[\.\s:]\s*))?/i;
+const REFERENCES_KEYWORD_RE = /(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
+const REFERENCES_HEAD_RE = new RegExp(
+  SECTION_NUM_PREFIX.source + REFERENCES_KEYWORD_RE.source,
+  'i',
+);
 const APPENDIX_RE = /^(?:appendix|appendices|附录|supplementary)\s*/i;
 
 // ─── §3.3 条目分割正则 ───
@@ -124,30 +133,60 @@ function extractFields(rawText: string): Pick<ExtractedReference, 'doi' | 'year'
 
 // ─── §3.1 extractReferences 主函数 ───
 
-export function extractReferences(fullText: string): ExtractedReference[] {
+export function extractReferences(fullText: string, logger?: Logger | null): ExtractedReference[] {
   const lines = fullText.split('\n');
+  const scanFrom70 = Math.floor(lines.length * 0.7);
+  const scanFrom40 = Math.floor(lines.length * 0.4);
+
+  logger?.debug('[extractReferences] start', {
+    totalLines: lines.length,
+    scanRange: `${scanFrom40}-${lines.length}`,
+  });
 
   // §3.2: 区域定位（两轮从末尾向前扫描，Fix #9: 覆盖短论文）
   let refStartLine: number | null = null;
+  let matchedHeading: string | null = null;
 
   // 第一轮：从末尾到 70%
-  for (let i = lines.length - 1; i >= Math.floor(lines.length * 0.7); i--) {
-    if (REFERENCES_HEAD_RE.test(lines[i]!.trim())) {
+  for (let i = lines.length - 1; i >= scanFrom70; i--) {
+    const trimmed = lines[i]!.trim();
+    if (REFERENCES_HEAD_RE.test(trimmed)) {
       refStartLine = i + 1;
+      matchedHeading = trimmed;
       break;
     }
   }
   // 第二轮：从 70% 到 40%（覆盖短论文）
   if (refStartLine === null) {
-    for (let i = Math.floor(lines.length * 0.7) - 1; i >= Math.floor(lines.length * 0.4); i--) {
-      if (i >= 0 && REFERENCES_HEAD_RE.test(lines[i]!.trim())) {
-        refStartLine = i + 1;
-        break;
+    for (let i = scanFrom70 - 1; i >= scanFrom40; i--) {
+      if (i >= 0) {
+        const trimmed = lines[i]!.trim();
+        if (REFERENCES_HEAD_RE.test(trimmed)) {
+          refStartLine = i + 1;
+          matchedHeading = trimmed;
+          break;
+        }
       }
     }
   }
 
-  if (refStartLine === null) return [];
+  if (refStartLine === null) {
+    // 诊断：输出尾部 30% 的非空行，帮助排查标题格式
+    const tailStart = scanFrom70;
+    const tailLines = lines.slice(tailStart)
+      .map((l, i) => ({ lineNo: tailStart + i, text: l.trim() }))
+      .filter((l) => l.text.length > 0 && l.text.length < 80)
+      .slice(0, 15);
+    logger?.warn('[extractReferences] No references heading found', {
+      totalLines: lines.length, scanRange: `${scanFrom40}-${lines.length}`,
+      tailSample: tailLines,
+    });
+    return [];
+  }
+
+  logger?.debug('[extractReferences] heading found', {
+    heading: matchedHeading, lineNo: refStartLine - 1,
+  });
 
   // 确定区域终止位置
   let refEndLine = lines.length;
@@ -159,13 +198,74 @@ export function extractReferences(fullText: string): ExtractedReference[] {
   }
 
   const refLines = lines.slice(refStartLine, refEndLine).filter((l) => l.trim().length > 0);
-  if (refLines.length === 0) return [];
+  if (refLines.length === 0) {
+    logger?.warn('[extractReferences] References section empty', {
+      startLine: refStartLine, endLine: refEndLine,
+    });
+    return [];
+  }
 
   // §3.3: 条目分割
   const mode = detectSplitMode(refLines);
   const rawEntries = splitEntries(refLines, mode);
 
+  logger?.debug('[extractReferences] split complete', {
+    refLineCount: refLines.length, splitMode: mode,
+    entryCount: rawEntries.length,
+    firstEntry: rawEntries[0]?.slice(0, 120),
+  });
+
   // §3.4: 字段提取
+  return rawEntries.map((rawText, i) => ({
+    rawText,
+    orderIndex: i,
+    ...extractFields(rawText),
+  }));
+}
+
+// ═══ Layout-based reference extraction (DLA path) ═══
+
+/**
+ * Extract references using DLA-detected reference section.
+ *
+ * Skips the regex-based heading scan entirely — the DocumentStructure
+ * already identifies the reference section via visual block detection.
+ * The existing split/field-extraction logic is reused on the DLA text.
+ */
+export function extractReferencesFromLayout(
+  structure: DocumentStructure,
+  logger?: Logger | null,
+): ExtractedReference[] {
+  if (!structure.referenceSection) {
+    logger?.warn('[extractReferencesFromLayout] No reference section detected by DLA');
+    return [];
+  }
+
+  const entries = structure.referenceSection.entries;
+  if (entries.length === 0) {
+    logger?.warn('[extractReferencesFromLayout] Reference section has no text entries');
+    return [];
+  }
+
+  // Concatenate entry block text and apply existing split logic
+  const refText = entries
+    .filter((b) => b.text != null)
+    .map((b) => b.text!)
+    .join('\n');
+
+  const refLines = refText.split('\n').filter((l) => l.trim().length > 0);
+  if (refLines.length === 0) return [];
+
+  const mode = detectSplitMode(refLines);
+  const rawEntries = splitEntries(refLines, mode);
+
+  logger?.debug('[extractReferencesFromLayout] split complete', {
+    blockCount: entries.length,
+    refLineCount: refLines.length,
+    splitMode: mode,
+    entryCount: rawEntries.length,
+  });
+
   return rawEntries.map((rawText, i) => ({
     rawText,
     orderIndex: i,

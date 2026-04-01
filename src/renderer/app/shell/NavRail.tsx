@@ -9,7 +9,7 @@
  * - onMouseEnter 预加载目标视图代码
  */
 
-import React, { useCallback, useTransition } from 'react';
+import React, { startTransition, useCallback } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useTranslation } from 'react-i18next';
 import {
@@ -24,6 +24,7 @@ import {
 import { useAppStore } from '../../core/store';
 import { NavIcon } from './NavIcon';
 import { preloadView } from './MainStage';
+import { emitUserAction } from '../../core/hooks/useEventBridge';
 import type { ViewType } from '../../../shared-types/enums';
 import { Z_INDEX } from '../../styles/zIndex';
 
@@ -53,21 +54,19 @@ const SETTINGS_ITEM: NavItem = {
 export function NavRail() {
   const { t } = useTranslation();
   const activeView = useAppStore((s) => s.activeView);
-  const navigateTo = useAppStore((s) => s.navigateTo);
 
   // TODO: §4.4 Badge 数据源——从 PipelineSlice 和 TanStack Query 缓存派生
   // 当前无数据，不显示 badge
 
   const switchView = useAppStore((s) => s.switchView);
-  const [isPending, startTransition] = useTransition();
 
   const previousView = useAppStore((s) => s.previousView);
 
   const handleNavClick = useCallback((viewType: ViewType) => {
-    startTransition(() => {
-      switchView(viewType);
-    });
-  }, [switchView]);
+    const prev = activeView;
+    startTransition(() => switchView(viewType));
+    emitUserAction({ action: 'navigate', view: viewType as any, previousView: prev as any });
+  }, [switchView, activeView]);
 
   const handleNavHover = useCallback((viewType: ViewType) => {
     // 鼠标悬停时预加载目标视图代码，用户点击时已就绪

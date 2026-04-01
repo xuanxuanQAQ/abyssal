@@ -1,8 +1,8 @@
 /**
  * TagDropTarget — 标签接收拖入的论文（§12.2）
  *
- * 包装 useDroppable，论文拖入标签时高亮 + drop 后添加标签。
- * TODO: 需要 db:tags:update 后端支持。
+ * 包装 useDroppable，论文拖入标签时高亮。
+ * 实际的 drop 处理由父级 DndContext 的 onDragEnd 处理。
  */
 
 import React from 'react';

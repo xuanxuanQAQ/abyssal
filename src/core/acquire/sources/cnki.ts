@@ -7,57 +7,17 @@ import type { HttpClient } from '../../infra/http-client';
 import type { CookieJar } from '../../infra/cookie-jar';
 import type { Logger } from '../../infra/logger';
 import type { BrowserSearchFn } from '../index';
+import { copyFile, unlink } from 'fs/promises';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
 import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
+import { parseSetCookieHeaders, mergeCookieStrings } from '../../infra/cookie-utils';
 
 const SOURCE_NAME = 'cnki';
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 // KNS8 cross-database product codes (总库)
 const KUAKU_CODE = 'YSTT4HG0,LSTPFY1C,JUP3MUPD,MPMFIG1A,EMRPGLPA,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R';
-
-// ─── Set-Cookie parser ───
-
-/**
- * Extract cookie name=value pairs from Set-Cookie response headers.
- * Does NOT handle domain/path — only extracts the name=value part.
- */
-function parseSetCookies(headers: Record<string, string | string[] | undefined>): string[] {
-  const raw = headers['set-cookie'];
-  if (!raw) return [];
-  const arr = Array.isArray(raw) ? raw : [raw];
-  const pairs: string[] = [];
-  for (const line of arr) {
-    // "name=value; Path=/; HttpOnly" → "name=value"
-    const semi = line.indexOf(';');
-    const pair = semi > 0 ? line.slice(0, semi).trim() : line.trim();
-    if (pair.includes('=')) pairs.push(pair);
-  }
-  return pairs;
-}
-
-/**
- * Merge CARSI cookie header with session cookies from Set-Cookie headers.
- * Returns a combined cookie string.
- */
-function mergeCookies(carsiCookie: string | null, sessionCookies: string[]): string {
-  const map = new Map<string, string>();
-  // Parse existing CARSI cookies
-  if (carsiCookie) {
-    for (const pair of carsiCookie.split(';')) {
-      const trimmed = pair.trim();
-      const eq = trimmed.indexOf('=');
-      if (eq > 0) map.set(trimmed.slice(0, eq), trimmed);
-    }
-  }
-  // Session cookies override CARSI cookies with same name
-  for (const pair of sessionCookies) {
-    const eq = pair.indexOf('=');
-    if (eq > 0) map.set(pair.slice(0, eq), pair);
-  }
-  return [...map.values()].join('; ');
-}
 
 // ─── Title similarity (CJK-aware) ───
 
@@ -244,28 +204,6 @@ function extractDownloadUrl(html: string, fileName: string, dbName: string): str
   return null;
 }
 
-// ─── Cookie collection helpers ───
-
-/**
- * Collect cookies from the CookieJar across multiple domains and merge them.
- * Needed because CARSI login stores cookies under SSO domains (e.g. fsso.cnki.net)
- * which don't match the search host (kns.cnki.net).
- */
-function collectCookies(cookieJar: CookieJar, urls: string[]): string | null {
-  const parts = new Map<string, string>();
-  for (const url of urls) {
-    const header = cookieJar.getCookieHeader(url);
-    if (header) {
-      for (const pair of header.split(';')) {
-        const trimmed = pair.trim();
-        const eq = trimmed.indexOf('=');
-        if (eq > 0) parts.set(trimmed.slice(0, eq), trimmed);
-      }
-    }
-  }
-  return parts.size > 0 ? [...parts.values()].join('; ') : null;
-}
-
 /** CNKI-related URLs to collect cookies from */
 const CNKI_COOKIE_URLS = [
   'https://kns.cnki.net/',
@@ -282,6 +220,7 @@ async function searchOnHost(
   host: string,
   title: string,
   carsiCookie: string | null,
+  cookieJar: CookieJar,
   timeoutMs: number,
   log: Logger | null,
 ): Promise<{ results: CnkiSearchResult[]; sessionCookies: string[]; bodySnippet: string }> {
@@ -297,16 +236,18 @@ async function searchOnHost(
   // ── Step 0a: Bridge from FSSO → KNS session ──
   // CARSI login only sets cookies on fsso.cnki.net. We need to visit the FSSO
   // portal which redirects to kns.cnki.net, establishing a proper KNS session.
-  // The HttpClient now accumulates Set-Cookie headers across redirects.
   if (carsiCookie) {
     try {
       log?.info(`[CNKI] ${host} FSSO bridge`);
-      const bridgeResp = await http.request('https://fsso.cnki.net/Secure/default.aspx', {
+      const bridgeUrl = 'https://fsso.cnki.net/Secure/default.aspx';
+      const bridgeResp = await http.request(bridgeUrl, {
         timeoutMs: Math.min(timeoutMs, 10_000),
         headers: baseHeaders,
       });
-      const bridgeCookies = parseSetCookies(bridgeResp.headers);
+      const bridgeCookies = parseSetCookieHeaders(bridgeResp.headers);
       sessionCookies.push(...bridgeCookies);
+      // Persist bridge cookies back to CookieJar
+      cookieJar.mergeFromHeaders(bridgeUrl, bridgeResp.headers);
       log?.info(`[CNKI] ${host} FSSO bridge result`, {
         status: bridgeResp.status,
         finalUrl: bridgeResp.url?.slice(0, 100) ?? '',
@@ -320,7 +261,7 @@ async function searchOnHost(
 
   // ── Step 0b: Warm up KNS session ──
   const warmupUrl = `https://${host}/kns8s/AdvSearch?classid=WD0FTY92`;
-  const warmupCookie = mergeCookies(carsiCookie, sessionCookies);
+  const warmupCookie = mergeCookieStrings(carsiCookie, sessionCookies);
 
   try {
     const warmupResp = await http.request(warmupUrl, {
@@ -331,9 +272,10 @@ async function searchOnHost(
       },
     });
 
-    // Capture Set-Cookie headers from warmup (includes redirect cookies)
-    const warmupSetCookies = parseSetCookies(warmupResp.headers);
+    const warmupSetCookies = parseSetCookieHeaders(warmupResp.headers);
     sessionCookies.push(...warmupSetCookies);
+    // Persist warmup cookies back to CookieJar
+    cookieJar.mergeFromHeaders(warmupUrl, warmupResp.headers);
     log?.info(`[CNKI] ${host} warmup`, {
       status: warmupResp.status,
       sessionCookies: sessionCookies.map((c) => c.split('=')[0]).join(', '),
@@ -344,7 +286,7 @@ async function searchOnHost(
   }
 
   // Merge CARSI cookies with all session cookies collected so far
-  const mergedCookie = mergeCookies(carsiCookie, sessionCookies);
+  const mergedCookie = mergeCookieStrings(carsiCookie, sessionCookies);
 
   // ── Step 1: Search via KNS8 grid API ──
   const searchApiUrl = `https://${host}/kns8s/brief/grid`;
@@ -380,10 +322,11 @@ async function searchOnHost(
     body: formBody,
   });
 
-  // Also capture any new cookies from the search response
-  const searchSessionCookies = parseSetCookies(searchResp.headers);
+  // Capture and persist new cookies from the search response
+  const searchSessionCookies = parseSetCookieHeaders(searchResp.headers);
   if (searchSessionCookies.length > 0) {
     sessionCookies.push(...searchSessionCookies);
+    cookieJar.mergeFromHeaders(searchApiUrl, searchResp.headers);
   }
 
   const bodySnippet = searchResp.body?.slice(0, 300) ?? '';
@@ -424,7 +367,7 @@ export async function tryCnki(
 
   // Collect cookies from ALL CNKI-related domains (CARSI sets cookies on fsso.cnki.net,
   // not kns.cnki.net, so a single getCookieHeader would miss them)
-  const carsiCookie = collectCookies(cookieJar, CNKI_COOKIE_URLS);
+  const carsiCookie = cookieJar.collectCookies(CNKI_COOKIE_URLS);
   const activeDomains = cookieJar.getActiveDomains().filter((d) => d.includes('cnki'));
 
   try {
@@ -442,6 +385,8 @@ export async function tryCnki(
     let browserDownloadUrl: string | null = null;
     /** Session cookies exported from the BrowserWindow session */
     let browserSessionCookies: string | null = null;
+    /** Path to PDF already downloaded by BrowserWindow (via will-download interception) */
+    let browserDownloadedPath: string | null = null;
 
     // ── Primary: BrowserWindow-based search (handles CAPTCHA + JS-established session) ──
     if (browserSearchFn) {
@@ -452,9 +397,10 @@ export async function tryCnki(
           ...(_year != null ? { year: _year } : {}),
         });
         if (browserResults.length > 0) {
-          // Capture download URL and session cookies from the first (best) result
+          // Capture download URL, session cookies, and downloaded file from the first result
           browserDownloadUrl = browserResults[0]?.downloadUrl ?? null;
           browserSessionCookies = browserResults[0]?.metadata['sessionCookies'] ?? null;
+          browserDownloadedPath = browserResults[0]?.metadata['downloadedTempPath'] ?? null;
 
           searchResults = browserResults.map((r) => ({
             title: r.title,
@@ -482,7 +428,7 @@ export async function tryCnki(
     if (searchResults.length === 0) {
       // Attempt 1: kns.cnki.net (domestic)
       try {
-        const r = await searchOnHost(http, 'kns.cnki.net', title, carsiCookie, timeoutMs, log);
+        const r = await searchOnHost(http, 'kns.cnki.net', title, carsiCookie, cookieJar, timeoutMs, log);
         searchResults = r.results;
         allSessionCookies = r.sessionCookies;
       } catch (err) {
@@ -494,7 +440,7 @@ export async function tryCnki(
         log?.info('[CNKI] Trying overseas endpoint');
         try {
           const overseaCookie = cookieJar.getCookieHeader('https://oversea.cnki.net/');
-          const r = await searchOnHost(http, 'oversea.cnki.net', title, overseaCookie ?? carsiCookie, timeoutMs, log);
+          const r = await searchOnHost(http, 'oversea.cnki.net', title, overseaCookie ?? carsiCookie, cookieJar, timeoutMs, log);
           searchResults = r.results;
           allSessionCookies = r.sessionCookies;
         } catch (err) {
@@ -548,7 +494,7 @@ export async function tryCnki(
     } else {
       // Fallback: fetch the detail page via HTTP and extract download URL
       const detailBaseCookie = cookieJar.getCookieHeader(bestMatch.detailUrl);
-      const detailCookie = mergeCookies(detailBaseCookie, allSessionCookies);
+      const detailCookie = mergeCookieStrings(detailBaseCookie, allSessionCookies);
       const detailHeaders: Record<string, string> = {
         'User-Agent': BROWSER_UA,
         Referer: 'https://kns.cnki.net/kns8s/AdvSearch?classid=WD0FTY92',
@@ -568,33 +514,52 @@ export async function tryCnki(
       }
     }
 
-    if (!downloadUrl) {
+    if (!downloadUrl && !browserDownloadedPath) {
       return makeAttempt(SOURCE_NAME, 'failed', Date.now() - start, {
         failureReason: 'Could not extract PDF download URL from CNKI detail page',
         failureCategory: 'no_pdf_url',
       });
     }
 
-    log?.info('[CNKI] Download URL', { url: downloadUrl.slice(0, 100) });
+    log?.info('[CNKI] Download URL', {
+      url: downloadUrl?.slice(0, 100) ?? null,
+      hasBrowserDownload: !!browserDownloadedPath,
+    });
 
     // ── Step 4: Download ──
-    // Prefer BrowserWindow session cookies (they include the verified session with CAPTCHA solved)
-    const dlCookieParts: string[] = [];
-    if (browserSessionCookies) {
-      dlCookieParts.push(browserSessionCookies);
+    // 4a: If BrowserWindow already downloaded the PDF via will-download, use it directly
+    if (browserDownloadedPath) {
+      log?.info('[CNKI] Using BrowserWindow-downloaded file', { from: browserDownloadedPath });
+      try {
+        await copyFile(browserDownloadedPath, tempPath);
+        await unlink(browserDownloadedPath).catch(() => {});
+      } catch (copyErr) {
+        log?.warn('[CNKI] Failed to copy browser download, trying HTTP', {
+          error: (copyErr as Error).message,
+        });
+        browserDownloadedPath = null; // fall through to HTTP
+      }
     }
-    const dlBaseCookie = cookieJar.getCookieHeader(downloadUrl);
-    if (dlBaseCookie) dlCookieParts.push(dlBaseCookie);
-    const dlCookie = dlCookieParts.join('; ') || mergeCookies(carsiCookie, allSessionCookies);
 
-    const dlHeaders: Record<string, string> = {
-      'User-Agent': BROWSER_UA,
-      Referer: bestMatch.detailUrl,
-      Accept: 'application/pdf,*/*',
-      ...(dlCookie ? { Cookie: dlCookie } : {}),
-    };
+    // 4b: HTTP download fallback
+    if (!browserDownloadedPath && downloadUrl) {
+      const dlCookieParts: string[] = [];
+      if (browserSessionCookies) {
+        dlCookieParts.push(browserSessionCookies);
+      }
+      const dlBaseCookie = cookieJar.getCookieHeader(downloadUrl);
+      if (dlBaseCookie) dlCookieParts.push(dlBaseCookie);
+      const dlCookie = dlCookieParts.join('; ') || mergeCookieStrings(carsiCookie, allSessionCookies);
 
-    await downloadPdf(http, downloadUrl, tempPath, timeoutMs, dlHeaders);
+      const dlHeaders: Record<string, string> = {
+        'User-Agent': BROWSER_UA,
+        Referer: bestMatch.detailUrl,
+        Accept: 'application/pdf,*/*',
+        ...(dlCookie ? { Cookie: dlCookie } : {}),
+      };
+
+      await downloadPdf(http, downloadUrl, tempPath, timeoutMs, dlHeaders);
+    }
 
     // ── Step 6: Validate ──
     const validation = await validatePdf(tempPath);

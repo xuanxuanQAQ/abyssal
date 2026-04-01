@@ -320,12 +320,15 @@ export function checkIntegrity(db: Database.Database): IntegrityReport {
     sampleIds: unindexedMemos.map((r) => String(r.id)),
   });
 
-  // 5. note 文件缺失（返回 file_path 列表，由调用方检查文件系统）
+  // 5. note 文件缺失检查——返回所有 file_path 供调用方（Orchestrator）用 fs.existsSync 验证
+  const noteFiles = db.prepare(
+    'SELECT id, file_path FROM research_notes LIMIT 100',
+  ).all() as Array<{ id: string; file_path: string }>;
   checks.push({
     name: 'note_file_existence',
     severity: 'warn',
-    count: 0, // TODO: 调用方检查文件系统后更新
-    sampleIds: [],
+    count: noteFiles.length,
+    sampleIds: noteFiles.map((r) => `${r.id}:${r.file_path}`),
   });
 
   // 6. 过期的派生关系

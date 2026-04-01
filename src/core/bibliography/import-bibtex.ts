@@ -189,7 +189,7 @@ export function importBibtex(input: string): ImportedEntry[] {
       id: generatePaperId(doi, arxivId, title || null),
       title,
       authors,
-      year: year ?? 0,
+      ...(year != null ? { year } : {}),
       doi,
       arxivId,
       abstract: f('abstract') ? decodeLatex(f('abstract')!) : null,

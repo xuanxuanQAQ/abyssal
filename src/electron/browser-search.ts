@@ -1,17 +1,24 @@
 /**
  * BrowserWindow-based search for CNKI and Wanfang.
  *
- * Both platforms require JavaScript execution for search:
- * - CNKI: Grid API needs server-side search context established by JS + may show CAPTCHA
- * - Wanfang: SPA — search results are entirely client-rendered
+ * Both platforms have anti-automation measures that prevent fully automated
+ * PDF download:
+ * - CNKI: bar.cnki.net ordering system requires full browser JS context
+ * - Wanfang: SPA detects Electron and refuses to render
  *
- * This module opens a hidden BrowserWindow with the authenticated session,
- * navigates to the search page, waits for JS to render results, and extracts
- * them via webContents.executeJavaScript().
+ * Strategy (Plan A — Semi-automated):
+ * - CNKI: Automated search + detail navigation, then show window for user to
+ *   click the PDF download button. Intercept file via `will-download`.
+ * - Wanfang: Show window at search URL immediately for user to find paper and
+ *   download. Intercept file via `will-download`.
  */
 
-import { BrowserWindow, session } from 'electron';
+import { BrowserWindow, session, app } from 'electron';
 import type { Logger } from '../core/infra/logger';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { randomBytes } from 'crypto';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 
 // ─── Types ───
 
@@ -34,6 +41,245 @@ export type BrowserSearchFn = (
 // ─── Constants ───
 
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+// ─── Hint preferences (persist "don't show again" per source) ───
+
+interface HintPrefs {
+  /** Sources the user has dismissed hints for */
+  dismissed: string[];
+}
+
+function getHintPrefsPath(): string {
+  return join(app.getPath('userData'), 'download-hint-prefs.json');
+}
+
+function loadHintPrefs(): HintPrefs {
+  try {
+    const p = getHintPrefsPath();
+    if (!existsSync(p)) return { dismissed: [] };
+    return JSON.parse(readFileSync(p, 'utf-8')) as HintPrefs;
+  } catch {
+    return { dismissed: [] };
+  }
+}
+
+function saveHintPrefs(prefs: HintPrefs): void {
+  try {
+    writeFileSync(getHintPrefsPath(), JSON.stringify(prefs, null, 2), 'utf-8');
+  } catch { /* ignore */ }
+}
+
+function isHintDismissed(source: string): boolean {
+  return loadHintPrefs().dismissed.includes(source);
+}
+
+function dismissHint(source: string): void {
+  const prefs = loadHintPrefs();
+  if (!prefs.dismissed.includes(source)) {
+    prefs.dismissed.push(source);
+    saveHintPrefs(prefs);
+  }
+}
+
+/**
+ * Inject a floating hint overlay into the page.
+ * Shows instructions on the right side with a dismiss button and
+ * "don't show again" checkbox.
+ */
+async function injectHintOverlay(
+  win: BrowserWindow,
+  source: string,
+  message: string,
+): Promise<void> {
+  if (isHintDismissed(source)) return;
+
+  // The overlay is injected as raw HTML/CSS via executeJavaScript.
+  // It listens for dismiss + checkbox and posts a message back via console.log
+  // which we intercept via webContents console-message event.
+  const overlayScript = `
+    (() => {
+      if (document.getElementById('__abyssal_hint')) return;
+
+      const overlay = document.createElement('div');
+      overlay.id = '__abyssal_hint';
+      overlay.innerHTML = \`
+        <div style="
+          position: fixed; top: 16px; right: 16px; z-index: 2147483647;
+          width: 320px; padding: 16px 20px;
+          background: #1a1a2e; color: #e0e0e0;
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 12px;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+          font-family: -apple-system, 'Microsoft YaHei', 'Segoe UI', sans-serif;
+          font-size: 13px; line-height: 1.6;
+          transition: opacity 0.3s ease, transform 0.3s ease;
+          animation: __abyssal_slideIn 0.35s ease;
+        ">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <span style="font-size:14px; font-weight:600; color:#7c9dff;">\u{1F4CE} \u64CD\u4F5C\u63D0\u793A</span>
+            <button id="__abyssal_hint_close" style="
+              background:none; border:none; color:#888; cursor:pointer;
+              font-size:18px; padding:0 2px; line-height:1;
+            " title="\u5173\u95ED">&times;</button>
+          </div>
+          <div style="margin-bottom:12px; color:#ccc;">
+            ${message.replace(/'/g, "\\'")}
+          </div>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; color:#999; font-size:12px;">
+            <input type="checkbox" id="__abyssal_hint_noshow" style="
+              width:14px; height:14px; cursor:pointer; accent-color:#7c9dff;
+            ">
+            \u4E0B\u6B21\u4E0D\u518D\u63D0\u793A
+          </label>
+        </div>
+        <style>
+          @keyframes __abyssal_slideIn {
+            from { opacity: 0; transform: translateX(40px); }
+            to   { opacity: 1; transform: translateX(0); }
+          }
+        </style>
+      \`;
+      document.body.appendChild(overlay);
+
+      const closeBtn = document.getElementById('__abyssal_hint_close');
+      const checkbox = document.getElementById('__abyssal_hint_noshow');
+
+      function dismiss() {
+        overlay.style.opacity = '0';
+        overlay.style.transform = 'translateX(40px)';
+        setTimeout(() => overlay.remove(), 300);
+        if (checkbox && checkbox.checked) {
+          console.log('__abyssal_dismiss_hint__:${source}');
+        }
+      }
+
+      if (closeBtn) closeBtn.addEventListener('click', dismiss);
+    })()
+  `;
+
+  // Listen for the dismiss signal from the injected script
+  const onConsoleMessage = (_e: Electron.Event, _level: number, msg: string) => {
+    if (msg === `__abyssal_dismiss_hint__:${source}`) {
+      dismissHint(source);
+      win.webContents.removeListener('console-message', onConsoleMessage);
+    }
+  };
+  win.webContents.on('console-message', onConsoleMessage);
+
+  // Inject now, and re-inject on navigation (page may reload)
+  const doInject = () => {
+    if (!win.isDestroyed()) {
+      win.webContents.executeJavaScript(overlayScript).catch(() => {});
+    }
+  };
+  doInject();
+  win.webContents.on('did-finish-load', doInject);
+  win.webContents.on('did-navigate-in-page', doInject);
+}
+
+// ─── Semi-automated download: show window to user, intercept via will-download ───
+
+/**
+ * Show the BrowserWindow to the user and wait for them to manually trigger a
+ * PDF download. Intercepts the file via the session-level `will-download` event.
+ *
+ * Returns the path to the downloaded temp file, or null on timeout / user closing
+ * the window.
+ */
+async function waitForUserDownload(
+  ses: Electron.Session,
+  win: BrowserWindow,
+  windowTitle: string,
+  logger: Logger,
+  options?: {
+    timeoutMs?: number;
+    /** Source identifier for hint overlay (e.g. 'cnki', 'wanfang') */
+    hintSource?: string;
+    /** Hint message shown in the floating overlay */
+    hintMessage?: string;
+  },
+): Promise<string | null> {
+  const timeoutMs = options?.timeoutMs ?? 120_000;
+  const savePath = join(tmpdir(), `user-dl-${randomBytes(8).toString('hex')}.pdf`);
+
+  return new Promise<string | null>((resolve) => {
+    let resolved = false;
+    const popups: BrowserWindow[] = [];
+
+    const finish = (result: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      ses.removeAllListeners('will-download');
+      win.removeAllListeners('closed');
+      // Close any popup windows
+      for (const p of popups) { if (!p.isDestroyed()) p.close(); }
+      // Hide / close the main window (don't destroy if already destroyed)
+      if (!win.isDestroyed()) {
+        win.hide();
+      }
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      logger.warn('[BrowserSearch] User download timeout', { timeoutMs });
+      finish(null);
+    }, timeoutMs);
+
+    // If user closes the window, treat as cancellation
+    win.on('closed', () => finish(null));
+
+    // Intercept ANY download triggered in this session (main window or popups)
+    ses.on('will-download', (_event, item) => {
+      logger.info('[BrowserSearch] Download started (user-triggered)', {
+        filename: item.getFilename(),
+        mime: item.getMimeType(),
+        totalBytes: item.getTotalBytes(),
+      });
+      item.setSavePath(savePath);
+      item.on('done', (_e, state) => {
+        if (state === 'completed') {
+          logger.info('[BrowserSearch] Download complete', {
+            path: savePath,
+            bytes: item.getReceivedBytes(),
+          });
+          finish(savePath);
+        } else {
+          logger.warn('[BrowserSearch] Download ended with state', { state });
+          finish(null);
+        }
+      });
+    });
+
+    // Allow popups (download pages may open in new windows) — show them to user
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      logger.info('[BrowserSearch] Allowing popup', { url: url.slice(0, 120) });
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          show: true,
+          width: 1280,
+          height: 800,
+          webPreferences: { session: ses, nodeIntegration: false, contextIsolation: true },
+        },
+      };
+    });
+    win.webContents.on('did-create-window', (newWin) => {
+      popups.push(newWin);
+      newWin.webContents.setUserAgent(CHROME_UA);
+    });
+
+    // Show the window to the user
+    win.setTitle(windowTitle);
+    win.show();
+    win.focus();
+
+    // Inject floating hint overlay (respects "don't show again" preference)
+    if (options?.hintSource && options?.hintMessage) {
+      injectHintOverlay(win, options.hintSource, options.hintMessage).catch(() => {});
+    }
+  });
+}
 
 // ─── CNKI search via BrowserWindow ───
 
@@ -241,7 +487,7 @@ async function searchCnkiInBrowser(
       pageUrl: detailResult?._pageUrl?.slice(0, 100) ?? '',
     });
 
-    // Step 6: Export session cookies for use in HTTP download
+    // Step 6: Export session cookies for use in HTTP download fallback
     const allCookies = await ses.cookies.get({ domain: 'cnki.net' });
     const cookieHeader = allCookies
       .map((c) => `${c.name}=${c.value}`)
@@ -252,6 +498,27 @@ async function searchCnkiInBrowser(
       preview: cookieHeader.slice(0, 100),
     });
 
+    // Step 7: Semi-automated download — show window to user for manual PDF download
+    // CNKI's bar.cnki.net ordering system can't be automated; user clicks the button.
+    let downloadedPath: string | null = null;
+    logger.info('[BrowserSearch:CNKI] Showing window for user to download PDF');
+    downloadedPath = await waitForUserDownload(
+      ses, win,
+      'CNKI — 请点击「PDF下载」按钮，下载完成后窗口将自动关闭',
+      logger,
+      {
+        timeoutMs: 120_000,
+        hintSource: 'cnki',
+        hintMessage: '请在页面上找到并点击「PDF下载」按钮。<br>下载开始后窗口将自动关闭，文件会被自动导入。',
+      },
+    );
+
+    if (downloadedPath) {
+      logger.info('[BrowserSearch:CNKI] User download succeeded', { path: downloadedPath });
+    } else {
+      logger.info('[BrowserSearch:CNKI] User download not completed (timeout or cancelled)');
+    }
+
     // Return all results with the download URL from the detail page
     return searchResults.map((r, i) => ({
       title: r.title,
@@ -261,6 +528,7 @@ async function searchCnkiInBrowser(
         fileName: i === 0 ? (detailResult?.fileName ?? '') : '',
         dbName: i === 0 ? (detailResult?.dbName ?? '') : '',
         sessionCookies: i === 0 ? cookieHeader : '',
+        ...(i === 0 && downloadedPath ? { downloadedTempPath: downloadedPath } : {}),
       },
     }));
   } catch (err) {
@@ -271,7 +539,7 @@ async function searchCnkiInBrowser(
   }
 }
 
-// ─── Wanfang search via BrowserWindow ───
+// ─── Wanfang search via BrowserWindow (semi-automated) ───
 
 async function searchWanfangInBrowser(
   sessionPartition: string,
@@ -293,194 +561,54 @@ async function searchWanfangInBrowser(
   win.webContents.setUserAgent(CHROME_UA);
 
   try {
-    // Navigate to Wanfang search URL
+    // Navigate to Wanfang search page with the title as query
     const searchUrl = `https://s.wanfangdata.com.cn/paper?q=${encodeURIComponent(title)}&style=detail&f=D`;
     logger.info('[BrowserSearch:Wanfang] Navigating to search', { url: searchUrl.slice(0, 120) });
 
     await win.loadURL(searchUrl);
+    // Give the SPA a moment to start rendering before showing to user
+    await delay(2000);
 
-    // Wait for SPA to render results
-    const waitScript = `
-      new Promise((resolve) => {
-        let attempts = 0;
-        const check = () => {
-          attempts++;
-          const noResult = document.querySelector('.no-result, .empty-result, .no-data');
-          if (noResult && noResult.offsetParent !== null) {
-            resolve({ status: 'no_data', text: noResult.textContent?.trim()?.slice(0, 100) });
-            return;
-          }
-          // Check for rendered result items — look for any link to detail pages
-          const detailLinks = document.querySelectorAll('a[href*="/detail/"], a[href*="d.wanfangdata.com.cn"]');
-          if (detailLinks.length > 0) {
-            resolve({ status: 'has_results', count: detailLinks.length, via: 'detail_links' });
-            return;
-          }
-          // Check for titles in the result list
-          const titles = document.querySelectorAll('.normal-list .title, .search-result .title, [class*="result-item"] .title');
-          if (titles.length > 0) {
-            resolve({ status: 'has_results', count: titles.length, via: 'titles' });
-            return;
-          }
-          if (attempts > 30) {
-            // Dump DOM info for debugging
-            const body = document.body?.innerHTML || '';
-            const allLinks = document.querySelectorAll('a[href]');
-            const linkSamples = Array.from(allLinks).slice(0, 10).map(a => ({
-              href: a.getAttribute('href')?.slice(0, 80),
-              text: a.textContent?.trim()?.slice(0, 40),
-              cls: a.className?.slice(0, 40),
-            }));
-            resolve({
-              status: 'timeout',
-              bodyLen: body.length,
-              linkCount: allLinks.length,
-              linkSamples,
-              snippet: body.slice(0, 500),
-            });
-            return;
-          }
-          setTimeout(check, 500);
-        };
-        // SPA needs time to bootstrap
-        setTimeout(check, 3000);
-      })
-    `;
+    // Semi-automated: show window to user, let them find the paper and click download
+    // Wanfang's SPA detects Electron and won't render for automated extraction,
+    // but it works fine when the user interacts with the visible window.
+    logger.info('[BrowserSearch:Wanfang] Showing window for user to search and download');
+    const downloadedPath = await waitForUserDownload(
+      ses, win,
+      '万方 — 请找到论文并点击下载PDF，下载完成后窗口将自动关闭',
+      logger,
+      {
+        timeoutMs: 120_000,
+        hintSource: 'wanfang',
+        hintMessage: '请在搜索结果中找到目标论文，点击进入详情页后下载PDF。<br>下载开始后窗口将自动关闭，文件会被自动导入。',
+      },
+    );
 
-    const waitResult = await win.webContents.executeJavaScript(waitScript);
-    logger.info('[BrowserSearch:Wanfang] Wait result', { result: JSON.stringify(waitResult)?.slice(0, 500) });
-
-    if (waitResult?.status === 'no_data') {
-      return [];
-    }
-
-    // Even on timeout, try extraction — the page might have rendered partially
-    // Extract results from the rendered DOM
-    const extractScript = `
-      (() => {
-        const results = [];
-        const seen = new Set();
-
-        // Pattern 1: normal-list items with hidden IDs
-        const hiddenIds = document.querySelectorAll('[class*="title-id"]');
-        for (const span of hiddenIds) {
-          const raw = span.textContent?.trim() || '';
-          const underIdx = raw.indexOf('_');
-          if (underIdx <= 0) continue;
-          const type = raw.slice(0, underIdx);
-          const id = raw.slice(underIdx + 1);
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
-
-          const container = span.closest('[class*="normal-list"], [class*="result-item"]') || span.parentElement?.parentElement;
-          const titleEl = container?.querySelector('[class*="title"] a, a[class*="title"]');
-          const title = titleEl?.textContent?.trim()?.replace(/<[^>]*>/g, '') || '';
-
-          if (title && title.length > 4) {
-            const pathMap = { periodical: 'periodical', thesis: 'thesis', conference: 'conference', perio: 'periodical', Periodical: 'periodical', Thesis: 'thesis', Conference: 'conference' };
-            const pathSegment = pathMap[type] || 'periodical';
-            results.push({ title, paperId: id, paperType: type, detailUrl: 'https://d.wanfangdata.com.cn/' + pathSegment + '/' + id });
-          }
-        }
-        if (results.length > 0) return results;
-
-        // Pattern 2: Links containing detail page URLs
-        const allLinks = document.querySelectorAll('a[href]');
-        for (const link of allLinks) {
-          const href = link.getAttribute('href') || '';
-          // Match d.wanfangdata.com.cn/type/id or /detail/type/id patterns
-          const match = href.match(/(?:d\\.wanfangdata\\.com\\.cn|\\/(detail))\\/(periodical|thesis|conference)\\/([^?#/]+)/);
-          if (!match) continue;
-          const type = match[2];
-          const id = match[3];
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
-
-          const title = link.textContent?.trim()?.replace(/<[^>]*>/g, '') || '';
-          if (title && title.length > 4 && !title.includes('许可证') && !title.includes('备案') && !title.includes('版权')) {
-            results.push({ title, paperId: id, paperType: type, detailUrl: 'https://d.wanfangdata.com.cn/' + type + '/' + id });
-          }
-        }
-        if (results.length > 0) return results;
-
-        // Pattern 3: Broadest — find any substantive links with Chinese text
-        // Look for links whose parent has data attributes or specific classes
-        const containers = document.querySelectorAll('[class*="normal-list"], [class*="paper-list"], [class*="result-item"], [class*="search-result"]');
-        for (const container of containers) {
-          const links = container.querySelectorAll('a[href]');
-          for (const link of links) {
-            const href = link.getAttribute('href') || '';
-            const title = link.textContent?.trim() || '';
-            // Check if link text looks like a paper title (has Chinese characters, reasonable length)
-            if (title.length > 8 && /[\\u4e00-\\u9fff]/.test(title) && !seen.has(title)) {
-              seen.add(title);
-              // Try to extract ID from the href
-              const idMatch = href.match(/\\/([a-zA-Z0-9_.-]+)(?:\\?|$)/);
-              const typeMatch = href.match(/\\/(periodical|thesis|conference|perio)\\//);
-              const paperId = idMatch?.[1] || '';
-              const paperType = typeMatch?.[1] || 'periodical';
-              if (paperId && paperId.length > 3) {
-                results.push({
-                  title,
-                  paperId,
-                  paperType,
-                  detailUrl: href.startsWith('http') ? href : 'https://d.wanfangdata.com.cn/' + paperType + '/' + paperId,
-                });
-              }
-            }
-          }
-        }
-
-        return results;
-      })()
-    `;
-
-    const rawResults = await win.webContents.executeJavaScript(extractScript);
-    logger.info('[BrowserSearch:Wanfang] Extracted results', {
-      count: rawResults?.length ?? 0,
-      titles: (rawResults ?? []).slice(0, 3).map((r: any) => r.title?.slice(0, 40)),
-    });
-
-    if (!Array.isArray(rawResults) || rawResults.length === 0) {
-      // Debug: dump a sample of what's actually on the page
-      const debugScript = `
-        (() => {
-          const links = Array.from(document.querySelectorAll('a[href]'));
-          return {
-            totalLinks: links.length,
-            samples: links.slice(0, 15).map(a => ({
-              href: (a.getAttribute('href') || '').slice(0, 100),
-              text: (a.textContent || '').trim().slice(0, 60),
-              cls: (a.className || '').slice(0, 50),
-              parentCls: (a.parentElement?.className || '').slice(0, 50),
-            })),
-          };
-        })()
-      `;
-      const debugInfo = await win.webContents.executeJavaScript(debugScript);
-      logger.info('[BrowserSearch:Wanfang] Debug DOM dump', {
-        totalLinks: debugInfo?.totalLinks,
-        samples: JSON.stringify(debugInfo?.samples)?.slice(0, 1000),
-      });
-      return [];
-    }
-
-    // Export session cookies for HTTP download
+    // Export session cookies (for metadata)
     const allCookies = await ses.cookies.get({ domain: 'wanfangdata.com.cn' });
     const cookieHeader = allCookies
       .map((c) => `${c.name}=${c.value}`)
       .join('; ');
 
-    return rawResults.map((r: any) => ({
-      title: r.title ?? '',
-      downloadUrl: null,
-      detailUrl: r.detailUrl ?? '',
-      metadata: {
-        paperId: r.paperId ?? '',
-        paperType: r.paperType ?? '',
-        sessionCookies: cookieHeader,
-      },
-    }));
+    const currentUrl = win.isDestroyed() ? searchUrl : win.webContents.getURL();
+
+    if (downloadedPath) {
+      logger.info('[BrowserSearch:Wanfang] User download succeeded', { path: downloadedPath });
+      return [{
+        title,
+        downloadUrl: null,
+        detailUrl: currentUrl,
+        metadata: {
+          paperId: '',
+          paperType: '',
+          sessionCookies: cookieHeader,
+          downloadedTempPath: downloadedPath,
+        },
+      }];
+    }
+
+    logger.info('[BrowserSearch:Wanfang] User download not completed (timeout or cancelled)');
+    return [];
   } catch (err) {
     logger.error('[BrowserSearch:Wanfang] Error', undefined, { error: (err as Error).message });
     return [];

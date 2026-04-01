@@ -6,6 +6,7 @@ import {
   type PageMetadataMap,
 } from '../core/pageMetadataPreloader';
 import { useReaderStore } from '../../../core/store/useReaderStore';
+import { emitUserAction } from '../../../core/hooks/useEventBridge';
 
 export type DocumentStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -13,6 +14,8 @@ export interface PDFDocumentState {
   status: DocumentStatus;
   manager: PDFDocumentManager | null;
   pageMetadataMap: PageMetadataMap | null;
+  /** Absolute path to the PDF file on disk (for DLA subprocess) */
+  pdfPath: string | null;
   error: string | null;
 }
 
@@ -21,6 +24,7 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
   const [manager, setManager] = useState<PDFDocumentManager | null>(null);
   const [pageMetadataMap, setPageMetadataMap] =
     useState<PageMetadataMap | null>(null);
+  const [pdfPath, setPdfPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const managerRef = useRef<PDFDocumentManager | null>(null);
@@ -33,6 +37,7 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
       managerRef.current = null;
       setManager(null);
       setPageMetadataMap(null);
+      setPdfPath(null);
       setError(null);
       useReaderStore.getState().resetReader();
     }
@@ -51,15 +56,13 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
     const loadDocument = async (): Promise<void> => {
       try {
         const api = getAPI();
-        const { buffer } = await api.fs.openPDF(paperId);
+        const { path: filePath, buffer } = await api.fs.openPDF(paperId);
 
-        // Check if this load is still the active one
         if (activeLoadRef.current !== loadId) return;
 
         const docManager = new PDFDocumentManager();
         await docManager.loadDocument(buffer);
 
-        // Check again after async operation
         if (activeLoadRef.current !== loadId) {
           docManager.destroy();
           return;
@@ -72,10 +75,8 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
         useReaderStore.getState().setTotalPages(numPages);
         useReaderStore.getState().setCurrentPage(1);
 
-        // Preload page metadata (pass PDFDocumentProxy, not the manager)
         const doc = docManager.getDocument();
         if (!doc) throw new Error('Document loaded but proxy is null');
-        // PDFDocumentProxy satisfies PDFDocumentLike (numPages + getPage)
         const metadata = await preloadAllPageMetadata(
           doc as unknown as import('../core/pageMetadataPreloader').PDFDocumentLike,
           numPages,
@@ -87,7 +88,9 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
         }
 
         setPageMetadataMap(metadata);
+        setPdfPath(filePath);
         setStatus('ready');
+        emitUserAction({ action: 'openPaper', paperId: loadId, hasPdf: true });
       } catch (err) {
         if (activeLoadRef.current !== loadId) return;
 
@@ -107,6 +110,7 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
         managerRef.current = null;
         setManager(null);
         setPageMetadataMap(null);
+        setPdfPath(null);
         useReaderStore.getState().resetReader();
       }
     };
@@ -116,6 +120,7 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
     status,
     manager,
     pageMetadataMap,
+    pdfPath,
     error,
   };
 }

@@ -80,7 +80,7 @@ export interface AcquireAttempt {
 
 /** 全文获取结果 */
 export interface AcquireResult {
-  status: 'success' | 'abstract_only' | 'failed';
+  status: 'success' | 'abstract_only' | 'failed' | 'suspicious';
   pdfPath: string | null;
   source: string | null;
   sha256: string | null;
@@ -163,6 +163,8 @@ export interface TextExtractionResult {
   pdfMetadata: PdfEmbeddedMetadata;
   /** 首页启发式提取结果 */
   firstPage: FirstPageMetadata;
+  /** 每页字符位置数据（供 DLA block-text 融合使用） */
+  pageCharData?: import('../dla/types').PageCharData[];
 }
 
 /** 提取的参考文献条目 */

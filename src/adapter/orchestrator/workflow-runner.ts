@@ -13,7 +13,7 @@ import type { PushManager } from '../../electron/ipc/push';
 
 // ─── Types ───
 
-export type WorkflowType = 'discover' | 'acquire' | 'analyze' | 'synthesize' | 'article' | 'bibliography';
+export type WorkflowType = 'discover' | 'acquire' | 'process' | 'analyze' | 'synthesize' | 'article' | 'bibliography';
 export type WorkflowStatus = 'created' | 'running' | 'paused' | 'completed' | 'partial' | 'failed' | 'cancelled';
 
 export interface WorkflowError {
@@ -81,6 +81,18 @@ export interface WorkflowState {
   abortController: AbortController;
   completionPromise: Promise<WorkflowResult>;
   options: WorkflowOptions;
+  /** Timestamp (ms) when this workflow started, for ETA estimation. */
+  startTimeMs: number;
+  /**
+   * Shared paper queue for acquire workflows.
+   * Allows new paperIds to be enqueued into a running workflow
+   * instead of being rejected by the same-type mutex.
+   */
+  paperQueue?: string[] | undefined;
+  /** O(1) membership check for dedup when enqueuing new paperIds. */
+  paperQueueSeen?: Set<string> | undefined;
+  /** Resolve function to wake up workers waiting for new items. */
+  paperQueueNotify?: (() => void) | undefined;
 }
 
 // ─── Conflict matrix (§1.3) ───
@@ -123,6 +135,12 @@ export interface WorkflowRunnerContext {
   reportSkipped(itemId: string): void;
   reportQualityWarning(itemId: string, type: WorkflowQualityWarning['type'], message: string): void;
   setTotal(total: number): void;
+  /**
+   * For acquire workflows: take the next paperId from the shared queue.
+   * Returns null when the queue is empty AND no more items will arrive (workflow is draining).
+   * Blocks (via Promise) when the queue is temporarily empty but may receive new items.
+   */
+  takeFromQueue?(): Promise<string | null>;
 }
 
 // ─── WorkflowRunner ───
@@ -133,7 +151,6 @@ export class WorkflowRunner {
   private readonly middlewares: WorkflowMiddleware[] = [];
   private readonly logger: Logger;
   private readonly pushManager: PushManager | null;
-  private startTime = 0;
 
   constructor(logger: Logger, pushManager: PushManager | null) {
     this.logger = logger;
@@ -163,9 +180,26 @@ export class WorkflowRunner {
   start(type: WorkflowType, options: WorkflowOptions = {}): WorkflowState {
     this.logger.info(`[WorkflowRunner] start() called`, { type, options, activeCount: this.activeWorkflows.size, pushManagerAvailable: !!this.pushManager });
 
-    // Same-type mutex
+    // Same-type handling: acquire supports enqueue-merge; others are mutex.
     for (const [, ws] of this.activeWorkflows) {
       if (ws.type === type && ws.status === 'running') {
+        // Acquire workflows support live enqueue — merge new paperIds into running workflow
+        if (type === 'acquire' && ws.paperQueue && ws.paperQueueSeen && options.paperIds?.length) {
+          const newIds = options.paperIds.filter((id) => !ws.paperQueueSeen!.has(id));
+          if (newIds.length > 0) {
+            for (const id of newIds) ws.paperQueueSeen!.add(id);
+            ws.paperQueue.push(...newIds);
+            ws.progress.totalItems += newIds.length;
+            this.pushProgress(ws.id, ws.type, ws.progress);
+            this.logger.info(`[WorkflowRunner] Enqueued ${newIds.length} papers into running acquire workflow ${ws.id}`, { newIds });
+            // Wake up any workers waiting for new items
+            ws.paperQueueNotify?.();
+          } else {
+            this.logger.info(`[WorkflowRunner] All paperIds already in queue, skipping`, { paperIds: options.paperIds });
+          }
+          return ws;
+        }
+
         this.logger.error(`[WorkflowRunner] BLOCKED — same-type workflow already running: ${ws.id}`);
         throw new AbyssalError({ message: `Workflow '${type}' is already running (id: ${ws.id})`, code: 'WORKFLOW_CONFLICT', recoverable: false });
       }
@@ -196,7 +230,7 @@ export class WorkflowRunner {
       estimatedRemainingMs: null,
     };
 
-    this.startTime = Date.now();
+    const workflowStartTime = Date.now();
 
     const ctx: WorkflowRunnerContext = {
       signal: abortController.signal,
@@ -205,7 +239,7 @@ export class WorkflowRunner {
         if (update.currentItem !== undefined) progress.currentItem = update.currentItem;
         if (update.currentStage !== undefined) progress.currentStage = update.currentStage;
         if (update.substeps !== undefined) progress.substeps = update.substeps;
-        this.estimateRemaining(progress);
+        this.estimateRemaining(progress, workflowStartTime);
         this.pushProgress(id, type, progress);
       },
       reportComplete: (itemId) => {
@@ -213,13 +247,13 @@ export class WorkflowRunner {
         progress.currentItem = null;
         progress.currentStage = null;
         progress.substeps = [];
-        this.estimateRemaining(progress);
+        this.estimateRemaining(progress, workflowStartTime);
         this.pushProgress(id, type, progress);
         this.logger.debug(`Workflow ${type}: completed ${itemId}`, { workflowId: id });
       },
       reportFailed: (itemId, stage, error) => {
         progress.failedItems++;
-        const errorCode = (error as unknown as Record<string, unknown>)['code'] as string | undefined;
+        const errorCode = (error as Error & { code?: string }).code;
         progress.errors.push({
           itemId,
           stage,
@@ -254,16 +288,71 @@ export class WorkflowRunner {
 
     // Create state FIRST and register in map BEFORE starting execution.
     // execute() reads from activeWorkflows.get(id) — it must exist by then.
+    const paperQueue = type === 'acquire' ? [...(options.paperIds ?? [])] : undefined;
+    const paperQueueSeen = type === 'acquire' ? new Set(options.paperIds ?? []) : undefined;
+    // Idle drain timer — if no new items arrive within this window after queue empties,
+    // workers will drain and the workflow will complete.
+    const DRAIN_IDLE_MS = 30_000;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    let draining = false;
+    // Waiters: workers blocked on an empty queue
+    let queueWaiters: Array<() => void> = [];
+
+    if (type === 'acquire' && paperQueue) {
+      ctx.takeFromQueue = async () => {
+        while (true) {
+          if (abortController.signal.aborted) return null;
+
+          if (paperQueue.length > 0) {
+            // Reset drain timer on each take — workflow stays alive while busy
+            if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
+            draining = false;
+            return paperQueue.shift()!;
+          }
+
+          // Queue empty — start drain countdown
+          if (!draining) {
+            draining = true;
+            drainTimer = setTimeout(() => {
+              // Wake all waiting workers with null (drain signal)
+              for (const resolve of queueWaiters) resolve();
+              queueWaiters = [];
+            }, DRAIN_IDLE_MS);
+          }
+
+          // Wait for either new items or drain timeout
+          await new Promise<void>((resolve) => { queueWaiters.push(resolve); });
+
+          // After wakeup: if still draining and queue still empty → exit
+          if (draining && paperQueue.length === 0) return null;
+        }
+      };
+    }
+
     const state: WorkflowState = {
       id,
       type,
       status: 'running',
       startedAt: new Date().toISOString(),
+      startTimeMs: workflowStartTime,
       completedAt: null,
       progress,
       abortController,
       completionPromise: null!, // Set below after execute() is called
       options,
+      // Acquire workflows: shared queue + notify function for live enqueue
+      ...(paperQueue ? {
+        paperQueue,
+        paperQueueSeen,
+        paperQueueNotify: () => {
+          // Cancel drain timer — new work arrived
+          if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
+          draining = false;
+          // Wake all waiting workers
+          for (const resolve of queueWaiters) resolve();
+          queueWaiters = [];
+        },
+      } : {}),
     };
 
     this.activeWorkflows.set(id, state);
@@ -336,9 +425,8 @@ export class WorkflowRunner {
         ? { code: progress.errors[0]!.code ?? 'ITEM_FAILED', message: progress.errors[0]!.message }
         : undefined;
 
-    // Push final status to renderer so UI shows completion/failure
-    const finalStatus = state.status === 'partial' ? 'completed' : state.status;
-    this.pushProgress(id, type, progress, finalStatus, finalStatus === 'failed' ? errorDetail : undefined);
+    // Push final status to renderer — preserve partial/failed so UI can show accurate state
+    this.pushProgress(id, type, progress, state.status, errorDetail);
 
     // Remove from active map to prevent unbounded memory growth.
     // Completed workflows are no longer needed for conflict checking.
@@ -376,12 +464,12 @@ export class WorkflowRunner {
     return this.activeWorkflows;
   }
 
-  private estimateRemaining(progress: WorkflowProgress): void {
+  private estimateRemaining(progress: WorkflowProgress, startTimeMs: number): void {
     if (progress.completedItems < 3) {
       progress.estimatedRemainingMs = null;
       return;
     }
-    const elapsed = Date.now() - this.startTime;
+    const elapsed = Date.now() - startTimeMs;
     const remaining = progress.totalItems - progress.completedItems - progress.failedItems - progress.skippedItems;
     progress.estimatedRemainingMs = Math.round((elapsed / progress.completedItems) * remaining);
   }

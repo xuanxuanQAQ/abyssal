@@ -257,6 +257,8 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
 
 // ─── §2.3 WAL checkpoint（含重试逻辑 + Worker 协调） ───
 
+import { syncSleep } from './transaction-utils';
+
 export interface CheckpointResult {
   busy: number;
   log: number;
@@ -292,17 +294,9 @@ export interface WalCheckpointOptions {
  */
 export function walCheckpoint(
   db: Database.Database,
-  options?: WalCheckpointOptions | Logger,
+  options?: WalCheckpointOptions,
 ): CheckpointResult {
-  // 兼容旧签名 walCheckpoint(db, logger?)
-  const opts: WalCheckpointOptions =
-    options === undefined || options === null
-      ? {}
-      : typeof (options as Logger).info === 'function'
-        ? { logger: options as Logger }
-        : (options as WalCheckpointOptions);
-
-  const { logger, pauseWorkerWrites } = opts;
+  const { logger, pauseWorkerWrites } = options ?? {};
   const maxRetries = 3;
   const retryDelayMs = 1000;
 
@@ -330,12 +324,7 @@ export function walCheckpoint(
         busy: result.busy,
       });
 
-      // 同步等待——better-sqlite3 是同步 API，此处阻塞事件循环
-      // 但 checkpoint 仅在关闭/快照等低频场景调用
-      const start = Date.now();
-      while (Date.now() - start < retryDelayMs) {
-        // busy-wait
-      }
+      syncSleep(retryDelayMs);
     }
 
     // 回退到 PASSIVE——不阻塞，不完全合并

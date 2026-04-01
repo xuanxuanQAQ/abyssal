@@ -1,10 +1,21 @@
 // ═══ 事务工具 ═══
 // §1.4-1.5: 全部写事务使用 BEGIN IMMEDIATE
 // §8.1: SQLITE_BUSY 指数退避重试
-// §9.2: 事务耗时/行数追踪日志
+// §9.2: 事务耗时追踪日志
 
 import type Database from 'better-sqlite3';
 import type { Logger } from '../infra/logger';
+
+// ─── 同步休眠（非 busy-wait） ───
+
+/**
+ * 使用 Atomics.wait 实现同步阻塞休眠。
+ * 不消耗 CPU 时间片，不阻塞事件循环的 I/O 回调处理
+ * （但同步调用栈仍然不可中断——better-sqlite3 要求同步上下文）。
+ */
+export function syncSleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 // ─── §1.5 IMMEDIATE 写事务 ───
 
@@ -32,6 +43,8 @@ export interface BusyRetryOptions {
   logger?: Logger;
   /** 操作名称（用于日志） */
   operationName?: string;
+  /** 每次重试时的回调（用于并发监控指标上报） */
+  onRetry?: (attempt: number, delayMs: number) => void;
 }
 
 /**
@@ -54,9 +67,8 @@ export function withBusyRetry<T>(
     initialDelayMs = 1000,
     logger,
     operationName = 'database operation',
+    onRetry,
   } = options;
-
-  // TODO: busyRetry 触发计数器暴露到 §9.1 并发监控指标
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -74,11 +86,8 @@ export function withBusyRetry<T>(
         delayMs,
       });
 
-      // 同步等待（better-sqlite3 是同步 API，无法 await）
-      const deadline = Date.now() + delayMs;
-      while (Date.now() < deadline) {
-        // busy-wait
-      }
+      onRetry?.(attempt + 1, delayMs);
+      syncSleep(delayMs);
     }
   }
 
@@ -96,9 +105,7 @@ export interface TracedTransactionOptions {
 
 /**
  * 带追踪的 IMMEDIATE 写事务。
- *
  * 在 debug 级别记录：操作名、耗时、事务类型。
- * TODO: rowsAffected 按表分组统计——需 DAO 返回结构化结果
  */
 export function tracedTransaction<T>(
   db: Database.Database,

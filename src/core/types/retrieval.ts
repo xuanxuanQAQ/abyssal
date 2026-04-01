@@ -48,6 +48,8 @@ export interface RetrievalRequest {
   skipQueryExpansion?: boolean | undefined;
   /** Fix #1: adapter 层 budget-calculator 推导的 topK（优先于 budgetMode 硬编码值） */
   topK?: number | undefined;
+  /** DLA block type filter — exclude/include chunks by their source block type */
+  blockTypeFilter?: string[] | null | undefined;
 }
 
 // ═══ RetrievalQualityReport ═══

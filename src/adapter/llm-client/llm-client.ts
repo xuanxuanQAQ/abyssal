@@ -372,6 +372,11 @@ export class LlmClient implements VisionCapable {
     return this.costTracker.getCostStats();
   }
 
+  /** Attach a persistence callback for audit logging (e.g., to SQLite). */
+  setCostPersistFn(fn: Parameters<CostTracker['setPersistFn']>[0]): void {
+    this.costTracker.setPersistFn(fn);
+  }
+
   // ──��� Token counting ───
 
   countTokens(text: string, workflowId?: string): number {

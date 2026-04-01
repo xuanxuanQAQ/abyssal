@@ -16,6 +16,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { LlmClient } from '../../../llm-client/llm-client';
 import type { Logger } from '../../../../core/infra/logger';
+import { extractBalancedJson } from '../../utils';
 
 // ─── Intermediate result schema (§2.2) ───
 
@@ -62,9 +63,25 @@ export async function runIntermediateAnalysis(
   workspacePath: string,
   signal?: AbortSignal,
 ): Promise<IntermediateResult | null> {
-  // Truncate text for low-cost model (typically smaller context window)
-  const truncatedText = fullText.slice(0, 15000);
+  // Truncate text for low-cost model (typically smaller context window).
+  // Use ~15k chars as rough target but avoid cutting mid-sentence.
+  const CHAR_LIMIT = 15000;
+  let truncatedText = fullText;
+  if (fullText.length > CHAR_LIMIT) {
+    // Find the last sentence boundary before the limit
+    const cutRegion = fullText.slice(CHAR_LIMIT - 200, CHAR_LIMIT + 200);
+    const sentenceEnd = cutRegion.search(/[.!?。！？]\s/);
+    const cutPoint = sentenceEnd >= 0 ? CHAR_LIMIT - 200 + sentenceEnd + 1 : CHAR_LIMIT;
+    truncatedText = fullText.slice(0, cutPoint);
+  }
 
+  logger.debug(`[intermediate] Paper ${paperId}: starting intermediate analysis`, {
+    paperTitle,
+    originalLength: fullText.length,
+    truncatedLength: truncatedText.length,
+  });
+
+  const llmStart = Date.now();
   const result = await llmClient.complete({
     systemPrompt: INTERMEDIATE_SYSTEM_PROMPT,
     messages: [{
@@ -74,13 +91,30 @@ export async function runIntermediateAnalysis(
     workflowId: 'discover_screen', // Use screening slot (low-cost)
     ...(signal && { signal }),
   });
+  const llmMs = Date.now() - llmStart;
+
+  logger.debug(`[intermediate] Paper ${paperId}: LLM responded`, {
+    model: result.model,
+    outputLength: result.text.length,
+    latencyMs: llmMs,
+  });
 
   // Parse JSON output
   const parsed = parseIntermediateOutput(result.text, paperId);
   if (!parsed) {
-    logger.warn(`Paper ${paperId}: intermediate analysis parse failed`);
+    logger.warn(`[intermediate] Paper ${paperId}: parse failed`, {
+      outputPreview: result.text.slice(0, 300),
+    });
     return null;
   }
+
+  logger.debug(`[intermediate] Paper ${paperId}: parse succeeded`, {
+    paperType: parsed.paperType,
+    coreClaimsCount: parsed.coreClaims.length,
+    keyConceptsCount: parsed.keyConcepts.length,
+    potentialRelevance: parsed.potentialRelevance,
+    recommendDeepAnalysis: parsed.recommendDeepAnalysis,
+  });
 
   // Write intermediate result
   const analysesDir = path.join(workspacePath, 'analyses');
@@ -137,22 +171,3 @@ function parseIntermediateOutput(
   };
 }
 
-/** String-aware brace balancing for safe JSON extraction. */
-function extractBalancedJson(text: string): string | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]!;
-    if (escape) { escape = false; continue; }
-    if (ch === '\\' && inString) { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    if (ch === '}') depth--;
-    if (depth === 0) return text.slice(start, i + 1);
-  }
-  return null;
-}

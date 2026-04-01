@@ -26,8 +26,9 @@ import { registerAllHandlers } from './ipc/register';
 import { PushManager } from './ipc/push';
 import { registerGlobalErrorHandlers } from './lifecycle';
 
-import { FileLogger, type Logger } from '../core/infra/logger';
+import { FileLogger, ConsoleLogger, type Logger } from '../core/infra/logger';
 import { ConfigLoader } from '../core/infra/config';
+import { DEFAULT_CONFIG } from '../core/config/config-loader';
 import { loadGlobalConfig } from '../core/infra/global-config';
 import { isWorkspace, scaffoldWorkspace, getWorkspacePaths, WorkspaceManager } from '../core/workspace';
 import { createDbProxy, type DbProxyInstance } from '../db-process/db-proxy';
@@ -45,6 +46,7 @@ import { createSynthesizeWorkflow } from '../adapter/orchestrator/workflows/synt
 import { createBibliographyWorkflow } from '../adapter/orchestrator/workflows/bibliography';
 import { createDiscoverWorkflow } from '../adapter/orchestrator/workflows/discover';
 import { createAcquireWorkflow } from '../adapter/orchestrator/workflows/acquire';
+import { createProcessWorkflow } from '../adapter/orchestrator/workflows/process';
 import { createAcquireService } from '../core/acquire';
 import { createProcessService } from '../core/process';
 import { createSearchService } from '../core/search';
@@ -61,6 +63,11 @@ import { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
 import type { ChatContext } from '../shared-types/ipc';
 import { CookieJar } from '../core/infra/cookie-jar';
 import { ReconCache, type ReconCacheDb } from '../core/acquire/recon-cache';
+import { setupEventBridge } from './ipc/event-bridge';
+import { EventBus } from '../core/event-bus';
+import { ResearchSession } from '../core/session';
+import { createCapabilityRegistry, type CapabilityServices } from '../adapter/capabilities';
+import { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
 
 // ─── ParsedArgs ───
 
@@ -189,7 +196,7 @@ async function step4_initLogger(ctx: BootstrapContext): Promise<void> {
   const logLevel = ctx.args.logLevel !== 'info'
     ? ctx.args.logLevel
     : (ctx.config?.logging.level ?? 'info');
-  const logger = new FileLogger(wsPaths.logs, logLevel);
+  const logger = new FileLogger(wsPaths.logs, logLevel, ctx.args.dev);
   logger.cleanupOldLogs();
   ctx.logger = logger;
 
@@ -285,7 +292,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
       });
     }
   });
-  const processModule = createProcessService(config, null);
+  const processModule = createProcessService(config, null, logger);
   const searchModule = createSearchService(config, logger);
 
   // ── Web Search Service (Tavily / SerpAPI / Bing) ──
@@ -380,6 +387,11 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
     } catch (err) {
       logger.warn('RagService initialization failed', { error: (err as Error).message });
     }
+  } else {
+    logger.warn('RagService skipped — no embedding API key configured. Vector indexing will be unavailable.', {
+      embeddingProvider: config.rag.embeddingProvider,
+      embeddingModel: config.rag.embeddingModel,
+    });
   }
 
   // ── Layer 4: Context Budget Manager ──
@@ -403,13 +415,36 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   ctx.appContext.llmClient = llmClient;
   ctx.appContext.contextBudgetManager = contextBudgetManager;
 
+  // Wire cost tracking to llm_audit_log table
+  if (llmClient) {
+    llmClient.setCostPersistFn((entry) => {
+      dbProxy.insertAuditLog({
+        workflowId: entry.workflowId,
+        model: entry.model,
+        provider: entry.provider,
+        inputTokens: entry.inputTokens,
+        outputTokens: entry.outputTokens,
+        durationMs: entry.durationMs,
+        costUsd: entry.costUsd,
+        paperId: entry.paperId,
+        finishReason: entry.finishReason,
+      }).catch(() => { /* audit log failure is non-critical */ });
+    });
+  }
+
   // Create PushManager
   const pushManager = new PushManager();
   ctx.appContext.pushManager = pushManager;
 
   // ── CookieJar for institutional access ──
   const userDataPath = app.getPath('userData');
-  const cookieJar = new CookieJar(userDataPath);
+  const cookieJar = new CookieJar(userDataPath, (level, msg, meta) => {
+    if (level === 'error') {
+      logger.error(`[CookieJar] ${msg}`, undefined, meta);
+    } else {
+      logger[level](`[CookieJar] ${msg}`, meta);
+    }
+  });
   ctx.appContext.cookieJar = cookieJar;
   acquireModule.setCookieJar(cookieJar);
   logger.info('CookieJar initialized', {
@@ -479,16 +514,21 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   workflowRunner.registerWorkflow('acquire', createAcquireWorkflow({
     dbProxy: dbProxy as any,
     acquireService: acquireModule,
-    processService: processModule,
-    ragService: ragService as any,
-    bibliographyService: bibliographyModule as any,
     identifierResolver,
     sanityChecker,
     failureMemory,
     acquireConfig: config.acquire,
     logger,
     workspacePath: ctx.args.workspace,
-    // Hydrate pipeline services
+  }));
+
+  workflowRunner.registerWorkflow('process', createProcessWorkflow({
+    dbProxy: dbProxy as any,
+    processService: processModule,
+    ragService: ragService as any,
+    bibliographyService: bibliographyModule as any,
+    logger,
+    workspacePath: ctx.args.workspace,
     hydrateConfig: {
       enableLlmExtraction: !!llmCallFn,
       enableApiLookup: true,
@@ -774,6 +814,125 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
     logger.warn('AgentLoop not created — no LLM client available');
   }
 
+  // ── Layer 5.5: AI-Centric Workbench (EventBus + Session + Capabilities + Orchestrator) ──
+
+  const eventBus = new EventBus({
+    historySize: 200,
+    debug: ctx.args.dev,
+    logger: (msg, data) => logger.debug(msg, data as Record<string, unknown>),
+  });
+  // Throttle high-frequency user events to avoid flooding proactive rules
+  eventBus.useThrottle(['user:pageChange', 'user:selectText'], 200);
+  ctx.appContext.eventBus = eventBus;
+
+  const researchSession = new ResearchSession((msg, data) => logger.debug(msg, data as Record<string, unknown>));
+  researchSession.bind(eventBus);
+  ctx.appContext.session = researchSession;
+
+  // Build CapabilityServices from existing modules
+  const capabilityServices: CapabilityServices = {
+    dbProxy: dbProxy as any,
+    searchService: searchModule,
+    ragService: ragService as any,
+    orchestrator: workflowRunner as any,
+    addPaper: async (paper) => {
+      const { generatePaperId } = await import('../core/search/paper-id');
+      const id = generatePaperId(
+        (paper['doi'] as string) ?? null,
+        null,
+        (paper['title'] as string) ?? '',
+      );
+      await dbProxy.addPaper({ ...paper, id } as any, { fulltextStatus: 'not_attempted' } as any);
+      return id;
+    },
+    updatePaper: async (id, fields) => {
+      await dbProxy.updatePaper(id as any, fields as any);
+    },
+    pushManager: pushManager as any,
+    confirmWrite: null, // Set up after IPC registration
+    configProvider: {
+      config: configProvider.config as any,
+      update: async (section, patch) => {
+        const current = structuredClone(configProvider.config);
+        const sectionObj = ((current as any)[section] ?? {}) as Record<string, unknown>;
+        Object.assign(sectionObj, patch);
+        (current as any)[section] = sectionObj;
+        configProvider.update(current);
+      },
+    },
+  };
+
+  const capabilityRegistry = createCapabilityRegistry(
+    researchSession, eventBus, capabilityServices,
+    (msg, data) => logger.debug(msg, data as Record<string, unknown>),
+  );
+  ctx.appContext.capabilityRegistry = capabilityRegistry;
+
+  // SessionOrchestrator (requires LlmClient)
+  if (llmClient) {
+    const sessionOrchestrator = new SessionOrchestrator({
+      eventBus,
+      session: researchSession,
+      capabilities: capabilityRegistry,
+      llmClient,
+      pushManager,
+      buildSystemPrompt: async () => {
+        // Reuse the existing system prompt builder from AgentLoop
+        if (ctx.appContext!.agentLoop) {
+          return (ctx.appContext!.agentLoop as any).getSystemPrompt?.() ?? '';
+        }
+        return `You are Abyssal, an AI research assistant for project "${configProvider.config.project.name}".`;
+      },
+      maxRounds: 15,
+      proactiveEnabled: (configProvider.config as any).ai?.proactiveSuggestions ?? false,
+      logger: (msg, data) => logger.debug(msg, data as Record<string, unknown>),
+    });
+    sessionOrchestrator.start();
+    ctx.appContext.sessionOrchestrator = sessionOrchestrator;
+    logger.info('SessionOrchestrator started', {
+      capabilities: capabilityRegistry.operationCount,
+      proactive: true,
+    });
+  }
+
+  // Restore persisted session state from previous run
+  try {
+    // Restore working memory
+    const savedMemory = await dbProxy.loadSessionMemory();
+    if (savedMemory.length > 0) {
+      const entries = savedMemory.map((row) => ({
+        id: row.id,
+        type: row.type as import('../core/session/working-memory').MemoryEntryType,
+        content: row.content,
+        source: row.source,
+        linkedEntities: JSON.parse(row.linked_entities) as string[],
+        importance: row.importance,
+        createdAt: row.created_at,
+        lastAccessedAt: row.last_accessed_at,
+        ...(row.tags ? { tags: JSON.parse(row.tags) as string[] } : {}),
+      }));
+      researchSession.memory.loadEntries(entries);
+      logger.info('Working memory restored', { entries: entries.length });
+    }
+
+    // Restore conversation
+    if (ctx.appContext.sessionOrchestrator) {
+      const savedConversation = await dbProxy.loadSessionConversation('workspace');
+      if (savedConversation) {
+        ctx.appContext.sessionOrchestrator.restoreConversation(savedConversation);
+      }
+    }
+  } catch (err) {
+    logger.warn('Failed to restore session state', { error: (err as Error).message });
+  }
+
+  logger.info('AI workbench layers initialized', {
+    eventBus: true,
+    session: true,
+    capabilities: capabilityRegistry.operationCount,
+    orchestrator: !!ctx.appContext.sessionOrchestrator,
+  });
+
   // AdvisoryAgent — queryFn delegates to DbProxy for diagnostic SQL
   const advisoryAgent = new AdvisoryAgent({
     llmClient,
@@ -811,10 +970,68 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   // TODO: when processModule is wired up:
   // if (llmClient) processModule.visionCapable = llmClient.asVisionCapable();
 
+  // ── Layer 6: DLA (Document Layout Analysis) — optional ──
+  try {
+    const { DlaProxy } = await import('../core/dla/dla-proxy');
+    const { DlaScheduler } = await import('../core/dla/scheduler');
+    const fs = require('node:fs') as typeof import('node:fs');
+
+    // Model path: dev → assets/models/, packaged → resources/models/
+    const modelDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'models')
+      : path.join(__dirname, '..', '..', 'assets', 'models');
+    const modelPath = path.join(modelDir, 'doclayout-yolo.onnx');
+
+    if (fs.existsSync(modelPath)) {
+      const dlaProcessPath = path.resolve(__dirname, '..', 'dla-process', 'main.js');
+      const dlaProxy = new DlaProxy({
+        dlaProcessPath,
+        modelPath,
+        executionProvider: 'cpu',
+      });
+
+      const dlaScheduler = new DlaScheduler(dlaProxy, logger);
+
+      // Wire push notifications: when a page is analyzed, push to renderer
+      dlaScheduler.setPageReadyCallback((paperId, pageIndex, blocks) => {
+        pushManager.pushDlaPageReady({
+          paperId,
+          pageIndex,
+          blocks: blocks.map((b) => ({
+            type: b.type,
+            bbox: { x: b.bbox.x, y: b.bbox.y, w: b.bbox.w, h: b.bbox.h },
+            confidence: b.confidence,
+            pageIndex: b.pageIndex,
+          })),
+        });
+      });
+
+      ctx.appContext.dlaProxy = dlaProxy;
+      ctx.appContext.dlaScheduler = dlaScheduler;
+
+      // Start subprocess in background (non-blocking)
+      dlaProxy.start().then(() => {
+        logger.info('DLA subprocess started', { modelPath });
+      }).catch((err: Error) => {
+        logger.warn('DLA subprocess failed to start (non-critical)', { error: err.message });
+      });
+
+      // Listen for DLA errors
+      dlaProxy.on('error', (err: Error) => {
+        logger.warn('DLA subprocess error', { error: err.message });
+      });
+    } else {
+      logger.info('DLA model not found — layout analysis disabled', { modelPath });
+    }
+  } catch (err) {
+    logger.warn('DLA initialization failed (non-critical)', { error: (err as Error).message });
+  }
+
   logger.info('Core modules instantiated', {
     workflows: Array.from(workflowRunner.activeWorkflowMap.keys()).length === 0 ? 'all registered' : 'active',
     agentLoop: !!ctx.appContext.agentLoop,
     advisoryAgent: true,
+    dla: !!ctx.appContext.dlaProxy,
   });
 }
 
@@ -924,6 +1141,80 @@ async function step11_ready(ctx: BootstrapContext): Promise<void> {
   }
 }
 
+// ─── Lobby mode bootstrap (first launch, no workspace) ───
+
+/**
+ * Bootstrap without a workspace — only show the setup wizard.
+ *
+ * Creates a minimal AppContext with no DB. IPC handlers are registered but
+ * DB-dependent ones will return errors if called. The wizard only uses
+ * createProject / listProjects / window handlers, so this is safe.
+ *
+ * After the user creates a project, workspace:switch performs full init.
+ */
+async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
+  const logger = new ConsoleLogger('info');
+  ctx.logger = logger;
+  logger.info('Lobby mode: no workspace — waiting for project creation');
+
+  const globalConfig = loadGlobalConfig(app.getPath('userData'));
+  ctx.globalConfig = globalConfig;
+
+  // Minimal config from defaults (no workspace config file)
+  const defaultConfig = structuredClone(DEFAULT_CONFIG) as AbyssalConfig;
+  ctx.config = defaultConfig;
+  ctx.configProvider = new ConfigProvider(defaultConfig);
+
+  // Create a shell AppContext — dbProxy is null, handlers will
+  // check ctx.dbProxy and throw gracefully via wrapHandler's try/catch.
+  const pushManager = new PushManager();
+  ctx.appContext = {
+    configProvider: ctx.configProvider,
+    get config() { return this.configProvider.config; },
+    logger,
+    dbProxy: null as unknown as DbProxyInstance, // null — lobby mode
+    searchModule: null,
+    acquireModule: null,
+    processModule: null,
+    ragModule: null,
+    bibliographyModule: null,
+    llmClient: null,
+    contextBudgetManager: null,
+    orchestrator: null,
+    agentLoop: null,
+    advisoryAgent: null,
+    activeWorkflows: new Map(),
+    mainWindow: null,
+    frameworkState: 'zero_concepts',
+    workerThread: null,
+    lockHandle: null,
+    pushManager,
+    staleDrafts: new Set(),
+    cookieJar: null,
+    dlaProxy: null,
+    dlaScheduler: null,
+    eventBus: null,
+    session: null,
+    capabilityRegistry: null,
+    sessionOrchestrator: null,
+    isShuttingDown: false,
+    startedAt: Date.now(),
+    workspaceRoot: '',
+    async refreshFrameworkState() { /* no-op in lobby mode */ },
+    async getStats() {
+      return { paperCount: 0, conceptCount: 0, frameworkState: 'zero_concepts' as FrameworkState, activeWorkflows: 0, uptimeMs: 0 };
+    },
+  };
+
+  // Register IPC handlers + create window
+  registerAllHandlers(ctx.appContext);
+  const mainWindow = createMainWindow({ isDev: ctx.args.dev, logger });
+  ctx.appContext.mainWindow = mainWindow;
+  pushManager.setWindow(mainWindow);
+
+  logger.info('Lobby mode ready — wizard will auto-show');
+}
+
 // ─── Main bootstrap function ───
 
 /**
@@ -948,17 +1239,30 @@ export async function bootstrap(): Promise<AppContext> {
   };
 
   // Check for recent workspace from WorkspaceManager
+  let lobbyMode = false;
   try {
     const mgr = new WorkspaceManager(app.getPath('userData'));
     const recent = mgr.getRecentWorkspaces();
-    // If workspace is default and there's a recent one, use it
     const defaultWs = path.join(app.getPath('userData'), 'workspace');
     if (ctx.args.workspace === defaultWs && recent.length > 0) {
+      // Use most recently opened workspace
       ctx.args.workspace = recent[0]!.path;
+    } else if (ctx.args.workspace === defaultWs && recent.length === 0) {
+      // First launch — no workspace to open, enter lobby mode
+      lobbyMode = true;
     }
   } catch { /* ignore — use default */ }
 
   try {
+    if (lobbyMode) {
+      // ── Lobby mode: no workspace, just show wizard ──
+      // Create minimal infrastructure so IPC handlers can be registered.
+      // DB-dependent handlers will return errors if called, but the wizard
+      // only uses createProject/listProjects/window handlers.
+      await bootstrapLobbyMode(ctx);
+      return ctx.appContext!;
+    }
+
     await step2_acquireLock(ctx);
     if (!ctx.lockHandle) return null!; // app.quit() was called
 
@@ -972,6 +1276,15 @@ export async function bootstrap(): Promise<AppContext> {
     await step6_instantiateModules(ctx);
     await step7_registerIPC(ctx);
     await step8_createWindow(ctx);
+
+    // Wire EventBus ↔ IPC bridge (after IPC + window are ready)
+    if (ctx.appContext!.eventBus && ctx.appContext!.pushManager) {
+      setupEventBridge(
+        ctx.appContext!.eventBus,
+        ctx.appContext!.pushManager,
+        (msg, data) => ctx.logger!.debug(msg, data ?? {}),
+      );
+    }
 
     // Steps 9-11 run after renderer loads (did-finish-load)
     const mainWindow = getMainWindow();

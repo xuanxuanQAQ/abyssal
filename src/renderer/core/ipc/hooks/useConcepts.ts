@@ -10,22 +10,27 @@ import { getAPI } from '../bridge';
 import type { ConceptFramework, ConceptDraft } from '../../../../shared-types/models';
 import type { Maturity } from '../../../../shared-types/enums';
 import { handleError } from '../../errors/errorHandlers';
+import { useViewActive } from '../../context/ViewActiveContext';
 
 export function useConceptList() {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['concepts', 'list'],
     queryFn: () => getAPI().db.concepts.list(),
     staleTime: 300_000,
     gcTime: 1_800_000,
+    enabled: viewActive,
   });
 }
 
 export function useConceptFramework() {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['concepts', 'framework'],
     queryFn: () => getAPI().db.concepts.getFramework(),
     staleTime: 300_000,
     gcTime: 1_800_000,
+    enabled: viewActive,
   });
 }
 
@@ -107,20 +112,22 @@ export function useUpdateKeywords() {
 }
 
 export function useConceptStats(conceptId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['concepts', 'stats', conceptId],
     queryFn: () => getAPI().db.concepts.getStats(conceptId!),
-    enabled: conceptId !== null,
+    enabled: conceptId !== null && viewActive,
     staleTime: 60_000,
     gcTime: 300_000,
   });
 }
 
 export function useConceptHistory(conceptId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['concepts', conceptId, 'history'],
     queryFn: () => getAPI().db.concepts.getHistory(conceptId!),
-    enabled: !!conceptId,
+    enabled: !!conceptId && viewActive,
     staleTime: Infinity,
   });
 }

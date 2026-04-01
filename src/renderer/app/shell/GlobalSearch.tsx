@@ -24,8 +24,10 @@ import {
 import { useAppStore } from '../../core/store';
 import { useHotkey } from '../../core/hooks/useHotkey';
 import { getAPI } from '../../core/ipc/bridge';
+import { emitUserAction } from '../../core/hooks/useEventBridge';
 import { Z_INDEX } from '../../styles/zIndex';
 import type { GlobalSearchResult } from '../../../shared-types/models';
+import type { NavigationTarget } from '../../core/navigation/types';
 
 // ═══ 搜索结果类型 ═══
 
@@ -74,18 +76,37 @@ function getCommands(
   ];
 }
 
+// ═══ 搜索结果实体配置 ═══
+
+interface EntityConfig {
+  icon: React.ReactNode;
+  toTarget: (r: GlobalSearchResult) => NavigationTarget;
+}
+
+const ENTITY_CONFIG: Record<string, EntityConfig> = {
+  paper:   { icon: <FileText size={14} />,  toTarget: (r) => ({ type: 'paper', id: r.entityId, view: 'reader' }) },
+  concept: { icon: <Lightbulb size={14} />, toTarget: (r) => ({ type: 'concept', id: r.entityId }) },
+  article: { icon: <PenTool size={14} />,   toTarget: (r) => ({ type: 'section', articleId: r.entityId, sectionId: r.entityId }) },
+  memo:    { icon: <StickyNote size={14} />, toTarget: (r) => ({ type: 'memo', memoId: r.entityId }) },
+  note:    { icon: <BookOpen size={14} />,   toTarget: (r) => ({ type: 'note', noteId: r.entityId }) },
+};
+
 // ═══ 辅助：从 NavigationTarget 生成可读标题 ═══
 
-function getTargetDisplayTitle(t: (key: string) => string, target: Record<string, unknown> & { type: string }): string {
+function getTargetDisplayTitle(t: (key: string) => string, target: NavigationTarget): string {
   switch (target.type) {
     case 'paper':
-      return `${t('globalSearch.categories.papers')}: ${String(target.id ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.papers')}: ${target.id.slice(0, 8)}…`;
     case 'concept':
-      return `${t('globalSearch.categories.concepts')}: ${String(target.id ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.concepts')}: ${target.id.slice(0, 8)}…`;
     case 'section':
-      return `${t('globalSearch.categories.sections')}: ${String(target.sectionId ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.sections')}: ${target.sectionId.slice(0, 8)}…`;
     case 'graph':
-      return `${t('globalSearch.categories.graphNodes')}: ${String(target.focusNodeId ?? '').slice(0, 8)}…`;
+      return `${t('globalSearch.categories.graphNodes')}: ${target.focusNodeId.slice(0, 8)}…`;
+    case 'memo':
+      return `${t('globalSearch.categories.papers')}: ${target.memoId.slice(0, 8)}…`;
+    case 'note':
+      return `${t('globalSearch.categories.papers')}: ${target.noteId.slice(0, 8)}…`;
     default:
       return '—';
   }
@@ -136,6 +157,15 @@ export function GlobalSearch() {
   const recentItems = useMemo<SearchResultItem[]>(() => {
     if (globalSearchQuery) return [];
 
+    const RECENT_ICON: Record<string, React.ReactNode> = {
+      paper: <FileText size={14} />,
+      concept: <Lightbulb size={14} />,
+      section: <PenTool size={14} />,
+      graph: <FileText size={14} />,
+      memo: <StickyNote size={14} />,
+      note: <BookOpen size={14} />,
+    };
+
     const seen = new Set<string>();
     const items: SearchResultItem[] = [];
 
@@ -144,40 +174,25 @@ export function GlobalSearch() {
       if (!target) continue;
 
       let key: string;
-      let displayType: 'paper' | 'concept' | 'section' | 'memo' | 'note';
-      if (target.type === 'paper') {
-        key = `paper:${target.id}`;
-        displayType = 'paper';
-      } else if (target.type === 'concept') {
-        key = `concept:${target.id}`;
-        displayType = 'concept';
-      } else if (target.type === 'section') {
-        key = `section:${target.sectionId}`;
-        displayType = 'section';
-      } else if (target.type === 'memo') {
-        key = `memo:${target.memoId}`;
-        displayType = 'memo';
-      } else if (target.type === 'note') {
-        key = `note:${target.noteId}`;
-        displayType = 'note';
-      } else {
-        key = `graph:${target.focusNodeId}`;
-        displayType = 'paper';
+      switch (target.type) {
+        case 'paper':   key = `paper:${target.id}`; break;
+        case 'concept': key = `concept:${target.id}`; break;
+        case 'section': key = `section:${target.sectionId}`; break;
+        case 'memo':    key = `memo:${target.memoId}`; break;
+        case 'note':    key = `note:${target.noteId}`; break;
+        case 'graph':   key = `graph:${target.focusNodeId}`; break;
       }
 
       if (seen.has(key)) continue;
       seen.add(key);
 
+      const displayType = target.type === 'graph' ? 'paper' : target.type;
+
       items.push({
         id: key,
-        type: displayType,
-        title: getTargetDisplayTitle(t, target as unknown as Record<string, unknown> & { type: string }),
-        icon:
-          displayType === 'paper' ? <FileText size={14} /> :
-          displayType === 'concept' ? <Lightbulb size={14} /> :
-          displayType === 'memo' ? <StickyNote size={14} /> :
-          displayType === 'note' ? <BookOpen size={14} /> :
-          <PenTool size={14} />,
+        type: displayType as SearchResultItem['type'],
+        title: getTargetDisplayTitle(t, target),
+        icon: RECENT_ICON[target.type] ?? <FileText size={14} />,
         action: () => {
           closeGlobalSearch();
           navigateTo(target);
@@ -215,6 +230,7 @@ export function GlobalSearch() {
       try {
         const api = getAPI();
         const query = globalSearchQuery;
+        emitUserAction({ action: 'search', query, scope: 'global' });
 
         // 统一全局搜索 API
         const searchResults = await api.app.globalSearch(query).catch(() => [] as GlobalSearchResult[]);
@@ -222,86 +238,23 @@ export function GlobalSearch() {
         // stale query guard — 丢弃过时结果
         if (thisQueryId !== queryIdRef.current) return;
 
-        const items: SearchResultItem[] = [];
-
-        // 按 entityType 分组: papers, concepts, articles, memos, notes
-        const grouped = {
-          paper: searchResults.filter((r) => r.entityType === 'paper'),
-          concept: searchResults.filter((r) => r.entityType === 'concept'),
-          article: searchResults.filter((r) => r.entityType === 'article'),
-          memo: searchResults.filter((r) => r.entityType === 'memo'),
-          note: searchResults.filter((r) => r.entityType === 'note'),
-        };
-
-        for (const p of grouped.paper) {
-          items.push({
-            id: `paper:${p.entityId}`,
-            type: 'paper',
-            title: p.title,
-            subtitle: p.content,
-            icon: <FileText size={14} />,
-            action: () => {
-              closeGlobalSearch();
-              navigateTo({ type: 'paper', id: p.entityId, view: 'reader' });
-            },
+        const items: SearchResultItem[] = searchResults
+          .filter((r) => ENTITY_CONFIG[r.entityType])
+          .map((r) => {
+            const cfg = ENTITY_CONFIG[r.entityType]!;
+            const displayType = r.entityType === 'article' ? 'section' : r.entityType;
+            return {
+              id: `${displayType}:${r.entityId}`,
+              type: displayType as SearchResultItem['type'],
+              title: r.title,
+              subtitle: r.content,
+              icon: cfg.icon,
+              action: () => {
+                closeGlobalSearch();
+                navigateTo(cfg.toTarget(r));
+              },
+            };
           });
-        }
-
-        for (const c of grouped.concept) {
-          items.push({
-            id: `concept:${c.entityId}`,
-            type: 'concept',
-            title: c.title,
-            subtitle: c.content,
-            icon: <Lightbulb size={14} />,
-            action: () => {
-              closeGlobalSearch();
-              navigateTo({ type: 'concept', id: c.entityId });
-            },
-          });
-        }
-
-        for (const s of grouped.article) {
-          items.push({
-            id: `section:${s.entityId}`,
-            type: 'section',
-            title: s.title,
-            subtitle: s.content,
-            icon: <PenTool size={14} />,
-            action: () => {
-              closeGlobalSearch();
-              navigateTo({ type: 'section', articleId: s.entityId, sectionId: s.entityId });
-            },
-          });
-        }
-
-        for (const m of grouped.memo) {
-          items.push({
-            id: `memo:${m.entityId}`,
-            type: 'memo',
-            title: m.title,
-            subtitle: m.content,
-            icon: <span role="img" aria-label="memo">💡</span>,
-            action: () => {
-              closeGlobalSearch();
-              navigateTo({ type: 'memo', memoId: m.entityId });
-            },
-          });
-        }
-
-        for (const n of grouped.note) {
-          items.push({
-            id: `note:${n.entityId}`,
-            type: 'note',
-            title: n.title,
-            subtitle: n.content,
-            icon: <span role="img" aria-label="note">📓</span>,
-            action: () => {
-              closeGlobalSearch();
-              navigateTo({ type: 'note', noteId: n.entityId });
-            },
-          });
-        }
 
         setResults(items);
         setHighlightIndex(0);

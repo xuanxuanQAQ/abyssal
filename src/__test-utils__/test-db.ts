@@ -162,6 +162,8 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
     writing: {
       defaultCslStyleId: 'gb-t-7714',
       defaultOutputLanguage: 'zh',
+      cslStylesDir: '',
+      cslLocalesDir: '',
     },
     personalization: {
       authorDisplayThreshold: 1,

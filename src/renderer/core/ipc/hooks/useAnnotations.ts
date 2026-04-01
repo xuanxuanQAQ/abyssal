@@ -9,15 +9,16 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAPI } from '../bridge';
 import type { Annotation, NewAnnotation } from '../../../../shared-types/models';
 import { handleError } from '../../errors/errorHandlers';
+import { useViewActive } from '../../context/ViewActiveContext';
 
 export function useAnnotations(paperId: string | null) {
+  const viewActive = useViewActive();
   return useQuery({
     queryKey: ['annotations', paperId],
     queryFn: () => getAPI().db.annotations.listForPaper(paperId!),
-    enabled: paperId !== null,
+    enabled: paperId !== null && viewActive,
     staleTime: 0,
     gcTime: 300_000,
-    refetchOnWindowFocus: true,
   });
 }
 

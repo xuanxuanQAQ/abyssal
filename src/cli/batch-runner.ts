@@ -31,6 +31,7 @@ import { createContextBudgetManager } from '../adapter/context-budget/context-bu
 import { WorkflowRunner, type WorkflowType } from '../adapter/orchestrator/workflow-runner';
 import { createDiscoverWorkflow } from '../adapter/orchestrator/workflows/discover';
 import { createAcquireWorkflow } from '../adapter/orchestrator/workflows/acquire';
+import { createProcessWorkflow } from '../adapter/orchestrator/workflows/process';
 import { createAnalyzeWorkflow } from '../adapter/orchestrator/workflows/analyze';
 import { createSynthesizeWorkflow } from '../adapter/orchestrator/workflows/synthesize';
 import { createBibliographyWorkflow } from '../adapter/orchestrator/workflows/bibliography';
@@ -41,7 +42,7 @@ import type { CliArgs } from './cli-entry';
 
 // ─── Stage execution order (§8.5) ───
 
-const STAGE_ORDER: WorkflowType[] = ['discover', 'acquire', 'analyze', 'synthesize', 'article', 'bibliography'];
+const STAGE_ORDER: WorkflowType[] = ['discover', 'acquire', 'process', 'analyze', 'synthesize', 'article', 'bibliography'];
 
 // ─── Main entry ───
 
@@ -153,13 +154,20 @@ export async function batchRun(args: CliArgs): Promise<void> {
     runner.registerWorkflow('acquire', createAcquireWorkflow({
       dbProxy: dbProxy as any,
       acquireService,
-      processService,
-      ragService: ragService as any,
-      bibliographyService: bibliographyModule as any,
       identifierResolver: null,
       sanityChecker: null,
       failureMemory: null,
       acquireConfig: config.acquire,
+      logger,
+      workspacePath,
+    }));
+
+    // Register process (text extraction + chunking + embedding)
+    runner.registerWorkflow('process', createProcessWorkflow({
+      dbProxy: dbProxy as any,
+      processService,
+      ragService: ragService as any,
+      bibliographyService: bibliographyModule as any,
       logger,
       workspacePath,
       hydrateConfig: { enableLlmExtraction: false, enableApiLookup: false },

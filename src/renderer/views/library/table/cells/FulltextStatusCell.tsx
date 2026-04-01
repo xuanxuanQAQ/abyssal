@@ -19,7 +19,7 @@ interface FulltextStatusCellProps {
 }
 
 export function FulltextStatusCell({ status }: FulltextStatusCellProps) {
-  const config = STATUS_CONFIG[status];
+  const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.not_attempted;
 
   return (
     <Tooltip.Provider delayDuration={300}>

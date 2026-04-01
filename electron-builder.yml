@@ -8,6 +8,11 @@ files:
   - config/**/*
   - templates/**/*
   - package.json
+extraResources:
+  - from: assets/models/
+    to: models/
+    filter:
+      - "**/*.onnx"
 win:
   target:
     - nsis

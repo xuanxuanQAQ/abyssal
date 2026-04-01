@@ -23,6 +23,11 @@ import { SUPPORTED_LOCALES, changeLocale } from '../../i18n';
 import type { SupportedLocale } from '../../i18n';
 import type { SettingsData, DbStatsInfo, SystemInfo } from '../../../shared-types/models';
 import { setAuthorDisplayThreshold } from '../../core/hooks/useAuthorDisplay';
+import {
+  EMBEDDING_MODEL_REGISTRY,
+  defaultModelForProvider,
+  type EmbeddingProvider,
+} from '../../../core/config/config-schema';
 
 // ═══════════════════════════════════════════════════════════════════
 // Types
@@ -100,12 +105,20 @@ export function SettingsView() {
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
 
-  const updateSection = useCallback(async (section: string, patch: Record<string, unknown>) => {
+  // Debounced save: accumulate patches per section, flush after 600ms idle
+  const pendingRef = useRef<Record<string, Record<string, unknown>>>({});
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushSave = useCallback(async () => {
+    const batched = pendingRef.current;
+    pendingRef.current = {};
+    const sections = Object.entries(batched);
+    if (sections.length === 0) return;
     setSaving(true);
     try {
-      await getAPI().settings.updateSection(section, patch);
-      // Optimistic update
-      setSettings((prev) => prev ? { ...prev, [section]: { ...(prev as any)[section], ...patch } } : prev);
+      for (const [section, patch] of sections) {
+        await getAPI().settings.updateSection(section, patch);
+      }
       toast.success(t('settings.saved'));
     } catch (err) {
       toast.error(t('settings.saveFailed', { message: (err as Error).message }));
@@ -113,6 +126,21 @@ export function SettingsView() {
       setSaving(false);
     }
   }, [t]);
+
+  // Cleanup timer on unmount
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  const updateSection = useCallback((section: string, patch: Record<string, unknown>) => {
+    // Optimistic UI update — immediate
+    setSettings((prev) => prev ? { ...prev, [section]: { ...(prev as any)[section], ...patch } } : prev);
+    // Accumulate patch
+    pendingRef.current[section] = { ...pendingRef.current[section], ...patch };
+    // Reset debounce timer
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { flushSave(); }, 600);
+  }, [flushSave]);
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -408,7 +436,7 @@ function SliderRow({ label, hint, value, min, max, step, onChange, suffix, seman
 
 function AiModelsTab({ settings, onUpdate }: { settings: SettingsData; onUpdate: (s: string, p: Record<string, unknown>) => void }) {
   const { t } = useTranslation();
-  const { llm, rag } = settings;
+  const { llm, rag, ai } = settings;
 
   const handleDefaultProviderChange = (provider: string) => {
     const models = MODELS_BY_PROVIDER[provider];
@@ -509,6 +537,15 @@ function AiModelsTab({ settings, onUpdate }: { settings: SettingsData; onUpdate:
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, padding: '4px 0' }}>
           {t('settings.aiModels.routingNote')}
         </div>
+      </Section>
+
+      <Section icon={<Zap size={16} />} title={t('settings.aiModels.proactiveSuggestions')} description={t('settings.aiModels.proactiveSuggestionsDesc')}>
+        <Row label={t('settings.aiModels.enabled')} noBorder>
+          <Toggle
+            checked={ai?.proactiveSuggestions ?? false}
+            onChange={(v) => onUpdate('ai', { proactiveSuggestions: v })}
+          />
+        </Row>
       </Section>
 
       <Section icon={<Shield size={16} />} title={t('settings.aiModels.correctiveRag')} description={t('settings.aiModels.correctiveRagDesc')}>
@@ -629,7 +666,7 @@ function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; onUpdate
 
   return (
     <>
-      {/* Embedding model (read-only indicator) */}
+      {/* Embedding provider + model (linked, with confirmation) */}
       <Section icon={<Database size={16} />} title={t('settings.retrieval.embeddingModel')} description={t('settings.retrieval.embeddingModelDesc')}>
         <Row label={t('settings.aiModels.provider')}>
           <SegmentedControl
@@ -638,14 +675,42 @@ function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; onUpdate
               { value: 'openai', label: 'OpenAI' },
               { value: 'siliconflow', label: 'SiliconFlow' },
             ]}
-            onChange={(v) => onUpdate('rag', { embeddingProvider: v })}
+            onChange={(v) => {
+              const provider = v as EmbeddingProvider;
+              if (provider === (rag.embeddingProvider ?? 'openai')) return;
+              const def = defaultModelForProvider(provider);
+              if (!window.confirm(t('settings.retrieval.embeddingChangeConfirm'))) return;
+              onUpdate('rag', {
+                embeddingProvider: provider,
+                embeddingModel: def.model,
+                embeddingDimension: def.dimension,
+              });
+            }}
           />
         </Row>
-        <Row label={t('settings.aiModels.model')} hint={`${rag.embeddingDimension}d vectors`}>
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-            {rag.embeddingModel}
-          </span>
+        <Row label={t('settings.aiModels.model')} hint={`${rag.embeddingDimension}d`}>
+          <Select
+            value={rag.embeddingModel}
+            options={
+              (EMBEDDING_MODEL_REGISTRY[(rag.embeddingProvider ?? 'openai') as EmbeddingProvider] ?? [])
+                .map((m) => ({ value: m.model, label: m.label }))
+            }
+            onChange={(v) => {
+              if (v === rag.embeddingModel) return;
+              if (!window.confirm(t('settings.retrieval.embeddingChangeConfirm'))) return;
+              const models = EMBEDDING_MODEL_REGISTRY[(rag.embeddingProvider ?? 'openai') as EmbeddingProvider] ?? [];
+              const picked = models.find((m) => m.model === v);
+              onUpdate('rag', {
+                embeddingModel: v,
+                ...(picked ? { embeddingDimension: picked.dimension } : {}),
+              });
+            }}
+          />
         </Row>
+        <div style={{ fontSize: 11, color: 'var(--warning, #f59e0b)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <AlertTriangle size={12} />
+          {t('settings.retrieval.embeddingChangeNote')}
+        </div>
       </Section>
 
       <Section icon={<Search size={16} />} title={t('settings.retrieval.retrievalParams')}>

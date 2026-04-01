@@ -12,6 +12,7 @@
 
 import type { RankedChunk } from '../../../../core/types/chunk';
 import type { Logger } from '../../../../core/infra/logger';
+import { extractBalancedJson } from '../../utils';
 import {
   buildQualityReport,
   defaultPassReport,
@@ -217,21 +218,3 @@ function defaultPass(): EvaluationResult {
   return { coverage: 'sufficient', relevance: 'high', sufficiency: 'sufficient', suggestedQuery: null, suggestedFilter: null, gaps: [] };
 }
 
-function extractBalancedJson(text: string): string | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]!;
-    if (escape) { escape = false; continue; }
-    if (ch === '\\' && inString) { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    if (ch === '}') depth--;
-    if (depth === 0) return text.slice(start, i + 1);
-  }
-  return null;
-}

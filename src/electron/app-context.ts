@@ -27,6 +27,12 @@ import type { WorkflowRunner } from '../adapter/orchestrator/workflow-runner';
 import type { AgentLoop } from '../adapter/agent-loop/agent-loop';
 import type { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
 import type { CookieJar } from '../core/infra/cookie-jar';
+import type { DlaProxy } from '../core/dla/dla-proxy';
+import type { DlaScheduler } from '../core/dla/scheduler';
+import type { EventBus } from '../core/event-bus';
+import type { ResearchSession } from '../core/session';
+import type { CapabilityRegistry } from '../adapter/capabilities';
+import type { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
 
 // ─── FrameworkState (re-export from canonical location) ───
 
@@ -99,6 +105,16 @@ export interface AppContext {
   /** CookieJar for institutional access (china-institutional source) */
   cookieJar: CookieJar | null;
 
+  /** DLA (Document Layout Analysis) subsystem */
+  dlaProxy: DlaProxy | null;
+  dlaScheduler: DlaScheduler | null;
+
+  /** AI-centric workbench layers */
+  eventBus: EventBus | null;
+  session: ResearchSession | null;
+  capabilityRegistry: CapabilityRegistry | null;
+  sessionOrchestrator: SessionOrchestrator | null;
+
   // ── Lifecycle flags ──
   isShuttingDown: boolean;
   startedAt: number; // Date.now() at startup
@@ -163,6 +179,14 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
     pushManager: null,
     staleDrafts: new Set(),
     cookieJar: null,
+    dlaProxy: null,
+    dlaScheduler: null,
+
+    // AI-centric workbench layers
+    eventBus: null,
+    session: null,
+    capabilityRegistry: null,
+    sessionOrchestrator: null,
 
     // Lifecycle
     isShuttingDown: false,

@@ -27,7 +27,7 @@ import type { LlmClient } from '../../llm-client/llm-client';
 import type { ContextBudgetManager } from '../../context-budget/context-budget-manager';
 import type { Logger } from '../../../core/infra/logger';
 import type { RankedChunk } from '../../../core/types/chunk';
-import { buildMemoSection, buildEvidenceGapsSection, type MemoForPrompt } from '../prompt-assembler';
+import { formatMemos, formatEvidenceGaps, type MemoForFormat } from '../../prompt-assembler/section-formatter';
 import { countTokens } from '../../llm-client/token-counter';
 import { correctiveRagLoop, type LlmCallFn } from './corrective-rag/corrective-rag-loop';
 import { hasEvidenceDeficiency, defaultPassReport, type QualityReport } from './corrective-rag/quality-report';
@@ -176,7 +176,7 @@ async function generateSection(
   const outlineMemos = await dbProxy.getMemosByEntity('outline', outlineEntryId);
   for (const m of outlineMemos) allMemos.set((m['id'] as string), m);
 
-  const memosForPrompt: MemoForPrompt[] = [...allMemos.values()]
+  const memosForPrompt: MemoForFormat[] = [...allMemos.values()]
     .sort((a, b) => ((a['createdAt'] ?? a['created_at']) as string ?? '').localeCompare((b['createdAt'] ?? b['created_at']) as string ?? ''))
     .map((m) => ({
       text: (m['text'] as string) ?? '',
@@ -302,10 +302,10 @@ async function generateSection(
   // Evidence gaps from CRAG
   const evidenceGaps = qualityReport.gaps.map((g) => g.description);
   const gapsSection = hasEvidenceDeficiency(qualityReport)
-    ? buildEvidenceGapsSection('this section', evidenceGaps)
+    ? formatEvidenceGaps('this section', evidenceGaps)
     : '';
 
-  const memoSection = buildMemoSection(memosForPrompt);
+  const memoSection = formatMemos(memosForPrompt);
 
   const userContent = [
     memoSection,

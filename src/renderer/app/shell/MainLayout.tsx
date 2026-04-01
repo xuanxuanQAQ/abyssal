@@ -9,7 +9,7 @@
  * 包裹 @dnd-kit DndContext（§9.5）。
  */
 
-import React, { useRef, useCallback, useEffect } from 'react';
+import React, { startTransition, useRef, useCallback, useEffect } from 'react';
 import {
   Panel,
   PanelGroup,
@@ -24,6 +24,7 @@ import { GlobalSearch } from './GlobalSearch';
 import { DndProvider } from './DndProvider';
 import { ContextPanel } from '../../panels/context/ContextPanel';
 import { WorkflowMonitor } from '../../panels/WorkflowMonitor';
+import { ViewActiveContext } from '../../core/context/ViewActiveContext';
 import { useAppStore } from '../../core/store';
 import { useShallow } from 'zustand/react/shallow';
 import { useHotkey } from '../../core/hooks/useHotkey';
@@ -38,14 +39,16 @@ const layoutSelector = (s: ReturnType<typeof useAppStore.getState>) => ({
   contextPanelSize: s.contextPanelSize,
   toggleContextPanel: s.toggleContextPanel,
   setContextPanelLastSize: s.setContextPanelLastSize,
-  switchView: s.switchView,
 });
 
 export function MainLayout() {
   const {
     taskPanelOpen, contextPanelOpen, contextPanelSize,
-    toggleContextPanel, setContextPanelLastSize, switchView,
+    toggleContextPanel, setContextPanelLastSize,
   } = useAppStore(useShallow(layoutSelector));
+
+  // action 引用稳定，独立 selector 避免 useShallow 的无意义浅比较
+  const switchView = useAppStore((s) => s.switchView);
 
   const workspaceRef = useRef<HTMLDivElement>(null);
   const contextPanelRef = useRef<ImperativePanelHandle>(null);
@@ -99,14 +102,14 @@ export function MainLayout() {
     }
   });
 
-  // Ctrl+1~5: 视图切换
-  useHotkey('Ctrl+1', () => switchView('library'));
-  useHotkey('Ctrl+2', () => switchView('reader'));
-  useHotkey('Ctrl+3', () => switchView('analysis'));
-  useHotkey('Ctrl+4', () => switchView('graph'));
-  useHotkey('Ctrl+5', () => switchView('writing'));
-  useHotkey('Ctrl+6', () => switchView('notes'));
-  useHotkey('Ctrl+,', () => switchView('settings'));
+  // Ctrl+1~6: 视图切换（transition 优先级，不阻塞用户输入）
+  useHotkey('Ctrl+1', () => startTransition(() => switchView('library')));
+  useHotkey('Ctrl+2', () => startTransition(() => switchView('reader')));
+  useHotkey('Ctrl+3', () => startTransition(() => switchView('analysis')));
+  useHotkey('Ctrl+4', () => startTransition(() => switchView('graph')));
+  useHotkey('Ctrl+5', () => startTransition(() => switchView('writing')));
+  useHotkey('Ctrl+6', () => startTransition(() => switchView('notes')));
+  useHotkey('Ctrl+,', () => startTransition(() => switchView('settings')));
 
   // Ctrl+J: 展开/折叠任务面板
   const toggleTaskPanel = useAppStore((s) => s.toggleTaskPanel);
@@ -153,7 +156,7 @@ export function MainLayout() {
               style={contextPanelOpen ? resizeHandleVisibleStyle : resizeHandleHiddenStyle}
             />
 
-            {/* ContextPanel — 始终渲染，由 collapsible API 控制折叠 */}
+            {/* ContextPanel — keep-alive：折叠时保持挂载(display:none)避免重建开销 */}
             <Panel
               ref={contextPanelRef}
               minSize={15}
@@ -165,7 +168,11 @@ export function MainLayout() {
               onExpand={handleContextPanelExpand}
               order={2}
             >
-              {contextPanelOpen && <ContextPanel />}
+              <ViewActiveContext.Provider value={contextPanelOpen}>
+                <div style={{ display: contextPanelOpen ? 'contents' : 'none' }}>
+                  <ContextPanel />
+                </div>
+              </ViewActiveContext.Provider>
             </Panel>
           </PanelGroup>
         </DndProvider>

@@ -1,10 +1,53 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseOutput,
-  extractConceptMappings,
-  extractSuggestedConcepts,
+  parse as parseOutput,
   buildParseDiagnostic,
-} from './output-parser';
+} from '../output-parser/output-parser';
+import { validateConceptMappings } from '../output-parser/field-validator';
+import { parseSuggestedConcepts } from '../output-parser/suggestion-parser';
+
+// ─── Legacy-compatible helpers for test assertions ───
+
+function extractConceptMappings(
+  frontmatter: Record<string, unknown> | null,
+): Array<{ concept_id: string; relation: string; confidence: number; evidence?: string }> {
+  if (!frontmatter) return [];
+  const raw = frontmatter['concept_mappings'];
+  if (!Array.isArray(raw)) return [];
+  const { mappings } = validateConceptMappings(raw);
+  return mappings.map((m) => {
+    const entry: { concept_id: string; relation: string; confidence: number; evidence?: string } = {
+      concept_id: m.concept_id,
+      relation: m.relation,
+      confidence: m.confidence,
+    };
+    if (m.evidence.en) entry.evidence = m.evidence.en;
+    return entry;
+  });
+}
+
+function extractSuggestedConcepts(
+  frontmatter: Record<string, unknown> | null,
+): Array<{
+  term: string;
+  frequency_in_paper?: number;
+  closest_existing?: string | null;
+  reason?: string;
+  suggested_definition?: string | null;
+  suggested_keywords?: string[] | null;
+}> {
+  if (!frontmatter) return [];
+  const raw = frontmatter['suggested_new_concepts'];
+  const parsed = parseSuggestedConcepts(raw);
+  return parsed.map((s) => ({
+    term: s.term,
+    frequency_in_paper: s.frequencyInPaper,
+    closest_existing: s.closestExisting,
+    reason: s.reason,
+    suggested_definition: s.suggestedDefinition,
+    suggested_keywords: s.suggestedKeywords,
+  }));
+}
 
 // ─── parseOutput strategy chain ───
 

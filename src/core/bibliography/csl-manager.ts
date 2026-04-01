@@ -3,12 +3,10 @@
 // §1.5: XML 校验
 // §1.6: 可用格式列表
 // §2.3: Locale 回退链
-// §3.2: biblio_complete 格式变更级联
 // §7.1-7.2: 综述草稿双格式引文
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type Database from 'better-sqlite3';
 import type { PaperId } from '../types/common';
 import type { PaperMetadata } from '../types/paper';
 import type { Logger } from '../infra/logger';
@@ -208,95 +206,54 @@ export function resolveLocale(lang: string, localesDir: string): string | null {
   return null;
 }
 
-// ─── §3.2 biblio_complete 格式变更级联 ───
+// ─── §7 综述草稿引文 ───
 
-/**
- * 文章 csl_style_id 变更后，对全部引用论文重新检查 biblio_complete。
- *
- * TODO: 触发时机——Orchestrator 在 updateArticle(cslStyleId) 后调用
- */
-export function recheckBiblioCompleteForArticle(
-  db: Database.Database,
-  checkFn: (paper: PaperMetadata, cslStyleId: string) => { complete: boolean },
-  articleId: string,
-  logger?: Logger,
-): number {
-  // 获取文章的 CSL 格式
-  const article = db.prepare(
-    'SELECT csl_style_id FROM articles WHERE id = ?',
-  ).get(articleId) as { csl_style_id: string } | undefined;
-
-  if (!article) return 0;
-
-  // 获取文章纲要引用的全部论文 ID
-  const outlineRows = db.prepare(
-    'SELECT paper_ids FROM outlines WHERE article_id = ?',
-  ).all(articleId) as Array<{ paper_ids: string }>;
-
-  const paperIdSet = new Set<string>();
-  for (const row of outlineRows) {
-    try {
-      const ids = JSON.parse(row.paper_ids) as string[];
-      for (const id of ids) paperIdSet.add(id);
-    } catch {
-      // 无效 JSON
+/** 从 markdown 中按正则扫描 paperId 并去重（保持顺序） */
+function collectUniqueIds(markdown: string, re: RegExp): PaperId[] {
+  const seen = new Set<string>();
+  const ids: PaperId[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(markdown)) !== null) {
+    const id = m[1]! as PaperId;
+    if (!seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
     }
   }
-
-  if (paperIdSet.size === 0) return 0;
-
-  // 逐篇论文检查
-  let updated = 0;
-  const updateStmt = db.prepare(
-    'UPDATE papers SET biblio_complete = ?, updated_at = ? WHERE id = ?',
-  );
-  const selectStmt = db.prepare('SELECT * FROM papers WHERE id = ?');
-  const timestamp = new Date().toISOString();
-
-  for (const paperId of paperIdSet) {
-    const row = selectStmt.get(paperId) as Record<string, unknown> | undefined;
-    if (!row) continue;
-
-    // 简化的 PaperMetadata 构造（仅检查所需字段）
-    const metadata = {
-      paperType: row['paper_type'] as string,
-      authors: row['authors'] as string,
-      title: row['title'] as string,
-      year: row['year'] as number,
-      journal: row['journal'] as string | null,
-      volume: row['volume'] as string | null,
-      issue: row['issue'] as string | null,
-      pages: row['pages'] as string | null,
-      doi: row['doi'] as string | null,
-      publisher: row['publisher'] as string | null,
-      isbn: row['isbn'] as string | null,
-      bookTitle: row['book_title'] as string | null,
-      editors: row['editors'] as string | null,
-      venue: row['venue'] as string | null,
-    } as unknown as PaperMetadata;
-
-    const result = checkFn(metadata, article.csl_style_id);
-    const newComplete = result.complete ? 1 : 0;
-    const oldComplete = row['biblio_complete'] as number;
-
-    if (newComplete !== oldComplete) {
-      updateStmt.run(newComplete, timestamp, paperId);
-      updated++;
-    }
-  }
-
-  if (updated > 0) {
-    logger?.info('biblio_complete re-checked after format change', {
-      articleId,
-      cslStyleId: article.csl_style_id,
-      updated,
-    });
-  }
-
-  return updated;
+  return ids;
 }
 
-// ─── §7.1 综述草稿双格式引文 ───
+/** 批量格式化引文，返回 paperId → inlineCitation 映射；格式化失败返回 null */
+function buildCitationMap(
+  paperIds: PaperId[],
+  paperMap: Map<PaperId, PaperMetadata>,
+  engine: CslEngine,
+): Map<string, string> | null {
+  const papers = paperIds
+    .filter((id) => paperMap.has(id))
+    .map((id) => ({ paperId: id, metadata: paperMap.get(id)! }));
+
+  let citations: FormattedCitation[];
+  try {
+    citations = engine.formatCitation(papers);
+  } catch {
+    return null;
+  }
+
+  const map = new Map<string, string>();
+  for (const c of citations) {
+    map.set(c.paperId, c.inlineCitation);
+  }
+  return map;
+}
+
+/** 替换回调：将 paperId 映射为 [[@id]](rendered) */
+function draftCiteReplacer(citationMap: Map<string, string>) {
+  return (_match: string, id: string) => {
+    const rendered = citationMap.get(id);
+    return rendered ? `[[@${id}]](${rendered})` : `[[@${id}]](⚠️ unknown)`;
+  };
+}
 
 /**
  * 将 [@paperId] 标记渲染为双格式 [[@paperId]](rendered)。
@@ -310,101 +267,40 @@ export function renderDraftCitations(
   engine: CslEngine,
 ): string {
   const citeRe = /\[@([a-f0-9]{12})\]/g;
-
-  // 收集全部引用的 paperId
-  const paperIds: PaperId[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = citeRe.exec(markdown)) !== null) {
-    const id = m[1]! as PaperId;
-    if (!paperIds.includes(id)) paperIds.push(id);
-  }
-
+  const paperIds = collectUniqueIds(markdown, citeRe);
   if (paperIds.length === 0) return markdown;
 
-  // 批量格式化
-  const papers = paperIds
-    .filter((id) => paperMap.has(id))
-    .map((id) => ({ paperId: id, metadata: paperMap.get(id)! }));
+  const citationMap = buildCitationMap(paperIds, paperMap, engine);
+  if (!citationMap) return markdown;
 
-  let citations: FormattedCitation[];
-  try {
-    citations = engine.formatCitation(papers);
-  } catch {
-    return markdown; // 格式化失败——返回原文
-  }
-
-  const citationMap = new Map<string, string>();
-  for (const c of citations) {
-    citationMap.set(c.paperId, c.inlineCitation);
-  }
-
-  // 替换 [@id] → [[@id]](rendered)
-  return markdown.replace(citeRe, (_match, id: string) => {
-    const rendered = citationMap.get(id);
-    if (rendered) {
-      return `[[@${id}]](${rendered})`;
-    }
-    return `[[@${id}]](⚠️ unknown)`;
-  });
+  return markdown.replace(citeRe, draftCiteReplacer(citationMap));
 }
 
 /**
  * §7.2: 从双格式文本中反向提取 paperId 列表。
- *
- * 正则匹配 [[@paperId]](任意渲染结果)。
  */
 export function extractDraftCitationIds(markdown: string): PaperId[] {
-  const re = /\[\[@([a-f0-9]{12})\]\]\([^)]*\)/g;
-  const ids: PaperId[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(markdown)) !== null) {
-    const id = m[1]! as PaperId;
-    if (!ids.includes(id)) ids.push(id);
-  }
-  return ids;
+  return collectUniqueIds(markdown, /\[\[@([a-f0-9]{12})\]\]\([^)]*\)/g);
 }
 
 /**
  * §7.2: 格式切换时用新 CSL 重渲染综述草稿中的引文。
  *
  * 反向提取 [[@id]](old_rendered) → 用新引擎重格式化 → 替换渲染结果。
- * 不需要 LLM 重新生成内容——仅 citeproc-js 调用。
  */
 export function reRenderDraftCitations(
   markdown: string,
   paperMap: Map<PaperId, PaperMetadata>,
   engine: CslEngine,
 ): string {
-  // 提取全部 paperId
   const paperIds = extractDraftCitationIds(markdown);
   if (paperIds.length === 0) return markdown;
 
-  // 批量格式化
-  const papers = paperIds
-    .filter((id) => paperMap.has(id))
-    .map((id) => ({ paperId: id, metadata: paperMap.get(id)! }));
+  const citationMap = buildCitationMap(paperIds, paperMap, engine);
+  if (!citationMap) return markdown;
 
-  let citations: FormattedCitation[];
-  try {
-    citations = engine.formatCitation(papers);
-  } catch {
-    return markdown;
-  }
-
-  const citationMap = new Map<string, string>();
-  for (const c of citations) {
-    citationMap.set(c.paperId, c.inlineCitation);
-  }
-
-  // 替换 [[@id]](old) → [[@id]](new)
   return markdown.replace(
     /\[\[@([a-f0-9]{12})\]\]\([^)]*\)/g,
-    (_match, id: string) => {
-      const rendered = citationMap.get(id);
-      if (rendered) {
-        return `[[@${id}]](${rendered})`;
-      }
-      return `[[@${id}]](⚠️ unknown)`;
-    },
+    draftCiteReplacer(citationMap),
   );
 }

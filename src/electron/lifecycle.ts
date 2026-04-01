@@ -83,6 +83,51 @@ export async function gracefulShutdown(
     }
   }
 
+  // Step 3.5: Shutdown DLA subprocess
+  if (ctx.dlaProxy) {
+    try {
+      await Promise.race([ctx.dlaProxy.shutdown(), sleep(5000)]);
+    } catch {
+      // Ignore DLA shutdown errors
+    }
+  }
+
+  // Step 3.6: Persist AI session state (WorkingMemory + conversation)
+  try {
+    const session = ctx.session;
+    const orchestrator = ctx.sessionOrchestrator;
+
+    if (session) {
+      // Save working memory entries
+      const memoryEntries = session.memory.getAll().map((e) => ({
+        id: e.id,
+        type: e.type,
+        content: e.content,
+        source: e.source,
+        linked_entities: JSON.stringify(e.linkedEntities),
+        importance: e.importance,
+        created_at: e.createdAt,
+        last_accessed_at: e.lastAccessedAt,
+        tags: e.tags ? JSON.stringify(e.tags) : null,
+      }));
+      if (memoryEntries.length > 0) {
+        await ctx.dbProxy.saveSessionMemory(memoryEntries);
+        ctx.logger.info('Session memory persisted', { entries: memoryEntries.length });
+      }
+    }
+
+    if (orchestrator) {
+      // Save conversation history
+      const conversationJson = orchestrator.serializeConversation();
+      if (conversationJson) {
+        await ctx.dbProxy.saveSessionConversation('workspace', conversationJson);
+        ctx.logger.info('Conversation persisted');
+      }
+    }
+  } catch (err) {
+    ctx.logger.warn('Failed to persist session state', { error: (err as Error).message });
+  }
+
   // Step 4: WAL TRUNCATE checkpoint
   try {
     await ctx.dbProxy.walCheckpoint();

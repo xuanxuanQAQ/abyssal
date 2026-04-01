@@ -22,7 +22,7 @@ import { ReconCache } from './recon-cache';
 // Pipeline v2 imports
 import { tryFastPath, resolveZenodoPdfUrl } from './fast-path';
 import { runRecon, type ReconResult } from './recon';
-import { buildStrategy } from './strategy';
+import { buildStrategy, type DownloadCandidate } from './strategy';
 import { speculativeExecute } from './speculative-executor';
 
 // Legacy source imports (Phase B fallback)
@@ -162,6 +162,7 @@ export class AcquireService {
     const notify = params.onSourceAttempt;
     const attempts: AcquireAttempt[] = [];
     const tempPath = savePath + '.tmp';
+    const pipelineStartTime = Date.now();
 
     this.logger.info('[Acquire] Pipeline v2 start', {
       doi, arxivId, pmcid, savePath,
@@ -217,8 +218,10 @@ export class AcquireService {
     }
 
     // ═══ Layer 0: Fast Path ═══
+    // Compute once, reuse in Layer 2 Strategy (avoids duplicate call)
+    const fastPathResult = tryFastPath(doi, arxivId, pmcid);
     if (acqConfig.enableFastPath) {
-      const fp = tryFastPath(doi, arxivId, pmcid);
+      const fp = fastPathResult;
       if (fp.matched && fp.pdfUrl) {
         notify?.(fp.source ?? 'fast-path', 'start');
         this.logger.info('[Acquire] Layer 0 Fast Path HIT', { source: fp.source, url: fp.pdfUrl });
@@ -304,7 +307,8 @@ export class AcquireService {
     }
 
     // ═══ Layer 2: Strategy ═══
-    const fastPath = tryFastPath(doi, arxivId, pmcid);
+    // Reuse fastPathResult from Layer 0 (no duplicate call)
+    const fastPath = fastPathResult;
     // Layer 0 成功处理过 fast-path → 不重复（matched=false）
     // Layer 0 被禁用或失败 → 保留 fast-path 候选给 Strategy/Speculative 使用
     const fastPathAlreadySucceeded = acqConfig.enableFastPath
@@ -317,6 +321,13 @@ export class AcquireService {
       failureMemory: this.failureMemory,
       config: acqConfig,
       logger: this.logger,
+    });
+
+    this.logger.info('[Acquire] Layer 2 Strategy complete', {
+      simpleCandidates: strategy.simpleCandidates.length,
+      complexCandidates: strategy.complexCandidates.length,
+      simpleSources: strategy.simpleCandidates.map((c) => c.source),
+      complexSources: strategy.complexCandidates.map((c) => c.source),
     });
 
     // ═══ Layer 3a: Speculative Execution (Phase A) ═══
@@ -355,7 +366,7 @@ export class AcquireService {
         notify?.(candidate.source, 'start');
         try {
           const start = Date.now();
-          await downloadPdf(this.http, candidate.url, tempPath, perSourceTimeoutMs, candidate.headers);
+          await downloadPdf(this.proxyHttp, candidate.url, tempPath, perSourceTimeoutMs, candidate.headers);
           const validation = await validatePdf(tempPath);
           if (validation.valid) {
             const attempt = makeAttempt(candidate.source, 'success', Date.now() - start, { httpStatus: 200 });
@@ -387,7 +398,19 @@ export class AcquireService {
       retryDelayMs: acqConfig.retryDelayMs,
     };
 
+    // Collect CNKI + Wanfang candidates for parallel execution below
+    const cnkiWanfangCandidates: DownloadCandidate[] = [];
+    const sequentialCandidates: DownloadCandidate[] = [];
     for (const candidate of strategy.complexCandidates) {
+      if ((candidate.source === 'cnki' || candidate.source === 'wanfang') && params.paperTitle) {
+        cnkiWanfangCandidates.push(candidate);
+      } else {
+        sequentialCandidates.push(candidate);
+      }
+    }
+
+    // ── Sequential complex sources: PMC, Sci-Hub ──
+    for (const candidate of sequentialCandidates) {
       // ── PMC ──
       if (candidate.source === 'pmc') {
         if (!pmcid && !doi) continue;
@@ -407,46 +430,60 @@ export class AcquireService {
         if (!doi) continue;
         notify?.('scihub', 'start');
         const preferredDomain = acqConfig.scihubDomain ?? 'sci-hub.se';
-        const attempt = await tryScihub(
-          this.proxyHttp, doi, preferredDomain, tempPath, perSourceTimeoutMs,
-          acqConfig.scihubMaxTotalMs,
+        const attempt = await withRetry('scihub', tempPath, retryConfig, () =>
+          tryScihub(
+            this.proxyHttp, doi!, preferredDomain, tempPath, perSourceTimeoutMs,
+            acqConfig.scihubMaxTotalMs,
+          ),
         );
         attempts.push(attempt);
         notify?.('scihub', 'end', { status: attempt.status, failureReason: attempt.failureReason });
         if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'scihub', attempts, params);
         continue;
       }
+    }
 
-      // ── CNKI (知网) ──
-      if (candidate.source === 'cnki') {
-        if (!params.paperTitle) continue;
+    // ── CNKI → Wanfang: sequential waterfall (CNKI first) ──
+    if (cnkiWanfangCandidates.length > 0) {
+      const cnkiCandidate = cnkiWanfangCandidates.find((c) => c.source === 'cnki');
+      const wanfangCandidate = cnkiWanfangCandidates.find((c) => c.source === 'wanfang');
+
+      // CNKI first
+      if (cnkiCandidate) {
+        const sourceTemp = `${tempPath}.cnki`;
         notify?.('cnki', 'start');
-        const attempt = await tryCnki(
-          this.http, params.paperTitle, this.cookieJar,
-          tempPath, perSourceTimeoutMs,
-          params.paperAuthors, params.paperYear,
-          this.logger, this.browserSearchFn,
+        const attempt = await withRetry('cnki', sourceTemp, retryConfig, () =>
+          tryCnki(
+            this.http, params.paperTitle!, this.cookieJar,
+            sourceTemp, perSourceTimeoutMs,
+            params.paperAuthors, params.paperYear,
+            this.logger, this.browserSearchFn,
+          ),
         );
         attempts.push(attempt);
         notify?.('cnki', 'end', { status: attempt.status, failureReason: attempt.failureReason });
-        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'cnki', attempts, params);
-        continue;
+        if (attempt.status === 'success') {
+          return this.finalize(sourceTemp, savePath, 'cnki', attempts, params);
+        }
       }
 
-      // ── Wanfang (万方) ──
-      if (candidate.source === 'wanfang') {
-        if (!params.paperTitle) continue;
+      // Wanfang fallback
+      if (wanfangCandidate) {
+        const sourceTemp = `${tempPath}.wanfang`;
         notify?.('wanfang', 'start');
-        const attempt = await tryWanfang(
-          this.http, params.paperTitle, this.cookieJar,
-          tempPath, perSourceTimeoutMs,
-          params.paperAuthors, params.paperYear,
-          this.logger, this.browserSearchFn,
+        const attempt = await withRetry('wanfang', sourceTemp, retryConfig, () =>
+          tryWanfang(
+            this.http, params.paperTitle!, this.cookieJar,
+            sourceTemp, perSourceTimeoutMs,
+            params.paperAuthors, params.paperYear,
+            this.logger, this.browserSearchFn,
+          ),
         );
         attempts.push(attempt);
         notify?.('wanfang', 'end', { status: attempt.status, failureReason: attempt.failureReason });
-        if (attempt.status === 'success') return this.finalize(tempPath, savePath, 'wanfang', attempts, params);
-        continue;
+        if (attempt.status === 'success') {
+          return this.finalize(sourceTemp, savePath, 'wanfang', attempts, params);
+        }
       }
     }
 
@@ -477,6 +514,7 @@ export class AcquireService {
     const summary = attempts.map((a) => `${a.source}:${a.failureReason ?? a.status}`).join('; ');
     this.logger.error('[Acquire] ALL SOURCES EXHAUSTED', undefined, {
       doi, arxivId, pmcid, attemptCount: attempts.length, summary,
+      durationMs: Date.now() - pipelineStartTime,
     });
 
     return { status: 'failed', pdfPath: null, source: null, sha256: null, fileSize: null, attempts };
@@ -500,8 +538,10 @@ export class AcquireService {
     const sha256 = await computeSha256(savePath);
     const fileSize = fs.statSync(savePath).size;
 
-    // ContentSanityCheck
-    if (this.sanityChecker && params.paperTitle) {
+    // ContentSanityCheck — skip for very large PDFs (>50 MB) to avoid memory spikes
+    // under concurrent acquisition (5 workers × 50 MB = 250 MB peak)
+    const SANITY_CHECK_MAX_FILE_SIZE = 50 * 1024 * 1024;
+    if (this.sanityChecker && params.paperTitle && fileSize <= SANITY_CHECK_MAX_FILE_SIZE) {
       try {
         const extractedText = await this.quickExtractText(savePath);
         if (extractedText) {
@@ -516,12 +556,14 @@ export class AcquireService {
           const result = await this.sanityChecker.check(sanityInput);
 
           if (result.verdict !== 'pass' && result.confidence >= this.config.acquire.sanityCheckConfidenceThreshold) {
-            this.logger.warn('[Acquire] SanityCheck FAILED', {
+            this.logger.warn('[Acquire] SanityCheck FAILED — keeping PDF for user review', {
               source, verdict: result.verdict, confidence: result.confidence,
-              explanation: result.explanation,
+              explanation: result.explanation, savePath,
             });
-            deleteFileIfExists(savePath);
-            return { status: 'failed', pdfPath: null, source: null, sha256: null, fileSize: null, attempts };
+            // Don't delete the PDF — return 'suspicious' so the workflow layer
+            // can mark the paper for user review instead of incrementing failureCount
+            // toward the 3-strike permanent failure cutoff.
+            return { status: 'suspicious', pdfPath: savePath, source, sha256, fileSize, attempts };
           }
         }
       } catch (err) {
@@ -531,13 +573,13 @@ export class AcquireService {
       }
     }
 
-    this.logger.info('PDF acquired', { source, fileSize, sha256: sha256.slice(0, 8), savePath });
+    this.logger.info('[Acquire] PDF acquired', { source, fileSize, sha256: sha256.slice(0, 8), savePath, attemptCount: attempts.length });
     return { status: 'success', pdfPath: savePath, source, sha256, fileSize, attempts };
   }
 
   private async quickExtractText(pdfPath: string): Promise<string | null> {
     try {
-      let mupdf: { Document: { openDocument(data: Buffer | ArrayBuffer, magic: string): { loadPage(n: number): { toStructuredText(): { asText(): string }; destroy?(): void }; countPages(): number; destroy?(): void } } };
+      let mupdf: { Document: { openDocument(data: Buffer | ArrayBuffer, magic: string): { loadPage(n: number): { toStructuredText(): { asText(): string; destroy?(): void }; destroy?(): void }; countPages(): number; destroy?(): void } } };
       try {
         mupdf = await import('mupdf') as typeof mupdf;
       } catch {
@@ -548,7 +590,7 @@ export class AcquireService {
         }
       }
 
-      const buffer = fs.readFileSync(pdfPath);
+      const buffer = await fs.promises.readFile(pdfPath);
       const doc = mupdf.Document.openDocument(buffer, 'application/pdf');
       const pageCount = doc.countPages();
       const pages = Math.min(pageCount, 3);
@@ -557,14 +599,23 @@ export class AcquireService {
       for (let i = 0; i < pages; i++) {
         const page = doc.loadPage(i);
         try {
-          texts.push(page.toStructuredText().asText());
+          const stext = page.toStructuredText();
+          try {
+            texts.push(stext.asText());
+          } finally {
+            stext.destroy?.();
+          }
         } finally {
           page.destroy?.();
         }
       }
 
       (doc as { destroy?(): void }).destroy?.();
-      return texts.join('\n');
+      const result = texts.join('\n');
+      this.logger.debug('[Acquire] quickExtractText complete', {
+        pdfPath, pagesExtracted: pages, totalPages: pageCount, charCount: result.length,
+      });
+      return result;
     } catch {
       return null;
     }

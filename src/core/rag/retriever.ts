@@ -17,6 +17,7 @@ import { expandQuery } from './query-intelligence';
 import { validateRetrieval, type LlmCallFn } from './corrective-rag';
 import { assembleContext } from './context-assembler';
 import { rowToRankedChunk, memoToRankedChunk, mergeVectorRows } from './chunk-mappers';
+import { hasLayoutColumns } from '../database/prepared-statements';
 
 // ─── 稳定排序工具（score 降序 + chunkId 字典序 tiebreaker） ───
 
@@ -148,6 +149,7 @@ async function vectorRecall(
     sources?: ChunkSource[] | null;
     sectionTypes?: SectionType[] | null;
     paperIds?: PaperId[] | null;
+    blockTypes?: string[] | null;
   },
 ): Promise<RankedChunk[]> {
   // Fix #1: 策略分流——当 paperIds 过滤限定的候选集极小时，
@@ -179,6 +181,7 @@ async function sqliteVecRecall(
     sources?: ChunkSource[] | null;
     sectionTypes?: SectionType[] | null;
     paperIds?: PaperId[] | null;
+    blockTypes?: string[] | null;
   },
 ): Promise<RankedChunk[]> {
   const allResults = new Map<string, RankedChunk>();
@@ -208,15 +211,21 @@ async function sqliteVecRecall(
       conditions.push(`c.paper_id IN (SELECT value FROM json_each(?))`);
       params.push(JSON.stringify(filters.paperIds));
     }
+    const withLayout = hasLayoutColumns(db);
+    if (withLayout && filters.blockTypes && filters.blockTypes.length > 0) {
+      conditions.push(`c.block_type IN (${filters.blockTypes.map(() => '?').join(',')})`);
+      params.push(...filters.blockTypes);
+    }
 
     const whereExtra = conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : '';
+    const layoutCols = withLayout ? ', c.block_type, c.reading_order, c.column_layout' : '';
 
     const sql = `
       SELECT c.rowid, c.chunk_id, c.paper_id, c.text, c.token_count,
              c.section_label, c.section_title, c.section_type,
              c.page_start, c.page_end, c.source, c.position_ratio,
              c.parent_chunk_id, c.chunk_index,
-             c.context_before, c.context_after,
+             c.context_before, c.context_after${layoutCols},
              v.distance
       FROM chunks_vec v
       JOIN chunks c ON c.rowid = v.rowid
@@ -249,6 +258,7 @@ async function inMemoryVectorRecall(
     sources?: ChunkSource[] | null;
     sectionTypes?: SectionType[] | null;
     paperIds?: PaperId[] | null;
+    blockTypes?: string[] | null;
   },
 ): Promise<RankedChunk[]> {
   // 构建候选集 SQL（不走 chunks_vec 虚拟表，直接读 embedding blob）
@@ -266,6 +276,11 @@ async function inMemoryVectorRecall(
   if (filters.sectionTypes && filters.sectionTypes.length > 0) {
     conditions.push(`c.section_type IN (${filters.sectionTypes.map(() => '?').join(',')})`);
     params.push(...filters.sectionTypes);
+  }
+  const withLayout = hasLayoutColumns(db);
+  if (withLayout && filters.blockTypes && filters.blockTypes.length > 0) {
+    conditions.push(`c.block_type IN (${filters.blockTypes.map(() => '?').join(',')})`);
+    params.push(...filters.blockTypes);
   }
 
   const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
@@ -540,18 +555,26 @@ export async function retrieve(
 
   const expandedK = computeExpandedK(request, config, expandParams, db);
 
-  logger.debug('Retrieval started', {
+  const retrievalStartMs = Date.now();
+  logger.info('[Retriever] Retrieval started', {
+    taskType: request.taskType,
     queryVariants: queryVariants.length,
     expandedK,
     budgetMode: request.budgetMode,
+    paperIds: request.paperIds.length,
+    conceptIds: request.conceptIds.length,
+    blockTypeFilter: request.blockTypeFilter ?? null,
+    queryPreview: request.queryText.slice(0, 80),
   });
 
   // §3.2: 四路召回（向量 + BM25 + 结构化 + memo/annotation）
+  const vecStartMs = Date.now();
   const [vectorResults, bm25Result, structuredResults, forcedResults] = await Promise.all([
     vectorRecall(db, embedder, queryVariants, expandedK, {
       sources: request.sourceFilter,
       sectionTypes: request.sectionTypeFilter,
       paperIds: request.paperIds.length > 0 ? request.paperIds : null,
+      blockTypes: request.blockTypeFilter ?? null,
     }),
     Promise.resolve(bm25Recall(db, request.queryText, ftsKeywords, expandedK, {
       sources: request.sourceFilter,
@@ -560,9 +583,19 @@ export async function retrieve(
     Promise.resolve(structuredRecall(db, request, config)),
     Promise.resolve(annotationAndMemoRecall(dbService, request)),
   ]);
+  const recallDurationMs = Date.now() - vecStartMs;
 
   const bm25Results = bm25Result.chunks;
   const bm25Available = bm25Result.available;
+
+  logger.info('[Retriever] Four-way recall complete', {
+    vectorHits: vectorResults.length,
+    bm25Hits: bm25Results.length,
+    bm25Available,
+    structuredHits: structuredResults.length,
+    forcedHits: forcedResults.length,
+    recallDurationMs,
+  });
 
   // Fix #6: 标记 BM25 不可用
   if (!bm25Available) {
@@ -599,12 +632,20 @@ export async function retrieve(
     : (request.budgetMode === 'focused' ? 10 : request.budgetMode === 'broad' ? 30 : 50);
   let topK = Math.ceil(baseRerankTopK * expandParams.topKMultiplier);
 
+  const rerankStartMs = Date.now();
   let reranked: RankedChunk[];
   if (request.skipReranker || candidates.length <= topK) {
     reranked = stableScoreSort(candidates).slice(0, topK);
+    logger.debug('[Retriever] Rerank skipped (score sort)', { candidates: candidates.length, topK });
   } else {
     const enhancedQuery = buildEnhancedQuery(request, dbService);
     reranked = await reranker.rerank(enhancedQuery, candidates, topK);
+    logger.info('[Retriever] Rerank complete', {
+      candidatesIn: candidates.length,
+      topK,
+      rerankOut: reranked.length,
+      durationMs: Date.now() - rerankStartMs,
+    });
   }
 
   // §7: Corrective RAG（Fix #3: 快速预判，避免重试风暴）
@@ -630,6 +671,12 @@ export async function retrieve(
       llmCall,
       logger,
     );
+
+    logger.info('[Retriever] Corrective RAG pre-check', {
+      action: preResult.action,
+      coverage: preResult.coverage,
+      gaps: preResult.gaps.length,
+    });
 
     if (preResult.action !== 'pass') {
       // 单次补救（不循环重试，避免延迟雪崩）
@@ -683,15 +730,17 @@ export async function retrieve(
     request.budgetMode,
   );
 
-  logger.info('Retrieval complete', {
+  logger.info('[Retriever] Retrieval complete', {
     vectorHits: vectorResults.length,
     bm25Hits: bm25Results.length,
     bm25Available,
     structuredHits: structuredResults.length,
     forcedHits: forced.length,
+    candidatesAfterDedup: candidateMap.size,
     finalChunks: assembled.chunks.length,
     totalTokens: assembled.totalTokenCount,
     retryCount: qualityReport.retryCount,
+    totalDurationMs: Date.now() - retrievalStartMs,
   });
 
   return {

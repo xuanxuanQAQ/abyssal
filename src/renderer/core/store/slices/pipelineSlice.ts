@@ -55,6 +55,16 @@ export const createPipelineSlice: StateCreator<
 
   updateTask: (event) =>
     set((state) => {
+      const existing = state.activeTasks[event.taskId];
+      // Guard: don't allow a stale 'running' event (e.g. from throttle trailing edge)
+      // to overwrite a terminal status that has already been applied.
+      if (
+        existing &&
+        event.status === 'running' &&
+        (existing.status === 'completed' || existing.status === 'partial' || existing.status === 'failed' || existing.status === 'cancelled')
+      ) {
+        return;
+      }
       state.activeTasks[event.taskId] = {
         taskId: event.taskId,
         workflow: event.workflow,

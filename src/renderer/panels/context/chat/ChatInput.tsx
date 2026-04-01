@@ -9,8 +9,9 @@
 
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square } from 'lucide-react';
+import { Send, Square, X, Quote, Image as ImageIcon } from 'lucide-react';
 import { useChatStore } from '../../../core/store/useChatStore';
+import { useReaderStore } from '../../../core/store/useReaderStore';
 import type { ContextSource } from '../../../../shared-types/models';
 
 const MIN_HEIGHT = 44;
@@ -55,6 +56,10 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
   const shadowRef = useRef<HTMLDivElement>(null);
   const draft = useChatStore((s) => s.chatInputDraft);
   const setDraft = useChatStore((s) => s.setChatInputDraft);
+  const quotedSelection = useReaderStore((s) => s.quotedSelection);
+  const selectionPayload = useReaderStore((s) => s.selectionPayload);
+  const clearQuote = useCallback(() => useReaderStore.getState().setQuotedSelection(null), []);
+  const clearPayload = useCallback(() => useReaderStore.getState().setSelectionPayload(null), []);
 
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -75,7 +80,9 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
     if (!text || disabled) return;
     onSend(text);
     setDraft('');
-  }, [draft, disabled, onSend, setDraft]);
+    clearQuote();
+    clearPayload();
+  }, [draft, disabled, onSend, setDraft, clearQuote, clearPayload]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -109,6 +116,128 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
         position: 'relative',
       }}
     >
+      {/* 引用卡片 */}
+      {quotedSelection && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            marginBottom: 8,
+            padding: '8px 10px',
+            backgroundColor: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 8,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <Quote size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.5 }} />
+          <span style={{
+            flex: 1,
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: 'vertical',
+          }}>
+            {quotedSelection.text}
+          </span>
+          <button
+            type="button"
+            onClick={clearQuote}
+            style={{
+              flexShrink: 0,
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: 2,
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* DLA 图片截图预览 */}
+      {selectionPayload?.images && selectionPayload.images.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            marginBottom: 8,
+            padding: '8px 10px',
+            backgroundColor: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 8,
+          }}
+        >
+          <ImageIcon size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.5 }} />
+          <div style={{ flex: 1, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {selectionPayload.images.map((img, idx) => (
+              <div
+                key={idx}
+                style={{
+                  position: 'relative',
+                  borderRadius: 4,
+                  overflow: 'hidden',
+                  border: '1px solid var(--border-subtle)',
+                }}
+              >
+                <img
+                  src={img.dataUrl}
+                  alt={img.type}
+                  style={{
+                    display: 'block',
+                    maxWidth: 120,
+                    maxHeight: 80,
+                    objectFit: 'contain',
+                  }}
+                />
+                <span
+                  style={{
+                    position: 'absolute',
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: '#fff',
+                    backgroundColor: 'rgba(0,0,0,0.55)',
+                    padding: '1px 4px',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {img.type} · p{img.pageNumber}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={clearPayload}
+            style={{
+              flexShrink: 0,
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: 2,
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       {/* 影子元素：测量高度 */}
       <div
         ref={shadowRef}

@@ -90,7 +90,7 @@ export const useChatStore = create<ChatState>()(
   devtools(
     subscribeWithSelector(
       immer((set) => ({
-        activeSessionKey: 'global',
+        activeSessionKey: 'workspace',
         sessions: {},
         chatInputDraft: '',
         chatStreaming: false,
@@ -188,7 +188,7 @@ export const useChatStore = create<ChatState>()(
         clearChatHistory: () =>
           set((state) => {
             state.sessions = {};
-            state.activeSessionKey = 'global';
+            state.activeSessionKey = 'workspace';
             state.chatInputDraft = '';
             state.chatStreaming = false;
             state.chatDockMode = 'collapsed';

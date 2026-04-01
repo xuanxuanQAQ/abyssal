@@ -61,6 +61,10 @@ export interface IpcContract {
   'db:papers:delete':                 { args: [id: string];                              result: void };
   'db:papers:batchDelete':            { args: [ids: string[]];                           result: void };
   'db:papers:resetAnalysis':          { args: [id: string];                              result: void };
+  /** Delete text file and reset textPath only (keep PDF). */
+  'db:papers:resetProcess':           { args: [id: string];                              result: void };
+  /** Delete PDF + text files and reset fulltext status to not_attempted. */
+  'db:papers:resetFulltext':          { args: [id: string];                              result: void };
   /** Link a local PDF file to an existing paper. If pdfPath is null, main process opens a file dialog. */
   'db:papers:linkPdf':                { args: [paperId: string, pdfPath?: string | null]; result: void };
 
@@ -238,6 +242,11 @@ export interface IpcContract {
   'app:window:popOut':                { args: [viewType: ViewType, entityId?: string];   result: void };
   'app:window:list':                  { args: [];                                        result: unknown[] };
 
+  // ── dla (Document Layout Analysis) ──
+  'dla:analyze':                       { args: [paperId: string, pdfPath: string, pageIndices: number[]]; result: void };
+  'dla:getBlocks':                     { args: [paperId: string, pageIndex: number]; result: import('../models').ContentBlockDTO[] | null };
+  'dla:analyzeDocument':               { args: [paperId: string, pdfPath: string, totalPages: number]; result: void };
+
   // ── workspace ──
   'workspace:create':                 { args: [opts: { rootDir: string; name?: string; description?: string }]; result: WorkspaceInfo };
   'workspace:openDialog':             { args: [];                                        result: string | null };
@@ -278,7 +287,21 @@ export interface IpcPushContract {
   'push:noteIndexed':         { noteId: string; chunkCount: number };
   'push:dbHealth':            { status: 'connected' | 'degraded' | 'disconnected' };
   'push:exportProgress':      import('../models').ExportProgress;
+  'push:dlaPageReady':        { paperId: string; pageIndex: number; blocks: import('../models').ContentBlockDTO[] };
+  /** AI command events — AI-initiated UI actions pushed to renderer */
+  'push:aiCommand':           AICommandPayload;
 }
+
+// ─── AI Command payload (discriminated union for all AI → renderer events) ───
+
+export type AICommandPayload =
+  | { command: 'navigate'; view: ViewType; target?: { paperId?: string; conceptId?: string; page?: number; noteId?: string; articleId?: string }; reason?: string }
+  | { command: 'highlightPassage'; paperId: string; page: number; text: string; persistent: boolean; rect?: { x: number; y: number; w: number; h: number } }
+  | { command: 'suggest'; suggestion: { id: string; title: string; description: string; actions: Array<{ id: string; label: string; primary?: boolean }>; priority: number; dismissAfterMs: number } }
+  | { command: 'focusEntity'; entityType: 'paper' | 'concept' | 'note' | 'article'; entityId: string; anchor?: { page?: number; sectionId?: string; text?: string } }
+  | { command: 'showComparison'; items: Array<{ entityType: string; entityId: string; label: string }>; aspect: string }
+  | { command: 'notify'; level: 'info' | 'success' | 'warning'; title: string; message: string }
+  | { command: 'updateSettings'; section: string; patch: Record<string, unknown>; reason: string };
 
 // ═══════════════════════════════════════════════════════════════════════
 // Fire-and-forget Contract — renderer → main (no response)
@@ -286,7 +309,25 @@ export interface IpcPushContract {
 
 export interface IpcFireAndForgetContract {
   'reader:pageChanged': { args: [paperId: string, page: number] };
+  /** User behavior events — renderer → main (forwarded to EventBus) */
+  'event:userAction':   { args: [event: UserActionPayload] };
+  /** User responds to an AI suggestion */
+  'event:suggestionResponse': { args: [suggestionId: string, actionId: string] };
 }
+
+// ─── User action payload (renderer → main, forwarded to EventBus) ───
+
+export type UserActionPayload =
+  | { action: 'navigate'; view: ViewType; previousView: ViewType; target?: { paperId?: string; conceptId?: string; articleId?: string; noteId?: string } }
+  | { action: 'selectPaper'; paperId: string; source: string }
+  | { action: 'selectConcept'; conceptId: string; source: string }
+  | { action: 'selectText'; paperId: string; text: string; page: number; rect?: { x: number; y: number; w: number; h: number } }
+  | { action: 'highlight'; paperId: string; annotationId: string; text: string; page: number }
+  | { action: 'openPaper'; paperId: string; hasPdf: boolean }
+  | { action: 'pageChange'; paperId: string; page: number; totalPages: number }
+  | { action: 'search'; query: string; scope: string }
+  | { action: 'idle'; durationMs: number; lastView: ViewType }
+  | { action: 'import'; format: string; count: number };
 
 // ═══════════════════════════════════════════════════════════════════════
 // Utility Types

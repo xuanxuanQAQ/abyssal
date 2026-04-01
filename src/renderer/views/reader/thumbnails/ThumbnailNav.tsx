@@ -14,7 +14,7 @@ export interface ThumbnailNavProps {
   pageMetadataMap: PageMetadataMap;
   annotations: Annotation[];
   onScrollToPage: (pageNumber: number) => void;
-  renderThumbnail: (canvas: HTMLCanvasElement, pageNumber: number) => Promise<void>;
+  renderThumbnail: (canvas: HTMLCanvasElement, pageNumber: number) => { promise: Promise<void>; cancel: () => void };
 }
 
 export function ThumbnailNav({

@@ -587,7 +587,7 @@ export interface TaskUIState {
 export interface TaskHistoryEntry {
   taskId: string;
   workflow: WorkflowType;
-  status: 'completed' | 'failed' | 'cancelled';
+  status: 'completed' | 'partial' | 'failed' | 'cancelled';
   completedAt: string;
   progress: { current: number; total: number };
   error?: { code: string; message: string };
@@ -607,6 +607,7 @@ export interface ProjectInfo {
   paperCount: number;
   conceptCount: number;
   lastModified: string;
+  workspacePath?: string;
 }
 
 // ═══ Import / Snapshot ═══
@@ -937,6 +938,9 @@ export interface SettingsData {
   personalization: {
     authorDisplayThreshold: number;
   };
+  ai: {
+    proactiveSuggestions: boolean;
+  };
 }
 
 export interface DbStatsInfo {
@@ -974,6 +978,23 @@ export interface SuggestedConceptsStats {
   pendingCount: number;
   adoptedCount: number;
   dismissedCount: number;
+}
+
+// ═══ DLA (Document Layout Analysis) ═══
+
+export type ContentBlockType =
+  | 'title' | 'text' | 'abandoned'
+  | 'figure' | 'figure_caption'
+  | 'table' | 'table_caption' | 'table_footnote'
+  | 'formula' | 'formula_caption';
+
+/** Content block DTO for renderer consumption */
+export interface ContentBlockDTO {
+  type: ContentBlockType;
+  /** Normalized bounding box [0,1] relative to page dimensions */
+  bbox: { x: number; y: number; w: number; h: number };
+  confidence: number;
+  pageIndex: number;
 }
 
 // ═══ Workspace ═══

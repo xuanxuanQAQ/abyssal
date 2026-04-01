@@ -2,13 +2,14 @@
  * DOIImportTab — DOI 导入 Tab（§10.1）
  *
  * 单行 DOI 输入 + 多条添加列表。
- * TODO: 主进程在线查询元数据。
+ * 通过 importBibtex IPC 将 DOI 作为 BibTeX 条目导入。
  */
 
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getAPI } from '../../../core/ipc/bridge';
 
 interface DOIImportTabProps {
   onClose: () => void;
@@ -35,9 +36,18 @@ export function DOIImportTab({ onClose }: DOIImportTabProps) {
   const handleImport = async () => {
     if (dois.length === 0) return;
     setImporting(true);
-    // TODO: 调用主进程 DOI 在线查询 + 导入
-    toast.error('DOI 导入功能暂未实现');
-    setImporting(false);
+    try {
+      for (const doi of dois) {
+        await getAPI().db.papers.importBibtex(`@article{_,\n  doi = {${doi}},\n}`);
+      }
+      toast.success(t('library.doiImport.success', { count: dois.length }));
+      setDois([]);
+      onClose();
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (

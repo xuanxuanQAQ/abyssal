@@ -22,10 +22,12 @@ export async function downloadPdf(
   destPath: string,
   timeoutMs: number = 30_000,
   headers?: Record<string, string>,
+  abortSignal?: AbortSignal,
 ): Promise<DownloadResult> {
   const result = await http.streamDownload(url, destPath, {
     timeoutMs,
     headers,
+    abortSignal,
   });
 
   return {

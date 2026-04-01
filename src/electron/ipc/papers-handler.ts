@@ -139,16 +139,48 @@ export function registerPapersHandlers(ctx: AppContext): void {
     };
   });
 
+  // ── Shared file cleanup helpers ──
+
+  async function cleanProcessFiles(id: string, paper?: Record<string, unknown> | null) {
+    if (!paper) paper = await ctx.dbProxy.getPaper(asPaperId(id)) as Record<string, unknown> | null;
+    if (!paper) return;
+    const textPath = (paper['textPath'] ?? paper['text_path']) as string | null;
+    if (textPath) {
+      const resolved = path.isAbsolute(textPath) ? textPath : path.join(ctx.workspaceRoot, textPath);
+      try { await fs.unlink(resolved); } catch { /* ignore */ }
+    }
+    try { await fs.unlink(path.join(ctx.workspaceRoot, 'texts', `${id}.txt`)); } catch { /* ignore */ }
+  }
+
+  async function cleanFulltextFiles(id: string, paper?: Record<string, unknown> | null) {
+    if (!paper) paper = await ctx.dbProxy.getPaper(asPaperId(id)) as Record<string, unknown> | null;
+    if (!paper) return;
+    // Delete PDF
+    const fulltextPath = (paper['fulltextPath'] ?? paper['fulltext_path']) as string | null;
+    if (fulltextPath) {
+      const resolved = path.isAbsolute(fulltextPath) ? fulltextPath : path.join(ctx.workspaceRoot, fulltextPath);
+      try { await fs.unlink(resolved); } catch { /* ignore */ }
+    }
+    try { await fs.unlink(path.join(ctx.workspaceRoot, 'pdfs', `${id}.pdf`)); } catch { /* ignore */ }
+    // Delete text
+    await cleanProcessFiles(id, paper);
+  }
+
   // ── db:papers:delete ──
   typedHandler('db:papers:delete', logger, async (_e, id) => {
+    await cleanFulltextFiles(id);
     await ctx.dbProxy.deletePaper(asPaperId(id));
+    logger.info('Paper deleted (with files)', { id });
   });
 
   // ── db:papers:batchDelete ──
   typedHandler('db:papers:batchDelete', logger, async (_e, ids) => {
     const errors: string[] = [];
     for (const id of ids) {
-      try { await ctx.dbProxy.deletePaper(asPaperId(id)); }
+      try {
+        await cleanFulltextFiles(id);
+        await ctx.dbProxy.deletePaper(asPaperId(id));
+      }
       catch (err) { errors.push(`${id}: ${(err as Error).message}`); }
     }
     if (errors.length > 0) {
@@ -209,5 +241,30 @@ export function registerPapersHandlers(ctx: AppContext): void {
     try { await fs.unlink(path.join(ctx.workspaceRoot, 'analyses', `${id}.raw.txt`)); } catch { /* ignore */ }
 
     ctx.pushManager?.enqueueDbChange(['papers', 'mappings'], 'delete', { papers: [id] });
+  });
+
+  // ── db:papers:resetProcess ──
+  typedHandler('db:papers:resetProcess', logger, async (_e, id) => {
+    await cleanProcessFiles(id);
+    await ctx.dbProxy.updatePaper(asPaperId(id), {
+      textPath: null,
+    } as any);
+    ctx.pushManager?.enqueueDbChange(['papers'], 'update', { papers: [id] });
+    logger.info('Process reset for paper', { id });
+  });
+
+  // ── db:papers:resetFulltext ──
+  typedHandler('db:papers:resetFulltext', logger, async (_e, id) => {
+    await cleanFulltextFiles(id);
+    await ctx.dbProxy.updatePaper(asPaperId(id), {
+      fulltextStatus: 'not_attempted',
+      fulltextPath: null,
+      fulltextSource: null,
+      textPath: null,
+      failureReason: null,
+      failureCount: 0,
+    } as any);
+    ctx.pushManager?.enqueueDbChange(['papers'], 'update', { papers: [id] });
+    logger.info('Fulltext reset for paper', { id });
   });
 }

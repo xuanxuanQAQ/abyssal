@@ -27,13 +27,14 @@ import i18n from '../i18n';
 import { AbyssalQueryProvider } from './QueryProvider';
 import { AppErrorBoundary } from './ErrorBoundaries';
 import { PipelineListener } from './PipelineListener';
+import { AICommandListener } from './AICommandListener';
 import { ThemeProvider } from '../core/context/ThemeContext';
 import { LayoutProvider } from '../core/context/LayoutContext';
 import { KeybindingProvider } from '../core/context/KeybindingContext';
 import { MainLayout } from './shell/MainLayout';
-import { preloadAllViews } from './shell/MainStage';
 import { MemoQuickInput } from '../views/notes/memo/MemoQuickInput';
 import { useAppStore } from '../core/store';
+import { useHotkey } from '../core/hooks/useHotkey';
 import { ProjectSetupWizard } from './wizard/ProjectSetupWizard';
 import { useProjectSetup } from './wizard/useProjectSetup';
 import { DbChangeListener } from '../core/ipc/useDbChangeListener';
@@ -93,11 +94,7 @@ function AppShell() {
     setProjectWizardOpen(false);
   }, [queryClient, setProjectWizardOpen]);
 
-  // 首屏渲染后空闲预加载全部视图 chunk，消除切换时的"加载中"闪烁
-  useEffect(() => {
-    const id = requestIdleCallback(() => preloadAllViews(), { timeout: 3000 });
-    return () => cancelIdleCallback(id);
-  }, []);
+  // 预加载已由 MainStage 模块级 queueMicrotask 处理，无需 idle callback
 
   // 启动时从后端同步个性化设置到 localStorage
   useEffect(() => {
@@ -105,26 +102,20 @@ function AppShell() {
       if (data?.personalization?.authorDisplayThreshold != null) {
         setAuthorDisplayThreshold(data.personalization.authorDisplayThreshold);
       }
-    }).catch(() => {});
+    }).catch((err) => { console.warn('[AppShell] Failed to load settings:', err); });
   }, []);
 
-  // Ctrl+Shift+N / Cmd+Shift+N 快捷键打开 MemoQuickInput
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
-        e.preventDefault();
-        const store = useAppStore.getState();
-        store.setMemoQuickInputOpen(!store.memoQuickInputOpen);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  // Ctrl+Shift+N 快捷键打开 MemoQuickInput
+  useHotkey('Ctrl+Shift+N', () => {
+    const store = useAppStore.getState();
+    store.setMemoQuickInputOpen(!store.memoQuickInputOpen);
+  });
 
   return (
     <>
       <DbChangeListener />
       <PipelineListener />
+      <AICommandListener />
       <Toaster
         position="bottom-right"
         containerStyle={TOAST_CONTAINER_STYLE}

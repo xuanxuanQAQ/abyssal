@@ -24,7 +24,7 @@ export function ReaderView() {
     (s) => s.readerAnnotationListOpen,
   );
 
-  const { manager, pageMetadataMap, status, error } =
+  const { manager, pageMetadataMap, pdfPath, status, error } =
     usePDFDocument(selectedPaperId);
   const { data: annotations = [] } = useAnnotations(selectedPaperId);
 
@@ -34,28 +34,36 @@ export function ReaderView() {
   >(null);
 
   const renderThumbnail = useCallback(
-    async (canvas: HTMLCanvasElement, pageNumber: number) => {
-      const doc = manager?.getDocument();
-      if (!doc || !pageMetadataMap) return;
+    (canvas: HTMLCanvasElement, pageNumber: number): { promise: Promise<void>; cancel: () => void } => {
+      let renderTask: { promise: Promise<void>; cancel(): void } | null = null;
+      const promise = (async () => {
+        const doc = manager?.getDocument();
+        if (!doc || !pageMetadataMap) return;
 
-      const page = await doc.getPage(pageNumber);
-      const meta = pageMetadataMap.get(pageNumber);
-      const baseWidth =
-        meta?.baseWidth ?? page.getViewport({ scale: 1 }).width;
-      const scale = 60 / baseWidth;
-      const viewport = page.getViewport({ scale });
+        const page = await doc.getPage(pageNumber);
+        const meta = pageMetadataMap.get(pageNumber);
+        const baseWidth =
+          meta?.baseWidth ?? page.getViewport({ scale: 1 }).width;
+        const scale = 60 / baseWidth;
+        const viewport = page.getViewport({ scale });
 
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-      ctx.scale(dpr, dpr);
-      await page.render({ canvasContext: ctx, viewport }).promise;
+        ctx.scale(dpr, dpr);
+        renderTask = page.render({ canvasContext: ctx, viewport });
+        await renderTask.promise;
+      })();
+      return {
+        promise,
+        cancel: () => { renderTask?.cancel(); },
+      };
     },
     [manager, pageMetadataMap],
   );
@@ -162,8 +170,10 @@ export function ReaderView() {
         <Panel style={{ overflow: 'hidden' }}>
           <PDFViewport
             paperId={selectedPaperId}
+            pdfPath={pdfPath}
             manager={manager}
             pageMetadataMap={pageMetadataMap}
+            scrollRef={scrollContainerRef}
           />
         </Panel>
 

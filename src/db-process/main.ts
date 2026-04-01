@@ -47,11 +47,15 @@ function initDatabase(payload: DbInitPayload): void {
   const config = ConfigLoader.loadFromWorkspace(workspaceRoot, globalConfig);
 
   // Logger
-  logger = new FileLogger(wsPaths.logs, config.logging.level);
+  logger = new FileLogger(wsPaths.logs, config.logging.level, true);
 
   // 数据库初始化
   const dbPath = wsPaths.db;
   const migrationsDir = path.resolve(__dirname, '..', 'core', 'database', 'migrations');
+
+  const fs = require('node:fs') as typeof import('node:fs');
+  const dbExists = fs.existsSync(dbPath);
+  logger.info('DB subprocess: starting init', { dbPath, dbExists });
 
   try {
     dbService = createDatabaseService({
@@ -61,29 +65,74 @@ function initDatabase(payload: DbInitPayload): void {
     });
     logger.info('DB subprocess: database initialized', { dbPath });
   } catch (err) {
-    logger.error('DB subprocess: init failed, retrying with fresh DB', err as Error);
+    const error = err as Error & { code?: string };
+    logger.error('DB subprocess: init failed', error, {
+      dbPath,
+      errorCode: error.code,
+      errorName: error.name,
+    });
 
-    // Close any partially-opened connection before deleting files,
-    // otherwise the DB file is still locked and unlink fails with EBUSY.
+    // Close any partially-opened connection before further action,
+    // otherwise the DB file is still locked.
     if (dbService) {
       try { dbService.close(); } catch { /* ignore */ }
       dbService = null;
     }
 
-    // 删除损坏的数据库文件后重试
-    const fs = require('node:fs');
-    for (const suffix of ['', '-wal', '-shm']) {
-      const f = dbPath + suffix;
-      try {
-        if (fs.existsSync(f)) fs.unlinkSync(f);
-      } catch { /* ignore unlink errors */ }
+    // ── Error classification ──
+    // Only truly unrecoverable errors (corrupt DB, incompatible file format)
+    // should trigger backup-and-recreate. Config/migration errors should
+    // propagate so the user can fix their config.
+    const errorCode = error.code ?? '';
+    const errorMsg = error.message?.toLowerCase() ?? '';
+    const isCorruptDb =
+      errorMsg.includes('not a database') ||
+      errorMsg.includes('file is not a database') ||
+      errorMsg.includes('disk image is malformed') ||
+      errorMsg.includes('database disk image is malformed') ||
+      errorCode === 'SQLITE_CORRUPT' ||
+      errorCode === 'SQLITE_NOTADB';
+
+    if (!isCorruptDb) {
+      // Migration errors, extension load errors, config mismatches, etc.
+      // — do NOT delete the database. Re-throw so caller reports the error.
+      logger.warn('DB subprocess: init error is non-corrupt — preserving database', {
+        errorCode,
+        errorName: error.name,
+      });
+      throw err;
     }
+
+    // ── Corrupt DB: back up and recreate ──
+    logger.warn('DB subprocess: database appears corrupt — backing up and recreating');
+
+    if (fs.existsSync(dbPath)) {
+      const backupName = `${dbPath}.corrupt-${Date.now()}`;
+      try {
+        fs.copyFileSync(dbPath, backupName);
+        for (const suffix of ['-wal', '-shm']) {
+          const f = dbPath + suffix;
+          if (fs.existsSync(f)) fs.copyFileSync(f, backupName + suffix);
+        }
+        logger.warn('DB subprocess: corrupt database backed up', { backupPath: backupName });
+      } catch (backupErr) {
+        logger.error('DB subprocess: backup also failed', backupErr as Error);
+      }
+
+      // Remove original files so a fresh DB can be created
+      for (const suffix of ['', '-wal', '-shm']) {
+        const f = dbPath + suffix;
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+      }
+    }
+
+    // Retry with a fresh database
     dbService = createDatabaseService({
       dbPath, config, logger,
       skipVecExtension: skipVecExtension ?? false,
       migrationsDir,
     });
-    logger.info('DB subprocess: database initialized (fresh)', { dbPath });
+    logger.warn('DB subprocess: initialized with fresh database (corrupt data backed up)', { dbPath });
   }
 }
 
@@ -166,6 +215,12 @@ function restoreTypedArrays(value: unknown): unknown {
 function serializeResult(value: unknown): unknown {
   if (value instanceof Float32Array) {
     return { __type: 'Float32Array', data: Array.from(value) };
+  }
+  if (value instanceof Set) {
+    return { __type: 'Set', data: Array.from(value) };
+  }
+  if (value instanceof Map) {
+    return { __type: 'Map', data: Array.from(value.entries()) };
   }
   // Promise: 等待解析
   if (value instanceof Promise) {

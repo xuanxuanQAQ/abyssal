@@ -3,7 +3,7 @@
  *
  * Renders an inline chip/capsule showing the citation display text.
  * - Click → select node in ProseMirror
- * - Mod+Click → navigate to paper (TODO: navigation integration)
+ * - Mod+Click → navigate to paper in Reader
  * - Hover 500ms → show CitationHoverCard
  */
 
@@ -12,6 +12,7 @@ import { NodeViewWrapper } from '@tiptap/react';
 import type { NodeViewProps } from '@tiptap/react';
 import { NodeSelection } from '@tiptap/pm/state';
 import { CitationHoverCard } from './CitationHoverCard';
+import { useAppStore } from '../../../../core/store';
 
 const chipStyle: React.CSSProperties = {
   display: 'inline',
@@ -28,6 +29,7 @@ const chipStyle: React.CSSProperties = {
 export function CitationChip({ node, editor, getPos }: NodeViewProps): React.ReactElement {
   const [showHover, setShowHover] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigateTo = useAppStore((s) => s.navigateTo);
 
   const paperId = (node.attrs.paperId as string) ?? '';
   const displayText = (node.attrs.displayText as string) ?? paperId;
@@ -41,7 +43,7 @@ export function CitationChip({ node, editor, getPos }: NodeViewProps): React.Rea
       if (pos == null || !editor.view) return;
 
       if (event.metaKey || event.ctrlKey) {
-        // TODO: navigation integration — navigateTo({ type: 'paper', paperId })
+        navigateTo({ type: 'paper', id: paperId, view: 'reader' });
         return;
       }
 

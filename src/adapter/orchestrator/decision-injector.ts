@@ -1,35 +1,46 @@
 /**
  * Decision Injector — format decision history for prompt injection.
  *
- * §6.1: Build structured prompt section from reviewed mappings + decision files.
+ * §6.1: Build structured prompt section from reviewed mappings + decision data.
  *
  * Groups mappings by decision status:
  *   - Accepted: "use as reliable evidence"
  *   - Revised: "use researcher's corrected version"
- *   - Rejected: "DO NOT use as evidence" (recovered from decision files)
+ *   - Rejected: "DO NOT use as evidence"
  */
 
-import type Database from 'better-sqlite3';
-import {
-  loadDecisionEntry,
-  loadRejectedFromDecisionFiles,
-  parseEvidenceJson,
-  type RejectedFromFile,
-} from '../../core/database/decision-query';
+// ─── Service interface (no raw SQLite dependency) ───
 
-// ─── Types ───
-
-interface MappingRow {
-  paper_id: string;
-  concept_id: string;
+export interface ReviewedMapping {
+  paperId: string;
+  conceptId: string;
   relation: string;
   confidence: number;
   evidence: string | null;
-  reviewed: number;
-  decision_status: string | null;
-  decision_note: string | null;
+  decisionStatus: 'accepted' | 'revised' | 'rejected' | null;
+  decisionNote: string | null;
   title: string;
   year: number;
+  /** For revised mappings: original values before researcher correction */
+  revisedRelation?: string | null;
+  revisedConfidence?: number | null;
+  revisionReason?: string | null;
+}
+
+export interface RejectedMapping {
+  paperId: string;
+  title: string;
+  year: number;
+  originalRelation: string | null;
+  originalConfidence: number | null;
+  reason: string | null;
+}
+
+export interface DecisionInjectorDb {
+  /** Get all reviewed mappings for a concept, sorted by confidence desc. */
+  getReviewedMappingsForConcept(conceptId: string): Promise<ReviewedMapping[]>;
+  /** Get rejected mappings for a concept (kept in DB with decision_status='rejected'). */
+  getRejectedMappingsForConcept(conceptId: string): Promise<RejectedMapping[]>;
 }
 
 // ─── §6.1: Format decision history for synthesize prompt ───
@@ -37,58 +48,44 @@ interface MappingRow {
 /**
  * Build the "Researcher's Judgments on This Concept" prompt section.
  *
- * Queries all reviewed mappings for the concept, loads decision entries
- * from .md files, and formats into three groups.
+ * Queries reviewed + rejected mappings via the injected DB interface
+ * and formats them into three groups.
  */
-export function formatDecisionHistoryForPrompt(
+export async function formatDecisionHistoryForPrompt(
   conceptId: string,
-  db: Database.Database,
-  workspaceRoot: string,
-): string {
-  // Query reviewed mappings for this concept
-  const mappings = db.prepare(
-    'SELECT pcm.*, p.title, p.year ' +
-    'FROM paper_concept_map pcm ' +
-    'JOIN papers p ON p.id = pcm.paper_id ' +
-    'WHERE pcm.concept_id = ? AND pcm.reviewed = 1 ' +
-    'ORDER BY pcm.confidence DESC',
-  ).all(conceptId) as MappingRow[];
+  db: DecisionInjectorDb,
+): Promise<string> {
+  const mappings = await db.getReviewedMappingsForConcept(conceptId);
 
-  const accepted: Array<MappingRow & { note: string | null }> = [];
-  const revised: Array<MappingRow & { decision: NonNullable<ReturnType<typeof loadDecisionEntry>> }> = [];
+  const accepted: Array<ReviewedMapping & { note: string | null }> = [];
+  const revised: ReviewedMapping[] = [];
 
-  for (const mapping of mappings) {
-    const decision = loadDecisionEntry(mapping.paper_id, conceptId, workspaceRoot);
-
-    if (!decision || decision.status === 'accepted') {
-      // No decision file or accepted — treat as accepted
-      accepted.push({ ...mapping, note: decision?.note ?? mapping.decision_note });
-    } else if (decision.status === 'revised') {
-      revised.push({ ...mapping, decision });
+  for (const m of mappings) {
+    if (!m.decisionStatus || m.decisionStatus === 'accepted') {
+      accepted.push({ ...m, note: m.decisionNote });
+    } else if (m.decisionStatus === 'revised') {
+      revised.push(m);
     }
-    // rejected mappings are already deleted from paper_concept_map
+    // rejected mappings are fetched separately
   }
 
-  // Recover rejected from decision files
-  const rejected = loadRejectedFromDecisionFiles(conceptId, db, workspaceRoot);
+  const rejected = await db.getRejectedMappingsForConcept(conceptId);
 
-  // Format
   return formatSections(accepted, revised, rejected);
 }
 
 // ─── Format into prompt sections ───
 
 function formatSections(
-  accepted: Array<MappingRow & { note: string | null }>,
-  revised: Array<MappingRow & { decision: NonNullable<ReturnType<typeof loadDecisionEntry>> }>,
-  rejected: RejectedFromFile[],
+  accepted: Array<ReviewedMapping & { note: string | null }>,
+  revised: ReviewedMapping[],
+  rejected: RejectedMapping[],
 ): string {
   const lines: string[] = ["## Researcher's Judgments on This Concept\n"];
 
   if (accepted.length > 0) {
     lines.push('### Accepted Mappings (use as reliable evidence)');
     for (const m of accepted) {
-      const evidence = parseEvidenceJson(m.evidence);
       lines.push(`- **${m.title}** (${m.year}): ${m.relation}, conf=${m.confidence}`);
       if (m.note) lines.push(`  Note: "${m.note}"`);
     }
@@ -97,28 +94,26 @@ function formatSections(
   if (revised.length > 0) {
     lines.push("\n### Revised Mappings (use researcher's corrected version)");
     for (const m of revised) {
-      const d = m.decision;
-      const oldRel = d.changes?.oldRelation ?? m.relation;
-      const oldConf = d.changes?.oldConfidence ?? m.confidence;
-      const newRel = d.changes?.newRelation ?? m.relation;
-      const newConf = d.changes?.newConfidence ?? m.confidence;
+      const oldRel = m.relation;
+      const oldConf = m.confidence;
+      const newRel = m.revisedRelation ?? m.relation;
+      const newConf = m.revisedConfidence ?? m.confidence;
       lines.push(
         `- **${m.title}** (${m.year}): ` +
         `AI said "${oldRel}" (${oldConf}) → ` +
         `Researcher revised to "${newRel}" (${newConf})`,
       );
-      if (d.reason) lines.push(`  Reason: "${d.reason}"`);
+      if (m.revisionReason) lines.push(`  Reason: "${m.revisionReason}"`);
     }
   }
 
   if (rejected.length > 0) {
     lines.push('\n### \u274C Rejected Mappings (DO NOT use as evidence)');
     for (const r of rejected) {
-      const d = r.decision;
       lines.push(
-        `- **${r.title}** (${r.year}): AI said "${d.originalRelation ?? '?'}" (${d.originalConfidence ?? '?'})`,
+        `- **${r.title}** (${r.year}): AI said "${r.originalRelation ?? '?'}" (${r.originalConfidence ?? '?'})`,
       );
-      if (d.reason) lines.push(`  Rejection reason: "${d.reason}"`);
+      if (r.reason) lines.push(`  Rejection reason: "${r.reason}"`);
     }
   }
 

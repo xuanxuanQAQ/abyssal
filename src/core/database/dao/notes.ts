@@ -133,7 +133,7 @@ export function linkMemoToNote(
 }
 
 // ─── §6.4 upgradeToTentativeConcept ───
-// TODO: Markdown 文件读取由调用方（orchestrator）完成
+// Markdown 文件读取由调用方（Orchestrator）完成，DAO 仅处理 DB 操作。
 
 export function linkNoteToConcept(
   db: Database.Database,

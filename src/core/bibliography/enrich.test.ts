@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { enrichBibliography } from './enrich';
 import { makePaper } from '@test-utils/fixtures';
+import { PaperNotFoundError } from '../types/errors';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -161,12 +162,23 @@ describe('enrichBibliography', () => {
   // -----------------------------------------------------------------------
   it('returns enriched: false on a 404 response instead of throwing', async () => {
     const paper = makePaper({ doi: '10.1234/nonexistent' });
-    mockHttp.requestJson.mockRejectedValue(new Error('404 Not Found'));
+    mockHttp.requestJson.mockRejectedValue(
+      new PaperNotFoundError({ message: 'Not found (404): https://api.crossref.org/works/10.1234%2Fnonexistent' }),
+    );
 
     const result = await enrichBibliography(paper, mockHttp as any, mockLimiter as any);
 
     expect(result.enriched).toBe(false);
     expect(result.enrichedFields).toEqual([]);
     expect(result.metadata).toEqual(paper);
+  });
+
+  it('rethrows non-404 errors', async () => {
+    const paper = makePaper({ doi: '10.1234/test' });
+    mockHttp.requestJson.mockRejectedValue(new Error('Network timeout'));
+
+    await expect(
+      enrichBibliography(paper, mockHttp as any, mockLimiter as any),
+    ).rejects.toThrow('Network timeout');
   });
 });

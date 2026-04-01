@@ -6,7 +6,6 @@ import type Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { MigrationError } from '../types/errors';
-import { DimensionMismatchError } from '../types/errors';
 import type { Logger } from '../infra/logger';
 import type { AbyssalConfig } from '../types/config';
 
@@ -108,12 +107,16 @@ function seedMetaValues(
 
 /**
  * §3.3: 启动时检查 _meta.embedding_dimension 与配置一致性。
- * 不一致时抛出 DimensionMismatchError。
+ *
+ * 当维度/模型变化时（用户在设置中切换 embedding provider），自动执行
+ * "嵌入迁移"：drop/recreate chunks_vec + 更新 _meta。
+ * 不再抛出 DimensionMismatchError——这是正常的配置变更流程。
  */
 function checkDimensionConsistency(
   db: Database.Database,
   config: AbyssalConfig,
   logger: Logger,
+  skipVecExtension: boolean = false,
 ): void {
   // _meta 表可能不存在（旧数据库未执行 003 迁移）
   try {
@@ -134,37 +137,58 @@ function checkDimensionConsistency(
       return;
     }
 
-    if (storedDim !== configDim) {
-      throw new DimensionMismatchError({
-        message: `Embedding dimension mismatch: database has ${storedDim}, config specifies ${configDim}. ` +
-          'Run embedding migration to rebuild vector index.',
-        context: {
-          storedDimension: storedDim,
-          configDimension: configDim,
-        },
-      });
-    }
-
-    // 模型一致性检查——模型不匹配意味着向量空间不兼容，KNN 结果无意义
+    // 模型一致性检查
     const modelRow = db.prepare(
       "SELECT value FROM _meta WHERE key = 'embedding_model'",
     ).get() as { value: string } | undefined;
 
-    if (modelRow && modelRow.value !== config.rag.embeddingModel) {
-      logger.warn('Embedding model mismatch detected', {
-        stored: modelRow.value,
-        config: config.rag.embeddingModel,
-        action: 'Vector search results may be inaccurate. Run embedding migration to rebuild.',
+    const dimChanged = storedDim !== configDim;
+    const modelChanged = modelRow != null && modelRow.value !== config.rag.embeddingModel;
+
+    if (dimChanged || modelChanged) {
+      logger.warn('Embedding config changed — performing automatic embedding migration', {
+        storedDimension: storedDim,
+        configDimension: configDim,
+        storedModel: modelRow?.value,
+        configModel: config.rag.embeddingModel,
+        dimChanged,
+        modelChanged,
       });
-      // 注意：此处仅 warn 不 throw——允许启动，但标记需要重建。
-      // 维度不匹配会在上方 throw DimensionMismatchError 硬阻断。
-      // 同维度不同模型（如 text-embedding-3-small vs ada-002 都是 1536d）
-      // 向量空间不兼容但不会导致 crash，仅影响搜索质量。
+
+      // 1. Drop and recreate chunks_vec with new dimension
+      if (!skipVecExtension) {
+        try {
+          const vecExists = db.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
+          ).get();
+          if (vecExists) {
+            db.exec('DROP TABLE chunks_vec');
+            logger.info('Dropped chunks_vec (old dimension)');
+          }
+          db.exec(
+            `CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[${configDim}])`,
+          );
+          logger.info('Recreated chunks_vec with new dimension', { dimension: configDim });
+        } catch (vecErr) {
+          logger.error('Failed to recreate chunks_vec', vecErr instanceof Error ? vecErr : undefined);
+          // Non-fatal: vector search will be unavailable until manual fix
+        }
+      }
+
+      // 2. Update _meta to reflect new config
+      seedMetaValues(db, config);
+      logger.info('_meta updated with new embedding config', {
+        dimension: configDim,
+        model: config.rag.embeddingModel,
+      });
+
+      // Note: existing chunks still have text but no vectors — papers need
+      // re-processing to regenerate embeddings. This happens naturally when
+      // the user triggers "reprocess" or the next analysis run.
     }
   } catch (err) {
-    // DimensionMismatchError 直接抛出
-    if (err instanceof DimensionMismatchError) throw err;
     // _meta 表不存在——旧版数据库，忽略
+    logger.debug('checkDimensionConsistency skipped: ' + (err as Error).message);
   }
 }
 
@@ -265,7 +289,7 @@ export function runMigrations(
   if (pending.length === 0) {
     logger.info('Schema is up to date');
     // 即使无待执行迁移，也检查维度一致性
-    checkDimensionConsistency(db, config, logger);
+    checkDimensionConsistency(db, config, logger, skipVecExtension);
     return;
   }
 
@@ -335,7 +359,7 @@ export function runMigrations(
   }
 
   // 检查维度一致性
-  checkDimensionConsistency(db, config, logger);
+  checkDimensionConsistency(db, config, logger, skipVecExtension);
 }
 
 // ─── SQL 迁移执行 ───

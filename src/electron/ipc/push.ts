@@ -49,6 +49,8 @@ export const PUSH_CHANNELS = {
   NOTE_INDEXED: 'push:noteIndexed',
   DB_HEALTH: 'push:dbHealth',
   EXPORT_PROGRESS: 'push:exportProgress',
+  DLA_PAGE_READY: 'push:dlaPageReady',
+  AI_COMMAND: 'push:aiCommand',
 } as const;
 
 // ─── PushManager ───
@@ -69,6 +71,8 @@ export class PushManager {
     timer: null,
   };
   private _lastWorkflowPush = 0;
+  private _pendingWorkflowEvent: WorkflowProgressEvent | null = null;
+  private _workflowPushTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── agent-stream micro-batching (§3.3) ──
   // Buffer consecutive text_delta events and flush every 16ms to reduce IPC calls.
@@ -156,14 +160,38 @@ export class PushManager {
 
   pushWorkflowProgress(event: WorkflowProgressEvent): void {
     // Terminal events (completed/failed/cancelled) always bypass throttle
+    // and cancel any pending trailing event to prevent stale running events
+    // from arriving after the terminal event on the renderer side.
     if (event.status !== 'running') {
+      if (this._workflowPushTimer) {
+        clearTimeout(this._workflowPushTimer);
+        this._workflowPushTimer = null;
+        this._pendingWorkflowEvent = null;
+      }
       this.send(PUSH_CHANNELS.WORKFLOW_PROGRESS, event);
       return;
     }
+
     const now = Date.now();
-    if (now - this._lastWorkflowPush < 500) return;
-    this._lastWorkflowPush = now;
-    this.send(PUSH_CHANNELS.WORKFLOW_PROGRESS, event);
+    if (now - this._lastWorkflowPush >= 500) {
+      // Outside throttle window — send immediately
+      this._lastWorkflowPush = now;
+      this.send(PUSH_CHANNELS.WORKFLOW_PROGRESS, event);
+    } else {
+      // Inside throttle window — store as pending and schedule trailing send.
+      // This ensures the latest progress (e.g. item completion) is never lost.
+      this._pendingWorkflowEvent = event;
+      if (!this._workflowPushTimer) {
+        this._workflowPushTimer = setTimeout(() => {
+          this._workflowPushTimer = null;
+          if (this._pendingWorkflowEvent) {
+            this._lastWorkflowPush = Date.now();
+            this.send(PUSH_CHANNELS.WORKFLOW_PROGRESS, this._pendingWorkflowEvent);
+            this._pendingWorkflowEvent = null;
+          }
+        }, 500 - (now - this._lastWorkflowPush));
+      }
+    }
   }
 
   // ── agent-stream (micro-batched text_delta, immediate for others) ──
@@ -243,6 +271,18 @@ export class PushManager {
     this.send(PUSH_CHANNELS.EXPORT_PROGRESS, data);
   }
 
+  // ── dla-page-ready (no limit) ──
+
+  pushDlaPageReady(data: { paperId: string; pageIndex: number; blocks: unknown[] }): void {
+    this.send(PUSH_CHANNELS.DLA_PAGE_READY, data);
+  }
+
+  // ── ai-command (no limit) — AI-initiated UI actions ──
+
+  pushAiCommand(data: unknown): void {
+    this.send(PUSH_CHANNELS.AI_COMMAND, data);
+  }
+
   // ── advisory-navigate (no limit) ──
 
   pushAdvisoryNavigate(data: { route: string }): void {
@@ -265,6 +305,11 @@ export class PushManager {
     if (this._agentStreamTimer) {
       clearTimeout(this._agentStreamTimer);
       this._agentStreamTimer = null;
+    }
+    if (this._workflowPushTimer) {
+      clearTimeout(this._workflowPushTimer);
+      this._workflowPushTimer = null;
+      this._pendingWorkflowEvent = null;
     }
     this._agentStreamBuffer.clear();
     this._window = null;

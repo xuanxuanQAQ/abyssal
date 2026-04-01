@@ -17,6 +17,7 @@ import { getAPI } from '../core/ipc/bridge';
 import { useAppStore } from '../core/store';
 import type { PipelineProgressEvent, StreamChunkEvent } from '../../shared-types/ipc';
 import type { WorkflowType } from '../../shared-types/enums';
+import { WORKFLOW_LABELS } from '../core/constants/workflow';
 
 /**
  * 管线完成 → 缓存失效映射表（§4.2）
@@ -91,17 +92,6 @@ function throttle<TArgs extends unknown[]>(
   };
 }
 
-/** 工作流中文显示名 */
-const WORKFLOW_LABELS: Record<WorkflowType, string> = {
-  discover: '文献发现',
-  acquire: '全文获取',
-  analyze: 'AI 分析',
-  synthesize: '综合生成',
-  article: '文章生成',
-  bibliography: '参考文献',
-  generate: '内容生成',
-};
-
 export function PipelineListener() {
   const queryClient = useQueryClient();
   const updateTask = useAppStore((s) => s.updateTask);
@@ -130,10 +120,8 @@ export function PipelineListener() {
     };
 
     // 进度事件监听 — push:workflowProgress channel
-    console.log('[PipelineListener] Subscribing to api.on.workflowProgress');
     const unsubProgress = api.on.workflowProgress(
       (event: PipelineProgressEvent) => {
-        console.log('[PipelineListener] Received event:', JSON.stringify(event));
         const label = WORKFLOW_LABELS[event.workflow] ?? event.workflow;
 
         if (event.status === 'running') {
@@ -146,7 +134,7 @@ export function PipelineListener() {
           const historyEntry: import('../../shared-types/models').TaskHistoryEntry = {
             taskId: event.taskId,
             workflow: event.workflow,
-            status: event.status as 'completed' | 'failed' | 'cancelled',
+            status: event.status as 'completed' | 'partial' | 'failed' | 'cancelled',
             completedAt: new Date().toISOString(),
             progress: event.progress,
             ...(event.error ? { error: event.error } : {}),
@@ -161,6 +149,16 @@ export function PipelineListener() {
               event.entityId
             );
             scheduleRemoveTask(event.taskId, 3000);
+          } else if (event.status === 'partial') {
+            const done = event.progress?.current ?? 0;
+            const total = event.progress?.total ?? 0;
+            toast(`${label} 部分完成（${done}/${total}）`, { icon: '⚠️' });
+            invalidateCacheForWorkflow(
+              queryClient,
+              event.workflow,
+              event.entityId
+            );
+            scheduleRemoveTask(event.taskId, 5000);
           } else if (event.status === 'failed') {
             toast.error(
               `${label} 失败：${event.error?.message ?? '未知错误'}`
@@ -181,13 +179,14 @@ export function PipelineListener() {
       }
     );
 
-    // v2.0 workflow-complete 事件：批量缓存失效
+    // v2.0 workflow-complete 事件：精确缓存失效（复用已有映射）
     const unsubWorkflowComplete = api.app.onWorkflowComplete(
-      (event: { workflow: WorkflowType; taskId: string }) => {
-        queryClient.invalidateQueries({ queryKey: ['papers'] });
-        queryClient.invalidateQueries({ queryKey: ['mappings'] });
-        queryClient.invalidateQueries({ queryKey: ['suggestedConcepts'] });
-        queryClient.invalidateQueries({ queryKey: ['advisoryNotifications'] });
+      (event: { workflow: WorkflowType; taskId: string; entityId?: string }) => {
+        invalidateCacheForWorkflow(queryClient, event.workflow, event.entityId);
+        // 仅 analyze 工作流涉及概念建议
+        if (event.workflow === 'analyze') {
+          queryClient.invalidateQueries({ queryKey: ['suggestedConcepts'] });
+        }
       }
     );
 

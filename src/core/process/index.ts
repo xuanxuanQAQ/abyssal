@@ -6,6 +6,7 @@
 import type { AbyssalConfig } from '../types/config';
 import type { PaperId } from '../types/common';
 import type { VisionCapable } from '../types/common';
+import type { Logger } from '../infra/logger';
 import type {
   TextExtractionResult,
   ExtractedReference,
@@ -23,11 +24,12 @@ import type {
 
 import { extractText, terminateOcrWorker } from './extract-text';
 import type { ExtractTextOptions } from './extract-text';
-import { extractSections } from './extract-sections';
+import { extractSections, extractSectionsFromLayout } from './extract-sections';
 import type { ExtractSectionsResult } from './extract-sections';
-import { extractReferences } from './extract-references';
-import { chunkText } from './chunk-text';
+import { extractReferences, extractReferencesFromLayout } from './extract-references';
+import { chunkText, chunkTextFromLayout } from './chunk-text';
 import type { ChunkTextOptions } from './chunk-text';
+import type { DocumentStructure } from '../dla/types';
 import { detectFigurePages } from './detect-figures';
 import { parseFiguresWithVlm } from './parse-figures-vlm';
 import type { ParseFiguresOptions } from './parse-figures-vlm';
@@ -43,9 +45,9 @@ export type { ChunkTextOptions } from './chunk-text';
 export type { ParseFiguresOptions } from './parse-figures-vlm';
 export type { WriteAnnotationData } from './annotations';
 export { extractText } from './extract-text';
-export { extractSections } from './extract-sections';
-export { extractReferences } from './extract-references';
-export { chunkText } from './chunk-text';
+export { extractSections, extractSectionsFromLayout } from './extract-sections';
+export { extractReferences, extractReferencesFromLayout } from './extract-references';
+export { chunkText, chunkTextFromLayout } from './chunk-text';
 export { detectFigurePages } from './detect-figures';
 export { parseFiguresWithVlm } from './parse-figures-vlm';
 export { readAnnotations, writeAnnotation } from './annotations';
@@ -56,10 +58,12 @@ export { compressForContext } from './compress';
 export class ProcessService {
   private readonly config: AbyssalConfig;
   private readonly vlm: VisionCapable | null;
+  private readonly logger: Logger | null;
 
-  constructor(config: AbyssalConfig, vlm?: VisionCapable | null) {
+  constructor(config: AbyssalConfig, vlm?: VisionCapable | null, logger?: Logger | null) {
     this.config = config;
     this.vlm = vlm ?? null;
+    this.logger = logger ?? null;
   }
 
   // ─── §1 文本提取 ───
@@ -82,13 +86,13 @@ export class ProcessService {
     fullText: string,
     styledLines?: import('../types').StyledLine[],
   ): ExtractSectionsResult {
-    return extractSections(fullText, styledLines);
+    return extractSections(fullText, styledLines, this.logger);
   }
 
   // ─── §3 参考文献提取 ───
 
   extractReferences(fullText: string): ExtractedReference[] {
-    return extractReferences(fullText);
+    return extractReferences(fullText, this.logger);
   }
 
   // ─── §4 结构感知分块 ───
@@ -103,7 +107,36 @@ export class ProcessService {
       maxTokensPerChunk: this.config.analysis.maxTokensPerChunk,
       overlapTokens: this.config.analysis.overlapTokens,
       ...options,
-    });
+    }, this.logger);
+  }
+
+  // ─── §2-DLA 布局感知结构识别 ───
+
+  extractSectionsFromLayout(
+    structure: DocumentStructure,
+    fullText: string,
+  ): ExtractSectionsResult {
+    return extractSectionsFromLayout(structure, fullText, this.logger);
+  }
+
+  // ─── §3-DLA 布局感知参考文献提取 ───
+
+  extractReferencesFromLayout(structure: DocumentStructure): ExtractedReference[] {
+    return extractReferencesFromLayout(structure, this.logger);
+  }
+
+  // ─── §4-DLA 块感知分块 ───
+
+  chunkTextFromLayout(
+    structure: DocumentStructure,
+    fullText: string,
+    options?: ChunkTextOptions,
+  ): TextChunk[] {
+    return chunkTextFromLayout(structure, fullText, {
+      maxTokensPerChunk: this.config.analysis.maxTokensPerChunk,
+      overlapTokens: this.config.analysis.overlapTokens,
+      ...options,
+    }, this.logger);
   }
 
   // ─── §5 图表检测与解析 ───
@@ -159,6 +192,7 @@ export class ProcessService {
 export function createProcessService(
   config: AbyssalConfig,
   vlm?: VisionCapable | null,
+  logger?: Logger | null,
 ): ProcessService {
-  return new ProcessService(config, vlm);
+  return new ProcessService(config, vlm, logger);
 }
