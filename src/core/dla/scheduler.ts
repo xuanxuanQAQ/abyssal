@@ -18,8 +18,10 @@ import type { Logger } from '../infra/logger';
 export interface SchedulerOptions {
   /** Max pages to hold in cache per document (default: 500) */
   maxCachedPagesPerDoc?: number;
-  /** Batch size for background analysis (default: 5) */
+  /** Max batch size for interactive analysis (default: 4) */
   batchSize?: number;
+  /** Batch size for background full-document analysis (default: 1) */
+  backgroundBatchSize?: number;
 }
 
 interface AnalysisJob {
@@ -58,7 +60,8 @@ export class DlaScheduler {
     this.logger = logger;
     this.opts = {
       maxCachedPagesPerDoc: opts.maxCachedPagesPerDoc ?? 500,
-      batchSize: opts.batchSize ?? 5,
+      batchSize: opts.batchSize ?? 4,
+      backgroundBatchSize: opts.backgroundBatchSize ?? 1,
     };
 
     // Listen for per-page results from proxy
@@ -247,8 +250,9 @@ export class DlaScheduler {
     }
 
     // Take a batch
-    const batch = uncached.slice(0, this.opts.batchSize);
-    const remaining = uncached.slice(this.opts.batchSize);
+    const batchSize = this.getBatchSize(job.priority);
+    const batch = uncached.slice(0, batchSize);
+    const remaining = uncached.slice(batchSize);
 
     // Put remaining back
     if (remaining.length > 0) {
@@ -271,5 +275,18 @@ export class DlaScheduler {
       // Process next batch
       this.processNext();
     }
+  }
+
+  private getBatchSize(priority: number): number {
+    if (priority >= 3) {
+      return this.opts.backgroundBatchSize;
+    }
+    if (priority <= 0) {
+      return Math.min(2, this.opts.batchSize);
+    }
+    if (priority === 1) {
+      return Math.min(3, this.opts.batchSize);
+    }
+    return this.opts.batchSize;
   }
 }

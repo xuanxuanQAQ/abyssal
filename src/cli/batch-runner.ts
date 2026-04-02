@@ -107,7 +107,12 @@ export async function batchRun(args: CliArgs): Promise<void> {
     const embedFn = createEmbedFunction({ configProvider, logger });
 
     let llmClient: LlmClient | null = null;
-    const hasKey = !!(config.apiKeys.anthropicApiKey || config.apiKeys.openaiApiKey || config.apiKeys.deepseekApiKey);
+    const hasKey = !!(
+      config.apiKeys.anthropicApiKey
+      || config.apiKeys.openaiApiKey
+      || config.apiKeys.geminiApiKey
+      || config.apiKeys.deepseekApiKey
+    );
     if (hasKey) {
       llmClient = createLlmClient({ configProvider, logger, reranker, embedFn });
     }

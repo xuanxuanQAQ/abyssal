@@ -97,7 +97,7 @@ export function PaperReviewTab() {
 
   if (papersLoading) {
     return (
-      <div style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+      <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
         {t('analysis.review.loading')}
       </div>
     );
@@ -105,16 +105,17 @@ export function PaperReviewTab() {
 
   if (completedPapers.length === 0) {
     return (
-      <div style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+      <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
         {t('analysis.review.noAnalyses')}
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
+    <div className="analysis-scroll-stage analysis-review-stage" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
       {/* ── Toolbar: selector + actions ── */}
       <div
+        className="workspace-toolbar analysis-toolbar analysis-review-toolbar"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -135,6 +136,7 @@ export function PaperReviewTab() {
           <button
             onClick={handleDeleteAnalysis}
             disabled={resetAnalysis.isPending}
+            className="analysis-action-btn analysis-action-btn--danger"
             title={t('analysis.review.deleteReport', { defaultValue: 'Delete Analysis' })}
             style={{
               display: 'flex',
@@ -175,21 +177,21 @@ export function PaperReviewTab() {
 
       {/* ── Report card ── */}
       {paper && (
-        <div style={{ padding: 'var(--space-4) var(--space-5)', flexShrink: 0 }}>
+        <div className="analysis-section-block" style={{ padding: 'var(--space-4) var(--space-5)', flexShrink: 0 }}>
           <AnalysisReport report={paper.analysisReport} />
         </div>
       )}
 
       {/* ── Concept mappings ── */}
       {activePaperId && (
-        <div style={{ padding: '0 var(--space-5) var(--space-4)', flexShrink: 0 }}>
+        <div className="analysis-section-block" style={{ padding: '0 var(--space-5) var(--space-4)', flexShrink: 0 }}>
           <MappingReviewList paperId={activePaperId} />
         </div>
       )}
 
       {/* ── Adjudication timeline ── */}
       {mappings && mappings.length > 0 && (
-        <div style={{ padding: '0 var(--space-5) var(--space-6)', flexShrink: 0 }}>
+        <div className="analysis-section-block" style={{ padding: '0 var(--space-5) var(--space-6)', flexShrink: 0 }}>
           <AdjudicationTimeline mappings={mappings} timelineEntries={timelineEntries} />
         </div>
       )}

@@ -765,6 +765,11 @@ export const zhCN = {
       },
       stopGeneration: '停止生成',
       send: '发送 (Enter)',
+      status: {
+        generating: '生成中…',
+        invokingTool: '正在调用 {{tool}}…',
+        invokingTools: '正在调用 {{count}} 个工具…',
+      },
       sessions: {
         global: '全局对话',
         paper: '论文 {{id}}',

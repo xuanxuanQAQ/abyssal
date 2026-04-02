@@ -2,6 +2,8 @@ import React, { useRef, useEffect } from 'react';
 import { TextLayer as PDFJSTextLayer } from 'pdfjs-dist';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
 import type { ContentBlockDTO } from '../../../../../shared-types/models';
+import type { ColumnBounds } from '../../selection/dragEnvelope';
+import { blockOverlaps } from '../../selection/dragEnvelope';
 import './pdfTextLayer.css';
 
 /** Block types where text selection should be suppressed */
@@ -22,6 +24,8 @@ export interface TextLayerProps {
   isInRenderWindow: boolean;
   blocks?: ContentBlockDTO[];
   onBlockClick?: (block: ContentBlockDTO) => void;
+  /** Per-page DLA highlight bounds from DragEnvelope (driven by useSelectionMachine) */
+  dragBounds?: ColumnBounds[] | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +132,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
     isInRenderWindow,
     blocks = [],
     onBlockClick,
+    dragBounds,
   } = props;
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -198,65 +203,43 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
   }, [isInRenderWindow, blocks, cssWidth, cssHeight]);
 
   // ---- Effect 3: Selection management ----
-  // Implements three mechanisms:
   // a) Toggle .selecting class (activates endOfContent cover + disables blocker pointer-events via CSS)
   // b) Dynamic endOfContent repositioning (the key to preventing selection jumping)
-  // c) Highlight blocker divs that overlap the current selection range
+  // c) Click on capturable blocker → select block
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !isInRenderWindow) return;
 
-    // Track which column the mousedown started in (more reliable than sel.anchorNode
-    // which often falls outside the container due to endOfContent repositioning)
-    let startCol: 'L' | 'R' | null = null;
-
     // --- a) mousedown: only start text-selection mode if not clicking a blocker ---
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.hasAttribute('data-dla-blocker')) {
-        // Don't enter selecting mode — let the click handler deal with it
-        return;
-      }
+      if (target.hasAttribute('data-dla-blocker')) return;
       container.classList.add('selecting');
-      const cRect = container.getBoundingClientRect();
-      startCol = e.clientX < cRect.left + cRect.width / 2 ? 'L' : 'R';
     };
 
     const onUp = () => {
       container.classList.remove('selecting');
-      // Restore endOfContent to the end of the container
       const endDiv = container.querySelector('.endOfContent');
       if (endDiv) container.appendChild(endDiv);
-      // Keep dla-drag-highlight visible — cleared when selection is dismissed
     };
 
-    // --- b) + c) selectionchange: reposition endOfContent + highlight blockers ---
+    // --- b) selectionchange: reposition endOfContent ---
     const onSelectionChange = () => {
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) {
         container.classList.remove('selecting');
-        container.querySelectorAll('.dla-drag-highlight').forEach(
-          (el) => el.classList.remove('dla-drag-highlight'),
-        );
-        startCol = null;
         return;
       }
 
       const range = sel.getRangeAt(0);
-
-      // Check if this selection involves our textLayer
       if (!range.intersectsNode(container)) {
         container.classList.remove('selecting');
-        container.querySelectorAll('.dla-drag-highlight').forEach(
-          (el) => el.classList.remove('dla-drag-highlight'),
-        );
         return;
       }
 
-      // Ensure selecting class is active
       container.classList.add('selecting');
 
-      // --- Dynamic endOfContent repositioning (pdf.js core mechanism) ---
+      // Dynamic endOfContent repositioning (pdf.js core mechanism)
       const endDiv = container.querySelector('.endOfContent');
       if (endDiv) {
         let anchor: Node | null = sel.focusNode;
@@ -279,40 +262,9 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
           }
         }
       }
-
-      // --- Highlight blockers (column-aware via mousedown position) ---
-      // Both sel.anchorNode and sel.focusNode are unreliable for column detection
-      // in absolutely-positioned pdf.js text (DOM order ≠ visual position).
-      // Use the mousedown clientX (startCol) as the sole column constraint.
-      const selRect = range.getBoundingClientRect();
-      if (selRect.height > 0) {
-        const cRect = container.getBoundingClientRect();
-        const pageMidX = cRect.left + cRect.width / 2;
-
-        const blockers = container.querySelectorAll<HTMLElement>('[data-dla-blocker].dla-capturable');
-        for (const blocker of blockers) {
-          const bRect = blocker.getBoundingClientRect();
-          const vOverlap = bRect.bottom > selRect.top && bRect.top < selRect.bottom;
-
-          let hOk = true;
-          if (startCol) {
-            // Cross-column blocks (>50% page width) bypass column check
-            const isCrossCol = bRect.width > cRect.width * 0.5;
-            const blockerCol: 'L' | 'R' =
-              (bRect.left + bRect.right) / 2 < pageMidX ? 'L' : 'R';
-            hOk = isCrossCol || blockerCol === startCol;
-          }
-
-          if (vOverlap && hOk) {
-            blocker.classList.add('dla-drag-highlight');
-          } else {
-            blocker.classList.remove('dla-drag-highlight');
-          }
-        }
-      }
     };
 
-    // --- Click on capturable blocker → select block ---
+    // --- c) Click on capturable blocker → select block ---
     const onClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (!target.hasAttribute('data-dla-blocker')) return;
@@ -356,6 +308,39 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       container.classList.remove('selecting');
     };
   }, [isInRenderWindow, pageNumber]);
+
+  // ---- Effect 4: DLA highlight from dragBounds prop (pure geometry) ----
+  // When useSelectionMachine provides dragBounds for this page during DRAGGING,
+  // highlight capturable blockers that overlap the visual bounds.
+  // No Selection API dependency — uses normalized coords from DragEnvelope.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !isInRenderWindow) return;
+
+    const blockers = container.querySelectorAll<HTMLElement>('[data-dla-blocker].dla-capturable');
+    if (blockers.length === 0) return;
+
+    if (!dragBounds || dragBounds.length === 0) {
+      // Clear all highlights when no bounds
+      blockers.forEach((el) => el.classList.remove('dla-drag-highlight'));
+      return;
+    }
+
+    for (const blocker of blockers) {
+      const bboxStr = blocker.getAttribute('data-bbox');
+      if (!bboxStr) continue;
+      try {
+        const bbox = JSON.parse(bboxStr);
+        if (blockOverlaps(bbox, dragBounds)) {
+          blocker.classList.add('dla-drag-highlight');
+        } else {
+          blocker.classList.remove('dla-drag-highlight');
+        }
+      } catch {
+        blocker.classList.remove('dla-drag-highlight');
+      }
+    }
+  }, [isInRenderWindow, dragBounds]);
 
   if (!isInRenderWindow) return null;
 

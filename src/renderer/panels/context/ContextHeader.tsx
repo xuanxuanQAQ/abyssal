@@ -134,6 +134,7 @@ export function ContextHeader() {
 
   return (
     <div
+      className="context-header-shell"
       style={{
         height: 44,
         padding: '0 8px 0 12px',
@@ -143,12 +144,13 @@ export function ContextHeader() {
         borderBottom: '1px solid var(--border-subtle)',
         flexShrink: 0,
         position: 'relative',
-        backgroundColor: 'var(--bg-surface)',
+        backgroundColor: 'color-mix(in srgb, var(--lens-surface-strong) 86%, transparent)',
       }}
     >
       {/* 钉住状态指示线 */}
       {contextPanelPinned && (
         <div
+          className="context-header-pin-line"
           style={{
             position: 'absolute',
             bottom: 0,
@@ -163,6 +165,7 @@ export function ContextHeader() {
       {/* 偷看指示线 */}
       {isPeeking && (
         <div
+          className="context-header-peek-line"
           style={{
             position: 'absolute',
             top: 0,
@@ -178,7 +181,7 @@ export function ContextHeader() {
       <button
         onClick={handlePinClick}
         title={pinTooltip}
-        className="ghost-btn"
+        className="ghost-btn context-header-icon-btn"
         style={iconBtnStyle}
       >
         {pinIcon}
@@ -186,6 +189,7 @@ export function ContextHeader() {
 
       {/* 实体图标 + 名称 */}
       <div
+        className="context-header-title-row"
         style={{
           flex: 1,
           display: 'flex',
@@ -196,9 +200,10 @@ export function ContextHeader() {
         }}
       >
         {icon && (
-          <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{icon}</span>
+          <span className="context-header-entity-icon" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{icon}</span>
         )}
         <span
+          className="context-header-title"
           style={{
             fontSize: 13,
             fontWeight: 600,
@@ -210,7 +215,7 @@ export function ContextHeader() {
           }}
         >
           {isPeeking && (
-            <span style={{ color: 'var(--info, #a855f7)', marginRight: 4, fontWeight: 500 }}>{t('context.preview')}:</span>
+            <span className="context-header-preview-label" style={{ color: 'var(--info, #a855f7)', marginRight: 4, fontWeight: 500 }}>{t('context.preview')}:</span>
           )}
           {name}
         </span>
@@ -220,7 +225,7 @@ export function ContextHeader() {
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
-            className="ghost-btn"
+            className="ghost-btn context-header-icon-btn"
             style={iconBtnStyle}
           >
             <MoreVertical size={14} style={{ color: 'var(--text-muted)' }} />
@@ -229,6 +234,7 @@ export function ContextHeader() {
 
         <DropdownMenu.Portal>
           <DropdownMenu.Content
+            className="workspace-floating-menu context-header-menu"
             sideOffset={4}
             align="end"
             style={{

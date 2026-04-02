@@ -102,7 +102,7 @@ const INVOKE_CHANNELS = [
   // concept keywords & article citation helpers
   'db:concepts:updateKeywords', 'db:articles:getAllCitedPaperIds',
   // dla (Document Layout Analysis)
-  'dla:analyze', 'dla:getBlocks', 'dla:analyzeDocument',
+  'dla:analyze', 'dla:getBlocks', 'dla:getDocumentBlocks', 'dla:analyzeDocument',
   // workspace
   'workspace:create', 'workspace:openDialog', 'workspace:listRecent',
   'workspace:getCurrent', 'workspace:switch', 'workspace:removeRecent',
@@ -129,6 +129,7 @@ const PUSH_CHANNELS = [
   'push:workflowProgress',
   'push:agentStream',
   'push:dbChanged',
+  'push:settingsChanged',
   'push:notification',
   'push:advisorySuggestions',
   'push:memoCreated',

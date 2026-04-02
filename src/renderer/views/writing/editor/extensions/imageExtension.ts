@@ -8,7 +8,16 @@
  * - Figure numbering via label attribute (for cross-references)
  */
 
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node, mergeAttributes, type CommandProps } from '@tiptap/core';
+import type { DOMOutputSpec } from '@tiptap/pm/model';
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    figure: {
+      insertFigure: (attrs: Record<string, unknown>) => ReturnType;
+    };
+  }
+}
 
 export const imageExtension = Node.create({
   name: 'figure',
@@ -59,7 +68,7 @@ export const imageExtension = Node.create({
     ];
   },
 
-  renderHTML({ HTMLAttributes }) {
+  renderHTML({ HTMLAttributes }): DOMOutputSpec {
     const { src, alt, title, caption, width, assetId, label } = HTMLAttributes;
 
     const figureAttrs: Record<string, string> = {
@@ -77,10 +86,10 @@ export const imageExtension = Node.create({
     if (title) imgAttrs.title = title as string;
     if (width) imgAttrs.width = width as string;
 
-    const children: any[] = ['figure', figureAttrs, ['img', imgAttrs]];
+    const children: DOMOutputSpec = ['figure', figureAttrs, ['img', imgAttrs]];
 
     if (caption) {
-      children.push([
+      (children as [string, Record<string, string>, ...DOMOutputSpec[]]).push([
         'figcaption',
         {
           style:
@@ -97,7 +106,7 @@ export const imageExtension = Node.create({
     return {
       insertFigure:
         (attrs: Record<string, unknown>) =>
-        ({ chain }) => {
+        ({ chain }: CommandProps) => {
           return chain()
             .insertContent({
               type: this.name,

@@ -24,6 +24,7 @@ interface ChatHistoryProps {
   fullyLoaded: boolean;
   onLoadMore: () => void;
   onRetry?: (messageId: string) => void;
+  bottomInset?: number;
 }
 
 export const ChatHistory = React.memo(function ChatHistory({
@@ -32,11 +33,13 @@ export const ChatHistory = React.memo(function ChatHistory({
   fullyLoaded,
   onLoadMore,
   onRetry,
+  bottomInset = 112,
 }: ChatHistoryProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const { isUserScrolledUp, unreadCount, handleScroll, scrollToBottom } =
     useAutoScroll(containerRef, messages.length, isStreaming);
+  const firstAssistantId = messages.find((message) => message.role === 'assistant')?.id;
 
   const useVirtual = messages.length > VIRTUALIZE_THRESHOLD;
 
@@ -62,6 +65,7 @@ export const ChatHistory = React.memo(function ChatHistory({
 
   return (
     <div
+      className="chat-history-shell"
       style={{
         flex: 1,
         height: '100%',
@@ -75,6 +79,7 @@ export const ChatHistory = React.memo(function ChatHistory({
       {!fullyLoaded && (
         <button
           onClick={onLoadMore}
+          className="chat-history-load-more"
           style={{
             padding: '4px 8px',
             margin: '4px auto',
@@ -95,13 +100,13 @@ export const ChatHistory = React.memo(function ChatHistory({
       <div
         ref={containerRef}
         onScroll={handleScrollEvent}
-        className="chat-scroll-area"
+        className="chat-scroll-area custom-scrollbar chat-history-scroll"
         style={{
           flex: 1,
           minHeight: 0,
           overflowY: 'scroll',
           overflowX: 'hidden',
-          padding: '8px 0',
+          padding: `18px 0 ${bottomInset}px`,
         }}
       >
         {useVirtual ? (
@@ -119,17 +124,20 @@ export const ChatHistory = React.memo(function ChatHistory({
                     left: 0,
                     width: '100%',
                     transform: `translateY(${virtualRow.start}px)`,
+                    paddingBottom: 16,
                   }}
                 >
-                  <ChatBubble message={msg} onRetry={onRetry} />
+                  <ChatBubble message={msg} onRetry={onRetry} showAssistantLabel={msg.id === firstAssistantId} />
                 </div>
               );
             })}
           </div>
         ) : (
-          messages.map((msg) => (
-            <ChatBubble key={msg.id} message={msg} onRetry={onRetry} />
-          ))
+          <div className="chat-history-stack" style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 0 24px' }}>
+            {messages.map((msg) => (
+              <ChatBubble key={msg.id} message={msg} onRetry={onRetry} showAssistantLabel={msg.id === firstAssistantId} />
+            ))}
+          </div>
         )}
       </div>
 
@@ -137,6 +145,7 @@ export const ChatHistory = React.memo(function ChatHistory({
       {isUserScrolledUp && unreadCount > 0 && (
         <button
           onClick={() => scrollToBottom()}
+          className="chat-history-unread-btn"
           style={{
             position: 'absolute',
             bottom: 8,

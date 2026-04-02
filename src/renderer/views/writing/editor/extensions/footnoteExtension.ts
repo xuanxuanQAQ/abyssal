@@ -6,7 +6,15 @@
  * Export serializes to \footnote{} in LaTeX or [^N] in Markdown.
  */
 
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node, mergeAttributes, type CommandProps } from '@tiptap/core';
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    footnote: {
+      insertFootnote: (content: string) => ReturnType;
+    };
+  }
+}
 
 export const footnoteExtension = Node.create({
   name: 'footnote',
@@ -57,7 +65,7 @@ export const footnoteExtension = Node.create({
     return {
       insertFootnote:
         (content: string) =>
-        ({ chain, state }) => {
+        ({ chain, state }: CommandProps) => {
           // Count existing footnotes to determine number
           let count = 0;
           state.doc.descendants((node) => {

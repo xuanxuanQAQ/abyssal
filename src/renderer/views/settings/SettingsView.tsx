@@ -68,21 +68,21 @@ const TABS: TabDef[] = [
 // Constants
 // ═══════════════════════════════════════════════════════════════════
 
-const PROVIDERS = ['anthropic', 'openai', 'deepseek', 'siliconflow', 'ollama'] as const;
+const PROVIDERS = ['anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow'] as const;
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Claude (Anthropic)',
   openai: 'OpenAI',
+  gemini: 'Google Gemini',
   deepseek: 'DeepSeek',
   siliconflow: 'SiliconFlow',
-  ollama: 'Ollama (Local)',
 };
 
 const MODELS_BY_PROVIDER: Record<string, string[]> = {
   anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250901', 'claude-haiku-4-5-20251001'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'],
+  gemini: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
   siliconflow: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen3-235B-A22B', 'Qwen/Qwen2.5-72B-Instruct'],
-  ollama: [],
 };
 
 const WORKFLOW_KEYS = ['discovery', 'analysis', 'synthesize', 'article', 'agent'] as const;
@@ -1575,6 +1575,7 @@ function ApiKeysTab({ settings, onReload }: { settings: SettingsData; onReload: 
   const keys: Array<{ name: string; field: keyof SettingsData['apiKeys']; provider: string; label: string; isEmail?: boolean | undefined }> = [
     { name: 'Anthropic (Claude)', field: 'anthropicApiKey', provider: 'anthropic', label: 'Anthropic API Key' },
     { name: 'OpenAI', field: 'openaiApiKey', provider: 'openai', label: 'OpenAI API Key' },
+    { name: 'Google Gemini', field: 'geminiApiKey', provider: 'gemini', label: 'Gemini API Key' },
     { name: 'DeepSeek', field: 'deepseekApiKey', provider: 'deepseek', label: 'DeepSeek API Key' },
     { name: 'Cohere (Reranker)', field: 'cohereApiKey', provider: 'cohere', label: 'Cohere API Key' },
     { name: 'Jina (Reranker)', field: 'jinaApiKey', provider: 'jina', label: 'Jina API Key' },

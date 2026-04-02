@@ -17,7 +17,6 @@ import { useAnnotations } from '../../../core/ipc/hooks/useAnnotations';
 import { useRenderWindow } from '../hooks/useRenderWindow';
 import { useZoom } from '../hooks/useZoom';
 import { useAnnotationCRUD } from '../hooks/useAnnotationCRUD';
-import { useTextAnnotationPen } from '../hooks/useTextAnnotationPen';
 import { ToolbarStrip } from './ToolbarStrip';
 import {
   ScrollContainer,
@@ -31,7 +30,7 @@ import type { PageMetadataMap } from '../core/pageMetadataPreloader';
 import type { PDFDocumentManager } from '../core/pdfDocumentManager';
 import type { Transform6 } from '../math/coordinateTransform';
 import { computeInverseTransform } from '../math/inverseTransform';
-import { useSmartSelection } from '../selection/useSmartSelection';
+import { useSelectionMachine } from '../selection/useSelectionMachine';
 import { emitUserAction } from '../../../core/hooks/useEventBridge';
 import { selectionToAnnotationPosition } from '../selection/selectionToAnnotation';
 import type { AnnotationPosition, ContentBlockDTO } from '../../../../shared-types/models';
@@ -40,6 +39,9 @@ import { useConceptList as useConcepts } from '../../../core/ipc/hooks/useConcep
 import type { Concept } from '../../../../shared-types/models';
 import { useLayoutBlocks } from '../hooks/useLayoutBlocks';
 import { captureBlockRegion } from './layers/captureBlockRegion';
+import {
+  buildDocumentSelectionSnapshot,
+} from '../selection/documentSelection';
 
 export interface PDFViewportProps {
   paperId: string;
@@ -47,6 +49,17 @@ export interface PDFViewportProps {
   manager: PDFDocumentManager;
   pageMetadataMap: PageMetadataMap;
   scrollRef?: React.RefObject<ScrollContainerHandle | null>;
+}
+
+interface SelectionAnnotationEntry {
+  page: number;
+  position: AnnotationPosition;
+  selectedText: string;
+}
+
+interface PendingStructuredSelection {
+  entries: SelectionAnnotationEntry[];
+  selectedText: string;
 }
 
 function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: PDFViewportProps) {
@@ -169,20 +182,43 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
     [],
   );
 
-  // Text selection
-  const textSelection = useSmartSelection(blockMap);
+  // Text selection (unified state machine: mouse coords for DLA, Selection API for text)
+  const textSelection = useSelectionMachine(blockMap);
 
   // Emit selectText event when user selects text
   useEffect(() => {
-    if (textSelection.selectedText && textSelection.anchorPageNumber) {
+    if (textSelection.selectedText && textSelection.primaryPageNumber) {
       emitUserAction({
         action: 'selectText',
         paperId,
         text: textSelection.selectedText,
-        page: textSelection.anchorPageNumber,
+        page: textSelection.primaryPageNumber,
       });
     }
-  }, [textSelection.selectedText, textSelection.anchorPageNumber, paperId]);
+  }, [textSelection.selectedText, textSelection.primaryPageNumber, paperId]);
+
+  // Auto-inject / clear current text selection into chat context.
+  useEffect(() => {
+    if (!textSelection.selectedText || !textSelection.primaryPageNumber) {
+      // Selection dismissed → clear store
+      useReaderStore.getState().setQuotedSelection(null);
+      useReaderStore.getState().setSelectionPayload(null);
+      return;
+    }
+
+    if (textSelection.payload) {
+      useReaderStore.getState().setSelectionPayload(textSelection.payload);
+    }
+
+    useReaderStore.getState().setQuotedSelection({
+      text: textSelection.selectedText,
+      page: textSelection.primaryPageNumber,
+    });
+  }, [
+    textSelection.payload,
+    textSelection.primaryPageNumber,
+    textSelection.selectedText,
+  ]);
 
   // Text annotation pen mode
   const getPageContext = useCallback(
@@ -216,26 +252,51 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
     [pageMetadataMap, manager, zoomLevel],
   );
 
-  const textAnnotationPen = useTextAnnotationPen();
+  const buildAnnotationEntries = useCallback(
+    (
+      selectedText: string,
+    ): SelectionAnnotationEntry[] => {
+      // Always re-read live Selection to get current viewport-relative rects.
+      // Stored DOMRects in state go stale after scroll.
+      const snapshot = buildDocumentSelectionSnapshot(window.getSelection());
+      if (!snapshot) return [];
+
+      const entries: SelectionAnnotationEntry[] = [];
+
+      for (const segment of snapshot.segments) {
+        if (segment.rects.length === 0) continue;
+        const ctx = getPageContext(segment.pageNumber);
+        if (!ctx) continue;
+
+        const position = selectionToAnnotationPosition(
+          segment.rects,
+          ctx.pageSlotRect,
+          ctx.inverseTransform,
+          ctx.cropBox,
+        );
+
+        entries.push({
+          page: segment.pageNumber,
+          position,
+          selectedText,
+        });
+      }
+
+      return entries;
+    },
+    [getPageContext],
+  );
 
   // State for flashing and hovered annotations
   const [flashingAnnotationId, setFlashingAnnotationId] = useState<
     string | null
   >(null);
 
-  // Pending note state (from SelectionToolbar)
-  const [pendingNotePosition, setPendingNotePosition] = useState<{
-    page: number;
-    position: AnnotationPosition;
-    selectedText: string;
-  } | null>(null);
+  // Pending note state (supports cross-page selection)
+  const [pendingNoteSelection, setPendingNoteSelection] = useState<PendingStructuredSelection | null>(null);
 
-  // Pending concept tag state
-  const [pendingConceptPosition, setPendingConceptPosition] = useState<{
-    page: number;
-    position: AnnotationPosition;
-    selectedText: string;
-  } | null>(null);
+  // Pending concept tag state (supports cross-page selection)
+  const [pendingConceptSelection, setPendingConceptSelection] = useState<PendingStructuredSelection | null>(null);
 
   // Render page callback — returns { promise, cancel } so callers can
   // abort the underlying pdfjs render task (critical for StrictMode double-invoke).
@@ -355,56 +416,50 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
       const color = useReaderStore.getState().highlightColor;
       if (tool !== 'textHighlight' && tool !== 'textNote' && tool !== 'textConceptTag') return;
 
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-      const { anchorNode } = sel;
-      if (!anchorNode) return;
+      const snapshot = buildDocumentSelectionSnapshot(window.getSelection());
+      if (!snapshot) return;
 
-      // Must be inside a .textLayer
-      let el: Element | null = anchorNode.nodeType === Node.ELEMENT_NODE
-        ? (anchorNode as Element) : anchorNode.parentElement;
-      let inTextLayer = false;
-      while (el) {
-        if (el.classList.contains('textLayer')) { inTextLayer = true; break; }
-        el = el.parentElement;
+      const entries: SelectionAnnotationEntry[] = [];
+      for (const segment of snapshot.segments) {
+        if (segment.rects.length === 0) continue;
+        const ctx = getPageContextRef.current(segment.pageNumber);
+        if (!ctx) continue;
+
+        const position = selectionToAnnotationPosition(
+          segment.rects,
+          ctx.pageSlotRect,
+          ctx.inverseTransform,
+          ctx.cropBox,
+        );
+
+        entries.push({
+          page: segment.pageNumber,
+          position,
+          selectedText: snapshot.selectedText,
+        });
       }
-      if (!inTextLayer) return;
-
-      // Find page number
-      el = anchorNode.nodeType === Node.ELEMENT_NODE
-        ? (anchorNode as Element) : anchorNode.parentElement;
-      let pageNumber: number | null = null;
-      while (el) {
-        const attr = el.getAttribute('data-page');
-        if (attr !== null) { const n = parseInt(attr, 10); if (Number.isFinite(n)) { pageNumber = n; break; } }
-        el = el.parentElement;
-      }
-      if (pageNumber === null) return;
-
-      const ctx = getPageContextRef.current(pageNumber);
-      if (!ctx) return;
-
-      const range = sel.getRangeAt(0);
-      const rects: DOMRect[] = [];
-      const clientRects = range.getClientRects();
-      for (let i = 0; i < clientRects.length; i++) rects.push(clientRects[i]!);
-      if (rects.length === 0) return;
-
-      const position = selectionToAnnotationPosition(rects, ctx.pageSlotRect, ctx.inverseTransform, ctx.cropBox);
-      const selectedText = sel.toString();
+      if (entries.length === 0) return;
 
       if (tool === 'textHighlight') {
-        annotationCRUD.createHighlight(pageNumber, position, selectedText, color);
-        sel.removeAllRanges();
+        if (entries.length === 1) {
+          const first = entries[0]!;
+          annotationCRUD.createHighlight(first.page, first.position, first.selectedText, color);
+        } else {
+          annotationCRUD.createCrossPageAnnotations(entries, 'highlight', color);
+        }
       } else if (tool === 'textNote') {
-        annotationCRUD.createHighlight(pageNumber, position, selectedText, color);
-        setPendingNotePosition({ page: pageNumber, position, selectedText });
-        sel.removeAllRanges();
+        setPendingNoteSelection({
+          entries,
+          selectedText: snapshot.selectedText,
+        });
       } else if (tool === 'textConceptTag') {
-        annotationCRUD.createHighlight(pageNumber, position, selectedText, color);
-        setPendingConceptPosition({ page: pageNumber, position, selectedText });
-        sel.removeAllRanges();
+        setPendingConceptSelection({
+          entries,
+          selectedText: snapshot.selectedText,
+        });
       }
+
+      window.getSelection()?.removeAllRanges();
     };
 
     document.addEventListener('mouseup', handleMouseUp);
@@ -416,22 +471,58 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
   const showSelectionToolbar =
     textSelection.selectedText !== null && activeAnnotationTool === null;
 
-  // SelectionToolbar position from selection rects
-  const selectionToolbarPosition = useMemo(() => {
-    if (!textSelection.selectionRects || textSelection.selectionRects.length === 0) return null;
-    const firstRect = textSelection.selectionRects[0]!;
-    return { x: firstRect.left + firstRect.width / 2, y: firstRect.top - 8 };
-  }, [textSelection.selectionRects]);
+  // SelectionToolbar position — reads live Selection rects so the toolbar
+  // tracks the text even after the viewport scrolls.
+  const [selectionToolbarPosition, setSelectionToolbarPosition] =
+    useState<{ x: number; y: number } | null>(null);
+
+  // Compute toolbar position from live browser Selection
+  const updateToolbarPosition = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      setSelectionToolbarPosition(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const firstRect = range.getClientRects()[0];
+    if (!firstRect) {
+      setSelectionToolbarPosition(null);
+      return;
+    }
+    setSelectionToolbarPosition({
+      x: firstRect.left + firstRect.width / 2,
+      y: firstRect.top - 8,
+    });
+  }, []);
+
+  // Update position when selection state changes
+  useEffect(() => {
+    if (showSelectionToolbar) {
+      updateToolbarPosition();
+    } else {
+      setSelectionToolbarPosition(null);
+    }
+  }, [showSelectionToolbar, textSelection.selectedText, updateToolbarPosition]);
+
+  // Update position on scroll so the toolbar follows the text
+  useEffect(() => {
+    if (!showSelectionToolbar) return;
+    const container = scrollContainerRef.current?.getScrollContainer();
+    if (!container) return;
+
+    const handleScroll = () => {
+      requestAnimationFrame(updateToolbarPosition);
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [showSelectionToolbar, updateToolbarPosition]);
 
   // Show NotePopover
-  const showNotePopover =
-    textAnnotationPen.pendingNotePosition != null ||
-    pendingNotePosition != null;
-  const activeNotePosition =
-    textAnnotationPen.pendingNotePosition ?? pendingNotePosition;
+  const showNotePopover = pendingNoteSelection != null;
 
   // Show ConceptSelector
-  const showConceptSelector = pendingConceptPosition != null;
+  const showConceptSelector = pendingConceptSelection != null;
 
   return (
     <div
@@ -461,6 +552,7 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
         onAnnotationClick={handleAnnotationClick}
         blockMap={blockMap}
         onBlockSelect={handleBlockSelect}
+        dragBoundsMap={textSelection.dragBoundsMap}
       />
 
       {showSelectionToolbar && (
@@ -468,129 +560,124 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
           position={selectionToolbarPosition}
           highlightColor={highlightColor}
           onHighlight={(color) => {
-            if (!textSelection.anchorPageNumber || !textSelection.selectionRects) return;
-            const ctx = getPageContext(textSelection.anchorPageNumber);
-            if (!ctx) return;
-            const position = selectionToAnnotationPosition(
-              textSelection.selectionRects,
-              ctx.pageSlotRect,
-              ctx.inverseTransform,
-              ctx.cropBox,
+            if (!textSelection.selectedText) return;
+            const entries = buildAnnotationEntries(
+              textSelection.selectedText,
             );
-            annotationCRUD.createHighlight(
-              textSelection.anchorPageNumber,
-              position,
-              textSelection.selectedText ?? '',
-              color,
-            );
+            if (entries.length === 0) return;
+
+            if (entries.length === 1) {
+              const first = entries[0]!;
+              annotationCRUD.createHighlight(first.page, first.position, first.selectedText, color);
+            } else {
+              annotationCRUD.createCrossPageAnnotations(entries, 'highlight', color);
+            }
             textSelection.clearSelection();
           }}
           onNote={() => {
-            if (!textSelection.anchorPageNumber || !textSelection.selectionRects) return;
-            const ctx = getPageContext(textSelection.anchorPageNumber);
-            if (!ctx) return;
-            const position = selectionToAnnotationPosition(
-              textSelection.selectionRects,
-              ctx.pageSlotRect,
-              ctx.inverseTransform,
-              ctx.cropBox,
+            if (!textSelection.selectedText) return;
+            const entries = buildAnnotationEntries(
+              textSelection.selectedText,
             );
-            setPendingNotePosition({
-              page: textSelection.anchorPageNumber,
-              position,
-              selectedText: textSelection.selectedText ?? '',
+            if (entries.length === 0) return;
+
+            setPendingNoteSelection({
+              entries,
+              selectedText: textSelection.selectedText,
             });
             textSelection.clearSelection();
           }}
           onConceptTag={() => {
-            if (!textSelection.anchorPageNumber || !textSelection.selectionRects) return;
-            const ctx = getPageContext(textSelection.anchorPageNumber);
-            if (!ctx) return;
-            const position = selectionToAnnotationPosition(
-              textSelection.selectionRects,
-              ctx.pageSlotRect,
-              ctx.inverseTransform,
-              ctx.cropBox,
+            if (!textSelection.selectedText) return;
+            const entries = buildAnnotationEntries(
+              textSelection.selectedText,
             );
-            setPendingConceptPosition({
-              page: textSelection.anchorPageNumber,
-              position,
-              selectedText: textSelection.selectedText ?? '',
+            if (entries.length === 0) return;
+
+            setPendingConceptSelection({
+              entries,
+              selectedText: textSelection.selectedText,
             });
             textSelection.clearSelection();
           }}
           onColorChange={(color) => {
             useReaderStore.getState().setHighlightColor(color);
           }}
-          capturedImageCount={textSelection.capturedImages.length}
-          onAskAI={() => {
-            if (!textSelection.anchorPageNumber) return;
-            // Write both text and captured images into the unified payload
-            if (textSelection.payload) {
-              useReaderStore.getState().setSelectionPayload(textSelection.payload);
-            }
-            // Also set quotedSelection for backward compat with chat
-            if (textSelection.selectedText) {
-              useReaderStore.getState().setQuotedSelection({
-                text: textSelection.selectedText,
-                page: textSelection.anchorPageNumber,
-              });
-            }
-            textSelection.clearSelection();
-          }}
+          capturedImageCount={textSelection.capturedImages?.length ?? 0}
         />
       )}
 
-      {showNotePopover && activeNotePosition && (
+      {showNotePopover && pendingNoteSelection && (
         <NotePopover
           open={showNotePopover}
           onOpenChange={(open) => {
             if (!open) {
-              textAnnotationPen.clearPending();
-              setPendingNotePosition(null);
+              setPendingNoteSelection(null);
             }
           }}
           anchorRect={selectionToolbarPosition}
           initialText=""
           onSave={(noteText) => {
-            annotationCRUD.createNote(
-              activeNotePosition.page,
-              activeNotePosition.position,
-              activeNotePosition.selectedText,
-              highlightColor,
-              noteText,
-            );
-            textAnnotationPen.clearPending();
-            setPendingNotePosition(null);
+            if (pendingNoteSelection.entries.length === 1) {
+              const first = pendingNoteSelection.entries[0]!;
+              annotationCRUD.createNote(
+                first.page,
+                first.position,
+                first.selectedText,
+                highlightColor,
+                noteText,
+              );
+            } else {
+              annotationCRUD.createCrossPageAnnotations(
+                pendingNoteSelection.entries.map((entry) => ({
+                  ...entry,
+                  text: noteText,
+                })),
+                'note',
+                highlightColor,
+              );
+            }
+            setPendingNoteSelection(null);
           }}
           onCancel={() => {
-            textAnnotationPen.clearPending();
-            setPendingNotePosition(null);
+            setPendingNoteSelection(null);
           }}
         />
       )}
 
-      {showConceptSelector && pendingConceptPosition && (
+      {showConceptSelector && pendingConceptSelection && (
         <ConceptSelector
           open={showConceptSelector}
           onOpenChange={(open) => {
-            if (!open) setPendingConceptPosition(null);
+            if (!open) setPendingConceptSelection(null);
           }}
           anchorRect={selectionToolbarPosition}
           concepts={(conceptsData ?? []) as Concept[]}
           onSelect={(conceptId) => {
-            annotationCRUD.createConceptTag(
-              pendingConceptPosition.page,
-              pendingConceptPosition.position,
-              pendingConceptPosition.selectedText,
-              highlightColor,
-              conceptId,
-            );
-            setPendingConceptPosition(null);
+            if (pendingConceptSelection.entries.length === 1) {
+              const first = pendingConceptSelection.entries[0]!;
+              annotationCRUD.createConceptTag(
+                first.page,
+                first.position,
+                first.selectedText,
+                highlightColor,
+                conceptId,
+              );
+            } else {
+              annotationCRUD.createCrossPageAnnotations(
+                pendingConceptSelection.entries.map((entry) => ({
+                  ...entry,
+                  conceptId,
+                })),
+                'conceptTag',
+                highlightColor,
+              );
+            }
+            setPendingConceptSelection(null);
           }}
           onCreateNew={() => {
             // TODO: concept creation flow
-            setPendingConceptPosition(null);
+            setPendingConceptSelection(null);
           }}
         />
       )}

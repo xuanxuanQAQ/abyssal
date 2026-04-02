@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ModelRouter, getModelContextWindow, getReasoningEffort } from './model-router';
+import { ModelRouter, getModelContextWindow, getReasoningEffort, inferProviderForModel } from './model-router';
 import type { LlmConfig, ApiKeysConfig } from '../../core/types/config';
 
 function makeConfig(overrides: Partial<LlmConfig> = {}): LlmConfig {
@@ -15,6 +15,7 @@ function makeApiKeys(overrides: Partial<ApiKeysConfig> = {}): ApiKeysConfig {
   return {
     anthropicApiKey: 'sk-test',
     openaiApiKey: null,
+    geminiApiKey: null,
     deepseekApiKey: null,
     semanticScholarApiKey: null,
     openalexEmail: null,
@@ -107,13 +108,13 @@ describe('ModelRouter', () => {
       expect(route.provider).toBe('anthropic');
     });
 
-    it('local models (ollama) always pass availability check', () => {
+    it('local models (vllm) always pass availability check', () => {
       const router = createRouter(
-        makeConfig({ workflowOverrides: { analyze: { provider: 'ollama', model: 'llama3' } } }),
+        makeConfig({ workflowOverrides: { analyze: { provider: 'vllm', model: 'qwen2.5:14b' } } }),
         makeApiKeys({ anthropicApiKey: null }), // no API keys at all
       );
       const route = router.resolveAndValidate('analyze');
-      expect(route.provider).toBe('ollama');
+      expect(route.provider).toBe('vllm');
     });
   });
 
@@ -214,5 +215,28 @@ describe('getReasoningEffort', () => {
   it('returns null for unsupported workflows', () => {
     expect(getReasoningEffort('article')).toBeNull();
     expect(getReasoningEffort('synthesize')).toBeNull();
+  });
+});
+
+describe('inferProviderForModel', () => {
+  it('infers anthropic for Claude models', () => {
+    expect(inferProviderForModel('claude-opus-4')).toBe('anthropic');
+  });
+
+  it('infers openai for GPT and o-series models', () => {
+    expect(inferProviderForModel('gpt-4o')).toBe('openai');
+    expect(inferProviderForModel('o3-mini')).toBe('openai');
+  });
+
+  it('infers deepseek for DeepSeek models', () => {
+    expect(inferProviderForModel('deepseek-chat')).toBe('deepseek');
+  });
+
+  it('infers gemini for Gemini models', () => {
+    expect(inferProviderForModel('gemini-3.1-pro-preview')).toBe('gemini');
+  });
+
+  it('returns null for unknown local model names', () => {
+    expect(inferProviderForModel('llama3')).toBeNull();
   });
 });

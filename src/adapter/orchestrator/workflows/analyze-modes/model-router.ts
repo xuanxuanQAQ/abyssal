@@ -14,10 +14,15 @@
 // ─── Route result ───
 
 export type AnalysisMode = 'full' | 'intermediate' | 'skip';
+export type AnalyzeStageWorkflowId =
+  | 'analyze.generic'
+  | 'analyze.intermediate'
+  | 'analyze.full'
+  | 'analyze.full.axiom';
 
 export interface RouteResult {
   mode: AnalysisMode;
-  model: string;
+  workflowId: AnalyzeStageWorkflowId | null;
   reason: string;
 }
 
@@ -59,23 +64,20 @@ export interface PaperFeatures {
  */
 export function resolveAnalysisRoute(
   features: PaperFeatures,
-  config: Partial<ModelRouterConfig> = {},
 ): RouteResult {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
-
   // Skip: low or excluded relevance
   if (features.relevance === 'low') {
-    return { mode: 'skip', model: '', reason: 'low_relevance' };
+    return { mode: 'skip', workflowId: null, reason: 'low_relevance' };
   }
   if (features.relevance === 'excluded') {
-    return { mode: 'skip', model: '', reason: 'excluded' };
+    return { mode: 'skip', workflowId: null, reason: 'excluded' };
   }
 
   // Intermediate: medium relevance → low-cost model
   if (features.relevance === 'medium') {
     return {
       mode: 'intermediate',
-      model: cfg.lowCostModel,
+      workflowId: 'analyze.intermediate',
       reason: 'medium_relevance_intermediate',
     };
   }
@@ -83,7 +85,7 @@ export function resolveAnalysisRoute(
   // Full: high relevance → frontier model
   return {
     mode: 'full',
-    model: cfg.frontierModel,
+    workflowId: features.seedType === 'axiom' ? 'analyze.full.axiom' : 'analyze.full',
     reason: formatFullReason(features),
   };
 }

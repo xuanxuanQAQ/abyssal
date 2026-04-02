@@ -31,8 +31,8 @@ import { TaskDetailPopover } from './TaskDetailPopover';
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Claude',
   openai: 'OpenAI',
+  gemini: 'Gemini',
   deepseek: 'DeepSeek',
-  ollama: 'Ollama',
   vllm: 'vLLM',
   minimax: 'MiniMax',
   zhipu: 'Zhipu',
@@ -159,6 +159,7 @@ export function StatusBar() {
           {/* 任务活动按钮 + 详情浮层 */}
           <TaskDetailPopover>
             <button
+              className="statusbar-btn"
               style={taskBtnStyle}
               onClick={toggleTaskPanel}
               title={t('statusBar.taskPanel')}
@@ -237,6 +238,7 @@ export function StatusBar() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* LLMIndicator */}
           <button
+            className="statusbar-btn"
             style={ghostBtnStyle}
             onClick={() => {
               useAppStore.getState().switchView('settings');
@@ -256,6 +258,7 @@ export function StatusBar() {
           {/* ContextPanel 展开按钮（仅在折叠时显示） */}
           {!contextPanelOpen && (
             <button
+              className="statusbar-btn"
               onClick={toggleContextPanel}
               title={t('statusBar.openContextPanel')}
               style={ghostBtnStyle}

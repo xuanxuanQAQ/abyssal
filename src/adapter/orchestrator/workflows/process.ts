@@ -80,6 +80,7 @@ export interface ProcessServices {
   dlaAnalyze?: ((pdfPath: string, pageCount: number) => Promise<ContentBlock[]>) | null;
   /** Optional layout block persistence — write TypedBlocks and section boundaries to DB. */
   layoutPersist?: {
+    clearLayoutAnalysis: (paperId: string) => void;
     insertLayoutBlocks: (paperId: string, blocks: Array<Record<string, unknown>>) => void;
     insertSectionBoundaries: (paperId: string, boundaries: Array<Record<string, unknown>>) => void;
     hasLayoutBlocks: (paperId: string) => boolean;
@@ -405,6 +406,8 @@ export async function processExtractAndHydrate(
             // Persist layout blocks + section boundaries to DB
             if (ctx.layoutPersist) {
               try {
+                ctx.layoutPersist.clearLayoutAnalysis(paperId);
+
                 const blockRows = fusionResult.typedBlocks.map((b) => ({
                   paperId: paperId as unknown,
                   blockType: b.blockType,
@@ -420,23 +423,24 @@ export async function processExtractAndHydrate(
                 }));
                 ctx.layoutPersist.insertLayoutBlocks(paperId, blockRows);
 
-                if (dlaStructure.sections.length > 0) {
-                  const boundaryRows = dlaStructure.sections.map((sec) => {
-                    const allBlocks = [sec.titleBlock, ...sec.bodyBlocks];
-                    const pages = allBlocks.map((b) => b.pageIndex);
-                    const validStarts = allBlocks.filter((b) => b.charStart != null).map((b) => b.charStart!);
-                    const validEnds = allBlocks.filter((b) => b.charEnd != null).map((b) => b.charEnd!);
-                    return {
-                      paperId: paperId as unknown,
-                      label: sec.label,
-                      title: sec.titleBlock.text?.trim() ?? '',
-                      depth: sec.depth,
-                      charStart: validStarts.length > 0 ? Math.min(...validStarts) : 0,
-                      charEnd: validEnds.length > 0 ? Math.max(...validEnds) : 0,
-                      pageStart: Math.min(...pages),
-                      pageEnd: Math.max(...pages),
-                    };
-                  });
+                const boundaryRows = dlaStructure.sections.map((sec) => {
+                  const allBlocks = [sec.titleBlock, ...sec.bodyBlocks];
+                  const pages = allBlocks.map((b) => b.pageIndex);
+                  const validStarts = allBlocks.filter((b) => b.charStart != null).map((b) => b.charStart!);
+                  const validEnds = allBlocks.filter((b) => b.charEnd != null).map((b) => b.charEnd!);
+                  return {
+                    paperId: paperId as unknown,
+                    label: sec.label,
+                    title: sec.titleBlock.text?.trim() ?? '',
+                    depth: sec.depth,
+                    charStart: validStarts.length > 0 ? Math.min(...validStarts) : 0,
+                    charEnd: validEnds.length > 0 ? Math.max(...validEnds) : 0,
+                    pageStart: Math.min(...pages),
+                    pageEnd: Math.max(...pages),
+                  };
+                });
+
+                if (boundaryRows.length > 0) {
                   ctx.layoutPersist.insertSectionBoundaries(paperId, boundaryRows);
                 }
               } catch (err) {

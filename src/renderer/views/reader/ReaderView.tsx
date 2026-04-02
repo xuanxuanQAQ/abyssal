@@ -84,6 +84,7 @@ export function ReaderView() {
   if (selectedPaperId == null) {
     return (
       <div
+        className="workspace-view workspace-view--reader workspace-empty-state"
         style={{
           height: '100%',
           display: 'flex',
@@ -101,6 +102,7 @@ export function ReaderView() {
   if (status === 'loading') {
     return (
       <div
+        className="workspace-view workspace-view--reader workspace-empty-state"
         style={{
           height: '100%',
           display: 'flex',
@@ -118,6 +120,7 @@ export function ReaderView() {
   if (status === 'error') {
     return (
       <div
+        className="workspace-view workspace-view--reader workspace-empty-state"
         style={{
           height: '100%',
           display: 'flex',
@@ -137,8 +140,8 @@ export function ReaderView() {
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <PanelGroup direction="horizontal" style={{ flex: 1 }}>
+    <div className="workspace-view workspace-view--reader" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <PanelGroup className="workspace-panel-group" direction="horizontal" style={{ flex: 1 }}>
         {readerThumbsOpen && (
           <>
             <Panel
@@ -151,12 +154,14 @@ export function ReaderView() {
                 borderRight: '1px solid var(--border-subtle)',
               }}
             >
-              <ThumbnailNav
-                pageMetadataMap={pageMetadataMap}
-                annotations={annotations}
-                onScrollToPage={handleScrollToPage}
-                renderThumbnail={renderThumbnail}
-              />
+              <div className="workspace-lens-panel reader-side-panel reader-thumbnails-shell">
+                <ThumbnailNav
+                  pageMetadataMap={pageMetadataMap}
+                  annotations={annotations}
+                  onScrollToPage={handleScrollToPage}
+                  renderThumbnail={renderThumbnail}
+                />
+              </div>
             </Panel>
             <PanelResizeHandle
               style={{
@@ -168,13 +173,15 @@ export function ReaderView() {
         )}
 
         <Panel style={{ overflow: 'hidden' }}>
-          <PDFViewport
-            paperId={selectedPaperId}
-            pdfPath={pdfPath}
-            manager={manager}
-            pageMetadataMap={pageMetadataMap}
-            scrollRef={scrollContainerRef}
-          />
+          <div className="workspace-main-stage reader-viewport-stage">
+            <PDFViewport
+              paperId={selectedPaperId}
+              pdfPath={pdfPath}
+              manager={manager}
+              pageMetadataMap={pageMetadataMap}
+              scrollRef={scrollContainerRef}
+            />
+          </div>
         </Panel>
 
         {readerAnnotationListOpen && (
@@ -195,10 +202,12 @@ export function ReaderView() {
                 borderLeft: '1px solid var(--border-subtle)',
               }}
             >
-              <AnnotationList
-                paperId={selectedPaperId}
-                onScrollToAnnotation={handleScrollToAnnotation}
-              />
+              <div className="workspace-lens-panel reader-side-panel reader-annotations-shell">
+                <AnnotationList
+                  paperId={selectedPaperId}
+                  onScrollToAnnotation={handleScrollToAnnotation}
+                />
+              </div>
             </Panel>
           </>
         )}

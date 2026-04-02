@@ -104,7 +104,7 @@ describe('evaluateRules', () => {
     const upgrades = suggestions.filter((s) => s.type === 'maturity_upgrade');
     expect(upgrades).toHaveLength(1);
     expect(upgrades[0]!.priority).toBe('low');
-    expect(upgrades[0]!.action.operation).toBe('upgradeConcept');
+    expect(upgrades[0]!.action.operation).toBe('updateConceptMaturity');
   });
 
   it('flags unindexed memos as low priority', () => {

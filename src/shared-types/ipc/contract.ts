@@ -199,7 +199,7 @@ export interface IpcContract {
   'chat:abort':                       { args: [conversationId?: string];                 result: void };
 
   // ── fs ──
-  'fs:openPDF':                       { args: [paperId: string];                         result: { path: string; buffer: ArrayBuffer } };
+  'fs:openPDF':                       { args: [paperId: string];                         result: { path: string; data: Uint8Array } };
   'fs:savePDFAnnotations':            { args: [paperId: string, annotations: PDFAnnotation[]]; result: void };
   'fs:exportArticle':                 { args: [articleId: string, format: ExportFormat, citationStyle?: CitationStyle];  result: string };
   'fs:importFiles':                   { args: [paths: string[]];                         result: ImportResult };
@@ -245,6 +245,7 @@ export interface IpcContract {
   // ── dla (Document Layout Analysis) ──
   'dla:analyze':                       { args: [paperId: string, pdfPath: string, pageIndices: number[]]; result: void };
   'dla:getBlocks':                     { args: [paperId: string, pageIndex: number]; result: import('../models').ContentBlockDTO[] | null };
+  'dla:getDocumentBlocks':             { args: [paperId: string]; result: Array<{ pageIndex: number; blocks: import('../models').ContentBlockDTO[] }> };
   'dla:analyzeDocument':               { args: [paperId: string, pdfPath: string, totalPages: number]; result: void };
 
   // ── workspace ──
@@ -281,6 +282,7 @@ export interface IpcPushContract {
   'push:workflowProgress':    PipelineProgressEvent;
   'push:agentStream':         AgentStreamEvent;
   'push:dbChanged':           { tables: string[]; operation: string };
+  'push:settingsChanged':     { section: string; keys: string[] };
   'push:notification':        { type: string; title: string; message: string };
   'push:advisorySuggestions': Recommendation[];
   'push:memoCreated':         { memoId: string };

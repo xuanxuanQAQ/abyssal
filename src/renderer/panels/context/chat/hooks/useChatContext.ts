@@ -41,8 +41,9 @@ export function useChatContext(): () => ChatContext {
         }),
       );
       // Use first image's page as pdfPage if not already set
-      if (!context.pdfPage && readerState.selectionPayload.sourcePages.length > 0) {
-        context.pdfPage = readerState.selectionPayload.sourcePages[0];
+      const firstSourcePage = readerState.selectionPayload.sourcePages[0];
+      if (!context.pdfPage && firstSourcePage !== undefined) {
+        context.pdfPage = firstSourcePage;
       }
     }
 

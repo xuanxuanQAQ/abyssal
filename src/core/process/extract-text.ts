@@ -10,6 +10,7 @@ import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata } fro
 import type { PageCharData, CharWithPosition } from '../dla/types';
 import { PdfCorruptedError, ProcessError, OcrFailedError } from '../types/errors';
 import { countTokens, estimateTokens } from '../infra/token-counter';
+import { deriveExtractionMethod } from './extraction-method';
 
 // ─── 带样式的行信息（供 extractSections 使用） ───
 
@@ -75,8 +76,8 @@ const MAX_PAGES = 2000;
 /** Per-job OCR timeout (ms) — prevents a single hung page from blocking the pool */
 const OCR_JOB_TIMEOUT_MS = 60_000;
 
-/** Max pages to buffer for OCR at once — limits peak memory usage */
-const OCR_BATCH_SIZE = 50;
+/** Max OCR jobs allowed in flight at once — bounds PNG memory and scheduler pressure */
+const MAX_PENDING_OCR_JOBS = Math.max(2, OCR_POOL_SIZE * 2);
 
 async function getOcrScheduler(
   languages: string[],
@@ -333,6 +334,7 @@ export async function extractText(
 
     // §1.4: OCR 降级（并发 Worker Pool）
     let ocrConfidences: number[] = [];
+    const ocrAppliedPages = new Set<number>();
     if (ocrEnabled && scannedPageIndices.length > 0) {
       let scheduler: typeof ocrScheduler;
       try {
@@ -343,60 +345,68 @@ export async function extractText(
       }
 
       if (scheduler) {
-        // Fix #4: Process scanned pages in batches to limit peak memory
-        // Each 300DPI letter-size PNG is ~25MB; batching prevents OOM
-        for (let batchStart = 0; batchStart < scannedPageIndices.length; batchStart += OCR_BATCH_SIZE) {
-          const batchIndices = scannedPageIndices.slice(batchStart, batchStart + OCR_BATCH_SIZE);
+        const processOcrResult = (
+          result:
+            | PromiseSettledResult<{ pageIdx: number; text: string; confidence: number }>
+            | { status: 'fulfilled'; value: { pageIdx: number; text: string; confidence: number } },
+        ) => {
+          if (result.status !== 'fulfilled') {
+            return;
+          }
 
-          // Render batch to PNG (mupdf operations must be serial on main thread)
-          const pngBuffers: Array<{ pageIdx: number; png: Buffer }> = [];
-          for (const pageIdx of batchIndices) {
-            const page = doc.loadPage(pageIdx) as {
-              toPixmap(matrix: unknown, colorspace: unknown, alpha?: boolean): { destroy(): void; asPNG(): Buffer };
-              destroy(): void;
-            };
+          if (result.value.confidence >= 60) {
+            pageTexts[result.value.pageIdx] = result.value.text;
+            ocrAppliedPages.add(result.value.pageIdx);
+          }
+          ocrConfidences.push(result.value.confidence);
+        };
+
+        const inFlight: Array<Promise<{ pageIdx: number; text: string; confidence: number }>> = [];
+
+        for (const pageIdx of scannedPageIndices) {
+          const page = doc.loadPage(pageIdx) as {
+            toPixmap(matrix: unknown, colorspace: unknown, alpha?: boolean): { destroy(): void; asPNG(): Buffer };
+            destroy(): void;
+          };
+
+          let png: Buffer;
+          try {
+            const scale = 300 / 72;
+            const pixmap = page.toPixmap(
+              [scale, 0, 0, scale, 0, 0],
+              (mupdf as { ColorSpace?: { DeviceRGB?: unknown } }).ColorSpace?.DeviceRGB ?? 'DeviceRGB' as unknown,
+            );
             try {
-              const scale = 300 / 72;
-              const pixmap = page.toPixmap(
-                [scale, 0, 0, scale, 0, 0],
-                (mupdf as { ColorSpace?: { DeviceRGB?: unknown } }).ColorSpace?.DeviceRGB ?? 'DeviceRGB' as unknown,
-              );
-              try {
-                pngBuffers.push({ pageIdx, png: pixmap.asPNG() });
-              } finally {
-                pixmap.destroy();
-              }
+              png = pixmap.asPNG();
             } finally {
-              page.destroy();
+              pixmap.destroy();
             }
+          } finally {
+            page.destroy();
           }
 
-          // Fix #5: Per-job timeout — prevents a single hung page from blocking the pool
-          const ocrResults = await Promise.allSettled(
-            pngBuffers.map(async ({ pageIdx, png }) => {
-              const result = await Promise.race([
-                scheduler!.addJob('recognize', png),
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error(`OCR timeout for page ${pageIdx}`)), ocrJobTimeout),
-                ),
-              ]);
-              return { pageIdx, text: result.data.text, confidence: result.data.confidence };
-            }),
-          );
+          const job = Promise.race([
+            scheduler.addJob('recognize', png),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`OCR timeout for page ${pageIdx}`)), ocrJobTimeout),
+            ),
+          ]).then((result) => ({ pageIdx, text: result.data.text, confidence: result.data.confidence }));
 
-          for (const r of ocrResults) {
-            if (r.status === 'fulfilled') {
-              // Fix: OCR 置信度阈值——低于 60% 的 OCR 结果可能比 mupdf 提取更差
-              if (r.value.confidence >= 60) {
-                pageTexts[r.value.pageIdx] = r.value.text;
-              }
-              ocrConfidences.push(r.value.confidence);
+          inFlight.push(job);
+
+          if (inFlight.length >= MAX_PENDING_OCR_JOBS) {
+            const settled = await Promise.allSettled(inFlight.splice(0, inFlight.length));
+            for (const result of settled) {
+              processOcrResult(result);
             }
-            // rejected (timeout or error) → 保留 mupdf 结果
           }
+        }
 
-          // Release PNG buffers between batches to allow GC
-          pngBuffers.length = 0;
+        if (inFlight.length > 0) {
+          const settled = await Promise.allSettled(inFlight);
+          for (const result of settled) {
+            processOcrResult(result);
+          }
         }
       }
     }
@@ -482,14 +492,7 @@ export async function extractText(
     const fullText = pageTexts.join('\n\n');
     const charCount = fullText.length;
 
-    let method: TextExtractionResult['method'];
-    if (scannedPageIndices.length === 0) {
-      method = 'mupdf';
-    } else if (scannedPageIndices.length === pageCount) {
-      method = 'ocr';
-    } else {
-      method = 'mupdf+ocr';
-    }
+    const method = deriveExtractionMethod(pageCount, scannedPageIndices.length, ocrAppliedPages.size);
 
     const ocrConfidence =
       ocrConfidences.length > 0

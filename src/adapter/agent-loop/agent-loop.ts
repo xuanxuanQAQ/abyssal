@@ -56,7 +56,7 @@ export class AgentLoop {
   }
 
   /** Get or build system prompt with TTL cache, keyed by ChatContext. */
-  private async getSystemPrompt(chatContext?: ChatContext): Promise<string> {
+  async getSystemPrompt(chatContext?: ChatContext): Promise<string> {
     const now = Date.now();
     const cacheKey = chatContext?.contextKey ?? 'global';
 

@@ -19,7 +19,13 @@ import type { ConfigProvider } from '../../core/infra/config-provider';
 import type { VisionCapable, EmbedFunction } from '../../core/types/common';
 import type { RankedChunk } from '../../core/types/chunk';
 
-import { ModelRouter, type ModelRoute, getModelContextWindow } from './model-router';
+import {
+  ModelRouter,
+  type ModelRoute,
+  getModelContextWindow,
+  inferProviderForModel,
+  isAvailableRoute,
+} from './model-router';
 import { ClaudeAdapter } from './claude-adapter';
 import { OpenAIAdapter } from './openai-adapter';
 import { RerankerScheduler } from './reranker';
@@ -143,6 +149,10 @@ export interface CompleteParams {
   maxTokens?: number;
   temperature?: number;
   workflowId?: string;
+  /** Explicit model override for this call. Provider is inferred when possible. */
+  model?: string;
+  /** Optional explicit provider override when model inference is insufficient. */
+  provider?: string;
   signal?: AbortSignal;
   /** Request structured output (JSON schema or json_object mode) */
   responseFormat?: ResponseFormat;
@@ -193,8 +203,8 @@ export class LlmClient implements VisionCapable {
   }
 
   /**
-   * Build (or rebuild) provider adapters from current API keys.
-   * Clears existing cloud adapters; local adapter configs are always re-added.
+  * Build (or rebuild) provider adapters from current API keys.
+  * Clears existing cloud adapters; local adapter configs are always re-added.
    */
   private buildAdapters(keys: ApiKeysConfig): void {
     this.adapters = new Map();
@@ -208,6 +218,14 @@ export class LlmClient implements VisionCapable {
       this.adapters.set('openai', new OpenAIAdapter({
         apiKey: keys.openaiApiKey,
         provider: 'openai',
+      }));
+    }
+
+    if (keys.geminiApiKey) {
+      this.adapters.set('gemini', new OpenAIAdapter({
+        apiKey: keys.geminiApiKey,
+        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        provider: 'gemini',
       }));
     }
 
@@ -228,11 +246,6 @@ export class LlmClient implements VisionCapable {
     }
 
     // Local adapters: only create on first use via lazy getter
-    this.localAdapterConfigs.set('ollama', {
-      apiKey: '',
-      baseURL: 'http://localhost:11434/v1',
-      provider: 'ollama',
-    });
     this.localAdapterConfigs.set('vllm', {
       apiKey: '',
       baseURL: 'http://localhost:8000/v1',
@@ -243,7 +256,7 @@ export class LlmClient implements VisionCapable {
   // ─── complete (§1.1) ───
 
   async complete(params: CompleteParams): Promise<CompletionResult> {
-    const route = this.router.resolveAndValidate(params.workflowId);
+    const route = this.resolveRequestedRoute(params);
     const adapter = this.getAdapter(route);
     const startTime = Date.now();
 
@@ -273,7 +286,7 @@ export class LlmClient implements VisionCapable {
   // ─── completeStream (§1.1) ───
 
   async *completeStream(params: CompleteParams): AsyncIterable<StreamChunk> {
-    const route = this.router.resolveAndValidate(params.workflowId);
+    const route = this.resolveRequestedRoute(params);
     const adapter = this.getAdapter(route);
     const startTime = Date.now();
 
@@ -437,6 +450,29 @@ export class LlmClient implements VisionCapable {
     if (params.responseFormat != null) p.responseFormat = params.responseFormat;
     if (params.thinkingBudget != null) p.thinkingBudget = params.thinkingBudget;
     return p;
+  }
+
+  private resolveRequestedRoute(params: CompleteParams): ModelRoute {
+    if (params.model == null && params.provider == null) {
+      return this.router.resolveAndValidate(params.workflowId);
+    }
+
+    const baseRoute = this.router.resolve(params.workflowId);
+    const resolvedRoute: ModelRoute = {
+      provider: params.provider
+        ?? (params.model ? inferProviderForModel(params.model) : null)
+        ?? baseRoute.provider,
+      model: params.model ?? baseRoute.model,
+    };
+
+    if (!isAvailableRoute(resolvedRoute, this.configProvider.config.apiKeys)) {
+      throw new Error(
+        `Provider "${resolvedRoute.provider}" is not configured — please set its API key in settings.` +
+        (params.workflowId ? ` (workflow: ${params.workflowId})` : ''),
+      );
+    }
+
+    return resolvedRoute;
   }
 
   /** Record LLM cost to the cost tracker. */

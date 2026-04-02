@@ -75,9 +75,8 @@ describe('ContextBudgetManager', () => {
     expect(memosAlloc?.budgetTokens).toBe(500);
   });
 
-  it('hard-truncates ABSOLUTE sources proportionally when they exceed budget', () => {
+  it('preserves ABSOLUTE sources and logs overflow when they exceed budget', () => {
     const cbm = makeCBM();
-    // Tiny window so ABSOLUTE sources exceed budget
     const result = cbm.allocate(makeRequest({
       modelContextWindow: 2000, // very small
       sources: [
@@ -86,13 +85,14 @@ describe('ContextBudgetManager', () => {
       ],
     }));
 
-    // Both should be truncated but still included
     const memosAlloc = result.sourceAllocations.get('researcher_memos');
     const fwAlloc = result.sourceAllocations.get('concept_framework');
     expect(memosAlloc?.included).toBe(true);
     expect(fwAlloc?.included).toBe(true);
-    expect(memosAlloc!.budgetTokens).toBeLessThan(5000);
-    expect(fwAlloc!.budgetTokens).toBeLessThan(5000);
+    expect(memosAlloc!.budgetTokens).toBe(5000);
+    expect(fwAlloc!.budgetTokens).toBe(5000);
+    expect(memosAlloc!.truncatedTo).toBeNull();
+    expect(fwAlloc!.truncatedTo).toBeNull();
     expect(logger.warn).toHaveBeenCalled();
   });
 

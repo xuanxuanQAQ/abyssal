@@ -18,6 +18,7 @@ const ABYSSAL_PREFIX = 'ABYSSAL_';
 const API_KEY_ENV_MAP: Record<string, keyof ApiKeysConfig> = {
   ANTHROPIC_API_KEY: 'anthropicApiKey',
   OPENAI_API_KEY: 'openaiApiKey',
+  GEMINI_API_KEY: 'geminiApiKey',
   DEEPSEEK_API_KEY: 'deepseekApiKey',
 };
 
@@ -157,6 +158,7 @@ export function resolveApiKeys(
   const resolved: ApiKeysConfig = {
     anthropicApiKey: existingKeys.anthropicApiKey ?? null,
     openaiApiKey: existingKeys.openaiApiKey ?? null,
+    geminiApiKey: existingKeys.geminiApiKey ?? null,
     deepseekApiKey: existingKeys.deepseekApiKey ?? null,
     semanticScholarApiKey: existingKeys.semanticScholarApiKey ?? null,
     openalexEmail: existingKeys.openalexEmail ?? null,
@@ -177,6 +179,7 @@ export function resolveApiKeys(
 
   // ABYSSAL_ 前缀的 API key 覆盖
   const abyssalMappings: Record<string, keyof ApiKeysConfig> = {
+    ABYSSAL_GEMINI_API_KEY: 'geminiApiKey',
     ABYSSAL_SEMANTIC_SCHOLAR_API_KEY: 'semanticScholarApiKey',
     ABYSSAL_UNPAYWALL_EMAIL: 'unpaywallEmail',
     ABYSSAL_COHERE_API_KEY: 'cohereApiKey',

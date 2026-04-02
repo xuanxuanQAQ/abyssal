@@ -21,6 +21,15 @@ export interface ModelRoute {
   model: string;
 }
 
+const MODEL_PROVIDER_PREFIXES: Array<{ prefix: string; provider: string }> = [
+  { prefix: 'claude', provider: 'anthropic' },
+  { prefix: 'gpt-', provider: 'openai' },
+  { prefix: 'o1', provider: 'openai' },
+  { prefix: 'o3', provider: 'openai' },
+  { prefix: 'gemini', provider: 'gemini' },
+  { prefix: 'deepseek', provider: 'deepseek' },
+];
+
 /** Getter-based config source — allows ModelRouter to always read latest config. */
 export interface ModelRouterConfigSource {
   getLlmConfig: () => LlmConfig;
@@ -47,6 +56,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-4o-mini':      128_000,
   'o3':               200_000,
   'o3-mini':          200_000,
+  'gemini-3.1-pro-preview': 1_000_000,
+  'gemini-3-flash-preview': 1_000_000,
   'deepseek-chat':    128_000,
   'deepseek-reasoner': 64_000,
 };
@@ -59,11 +70,19 @@ export function getModelContextWindow(model: string): number {
   return 8192;
 }
 
+export function inferProviderForModel(model: string): string | null {
+  for (const entry of MODEL_PROVIDER_PREFIXES) {
+    if (model.startsWith(entry.prefix)) return entry.provider;
+  }
+  return null;
+}
+
 // ─── Provider → API key field mapping ───
 
 const PROVIDER_KEY_MAP: Record<string, keyof ApiKeysConfig> = {
   anthropic:   'anthropicApiKey',
   openai:      'openaiApiKey',
+  gemini:      'geminiApiKey',
   deepseek:    'deepseekApiKey',
   siliconflow: 'siliconflowApiKey',
 };
@@ -111,7 +130,7 @@ export class ModelRouter {
     const apiKeys = this.configSource.getApiKeys();
     const route = this.resolve(workflowId);
 
-    if (!isAvailable(route, apiKeys)) {
+    if (!isAvailableRoute(route, apiKeys)) {
       throw new Error(
         `Provider "${route.provider}" is not configured — please set its API key in settings.` +
         (workflowId ? ` (workflow: ${workflowId})` : ''),
@@ -126,10 +145,10 @@ export class ModelRouter {
 
 /**
  * Check if a model route's provider has the required API key.
- * Local models (ollama/vllm) always pass — they don't need keys.
+ * Local models (vllm) always pass — they don't need keys.
  */
-function isAvailable(route: ModelRoute, apiKeys: ApiKeysConfig): boolean {
-  if (route.provider === 'ollama' || route.provider === 'vllm') return true;
+export function isAvailableRoute(route: ModelRoute, apiKeys: ApiKeysConfig): boolean {
+  if (route.provider === 'vllm') return true;
   const keyField = PROVIDER_KEY_MAP[route.provider];
   if (!keyField) return false;
   const key = apiKeys[keyField];

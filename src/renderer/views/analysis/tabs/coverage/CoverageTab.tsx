@@ -26,7 +26,7 @@ export function CoverageTab() {
 
   if (isLoading) {
     return (
-      <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+      <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
         {t('analysis.coverage.loading')}
       </div>
     );
@@ -34,7 +34,7 @@ export function CoverageTab() {
 
   if (concepts.length === 0) {
     return (
-      <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+      <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 24, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
         {t('analysis.coverage.empty')}
       </div>
     );
@@ -44,6 +44,7 @@ export function CoverageTab() {
 
   return (
     <div
+      className="analysis-scroll-stage analysis-coverage-stage"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -51,7 +52,7 @@ export function CoverageTab() {
         overflow: 'auto',
       }}
     >
-      <div style={{ padding: '20px 20px 16px' }}>
+      <div className="analysis-section-block" style={{ padding: '20px 20px 16px' }}>
         <CompletenessScore
           completeness={Math.round(completeness)}
           completedCount={completedCount}
@@ -59,8 +60,9 @@ export function CoverageTab() {
         />
       </div>
 
-      <div style={{ padding: '0 20px 24px' }}>
+      <div className="analysis-section-block" style={{ padding: '0 20px 24px' }}>
         <h3
+          className="analysis-section-title"
           style={{
             margin: '0 0 12px',
             fontSize: 'var(--text-sm)',

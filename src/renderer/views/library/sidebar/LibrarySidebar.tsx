@@ -28,9 +28,10 @@ function CollapsibleSection({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div>
+    <div className="library-sidebar-section">
       <button
         onClick={() => setOpen(!open)}
+        className="library-sidebar-section-trigger"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -51,7 +52,7 @@ function CollapsibleSection({
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         {title}
       </button>
-      {open && children}
+      {open && <div className="library-sidebar-section-body">{children}</div>}
     </div>
   );
 }
@@ -61,6 +62,7 @@ export function LibrarySidebar({ counts }: LibrarySidebarProps) {
 
   return (
     <nav
+      className="workspace-lens-panel library-sidebar-shell"
       role="navigation"
       aria-label={t('library.sidebar.navigation')}
       style={{
@@ -75,13 +77,13 @@ export function LibrarySidebar({ counts }: LibrarySidebarProps) {
         <SmartGroups counts={counts} />
       </CollapsibleSection>
 
-      <div style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
+      <div className="library-sidebar-divider" style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
 
       <CollapsibleSection title={t('library.sidebar.tags')}>
         <TagTree />
       </CollapsibleSection>
 
-      <div style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
+      <div className="library-sidebar-divider" style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
 
       <CollapsibleSection title={t('library.sidebar.searchHistory')} defaultOpen={false}>
         <SearchHistory />

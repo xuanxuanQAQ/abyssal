@@ -35,6 +35,20 @@ export function createNotesCapability(): Capability {
             ctx.session.focus.activeConcepts.slice(0, 3);
           const tags = (params['tags'] as string[]) ?? [];
 
+          // Write frontmatter + content to disk
+          if (ctx.services.writeNoteFile) {
+            const fmLines = [
+              '---',
+              `title: "${title.replace(/"/g, '\\"')}"`,
+              `linkedPaperIds: ${JSON.stringify(linkedPaperIds)}`,
+              `linkedConceptIds: ${JSON.stringify(linkedConceptIds)}`,
+              `tags: ${JSON.stringify(tags)}`,
+              '---',
+              '',
+            ];
+            await ctx.services.writeNoteFile(noteId, fmLines.join('\n') + content);
+          }
+
           await ctx.services.dbProxy.createNote(
             { id: noteId, title, filePath: `notes/${noteId}.md`, linkedPaperIds, linkedConceptIds, tags },
             [], [],
@@ -100,8 +114,24 @@ export function createNotesCapability(): Capability {
           const linkedConceptIds = Array.from(allLinkedConcepts);
 
           const noteId = globalThis.crypto.randomUUID();
+          const tags = ['auto-generated'];
+
+          // Write frontmatter + content to disk
+          if (ctx.services.writeNoteFile) {
+            const fmLines = [
+              '---',
+              `title: "${title.replace(/"/g, '\\"')}"`,
+              `linkedPaperIds: ${JSON.stringify(linkedPaperIds)}`,
+              `linkedConceptIds: ${JSON.stringify(linkedConceptIds)}`,
+              `tags: ${JSON.stringify(tags)}`,
+              '---',
+              '',
+            ];
+            await ctx.services.writeNoteFile(noteId, fmLines.join('\n') + content);
+          }
+
           await ctx.services.dbProxy.createNote(
-            { id: noteId, title, filePath: `notes/${noteId}.md`, linkedPaperIds, linkedConceptIds, tags: ['auto-generated'] },
+            { id: noteId, title, filePath: `notes/${noteId}.md`, linkedPaperIds, linkedConceptIds, tags },
             [], [],
           );
 

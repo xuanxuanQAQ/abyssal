@@ -113,15 +113,19 @@ export function ContextPanel() {
 
   return (
     <div
+      className="context-panel-shell"
       role="complementary"
       aria-label={t('context.title')}
       style={{
         height: '100%',
-        backgroundColor: 'var(--bg-surface-low)',
-        borderLeft: '1px solid var(--border-subtle)',
+        background: 'var(--lens-surface-strong)',
+        borderLeft: '1px solid var(--lens-border)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        backdropFilter: 'blur(24px) saturate(1.08)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.08)',
+        boxShadow: 'inset 1px 0 0 var(--border-subtle)',
       }}
     >
       {/* §4 ContextHeader — 始终可见 */}
@@ -135,6 +139,7 @@ export function ContextPanel() {
 
       {/* §1.2 ContextBody + ChatDock 空间竞争 */}
       <PanelGroup
+        className="context-panel-group"
         direction="vertical"
         autoSaveId="abyssal-context-body-chat"
         style={{ flex: 1 }}
@@ -148,7 +153,7 @@ export function ContextPanel() {
               defaultSize={35}
               order={1}
             >
-              <div className="ctx-body-enter" style={{ height: '100%' }}>
+              <div className="ctx-body-enter context-body-stage" style={{ height: '100%' }}>
                 <ContextPanelErrorBoundary>
                   <CrossfadeTransition transitionKey={transitionKey}>
                     {renderContentPane(effectiveSource)}
@@ -193,7 +198,7 @@ function EmptyContextHint() {
   const { t } = useTranslation();
   return (
     <div
-      className="ctx-hint-enter"
+      className="ctx-hint-enter context-empty-hint"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -201,18 +206,19 @@ function EmptyContextHint() {
         padding: '6px 12px',
         flexShrink: 0,
         borderBottom: '1px solid var(--border-subtle)',
-        backgroundColor: 'var(--bg-surface)',
+        backgroundColor: 'color-mix(in srgb, var(--lens-surface) 88%, transparent)',
         fontSize: 11,
         color: 'var(--text-muted)',
       }}
     >
       <Search size={12} style={{ opacity: 0.5, flexShrink: 0 }} />
-      <span>{t('context.selectEntity')}</span>
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+      <span className="context-empty-hint-copy">{t('context.selectEntity')}</span>
+      <div className="context-empty-hint-icons" style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
         {hintItems.map((item) => (
           <span
             key={item.label}
             title={item.label}
+            className="context-empty-hint-icon"
             style={{ color: item.color, display: 'flex', opacity: 0.6 }}
           >
             {item.icon}

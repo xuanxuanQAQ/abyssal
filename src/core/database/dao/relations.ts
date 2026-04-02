@@ -156,7 +156,7 @@ export function recomputeAllRelations(
   // 获取全部已分析论文
   const papers = db
     .prepare(
-      "SELECT id FROM papers WHERE analysis_status IN ('analyzed', 'reviewed', 'integrated')",
+      "SELECT id FROM papers WHERE analysis_status = 'completed'",
     )
     .all() as { id: string }[];
 

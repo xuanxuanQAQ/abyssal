@@ -34,7 +34,7 @@ function getPricing(model: string): ModelPricing {
   // Exact match
   if (BUILTIN_PRICING[model]) return BUILTIN_PRICING[model];
   // Local models are free
-  if (model.startsWith('ollama/') || model.startsWith('vllm/')) {
+  if (model.startsWith('vllm/')) {
     return { inputPer1M: 0, outputPer1M: 0 };
   }
   // Prefix match (e.g., 'claude-sonnet-4-xxx' → 'claude-sonnet-4')

@@ -10,8 +10,6 @@
  * See spec: §5
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { LlmClient } from '../../../llm-client/llm-client';
 import type { Logger } from '../../../../core/infra/logger';
 import type { BudgetAllocation } from '../../../context-budget/context-budget-manager';
@@ -20,9 +18,9 @@ import {
   createPromptAssembler,
 } from '../../../prompt-assembler/prompt-assembler';
 import {
-  parseAndValidate,
-  type ParseContext,
-} from '../../../output-parser/output-parser';
+  parseStructuredAnalyzeOutput,
+  ANALYZE_STRUCTURED_RESPONSE_FORMAT,
+} from '../analyze-structured-output';
 import { countTokens } from '../../../llm-client/token-counter';
 import type { NormalizedSuggestion } from '../../../output-parser/suggestion-parser';
 
@@ -32,9 +30,10 @@ export interface GenericAnalysisResult {
   success: boolean;
   suggestedConcepts: NormalizedSuggestion[];
   body: string;
-  frontmatter: Record<string, unknown> | null;
+  summary: string;
   warnings: string[];
-  strategy: string;
+  model: string | null;
+  rawPath: string | null;
 }
 
 // ─── Execute generic analysis (§5) ───
@@ -50,6 +49,8 @@ export async function runGenericAnalysis(
   llmClient: LlmClient,
   logger: Logger,
   workspacePath: string,
+  workflowId = 'analyze.generic',
+  explicitModel?: string,
   outputLanguage?: string,
   signal?: AbortSignal,
 ): Promise<GenericAnalysisResult> {
@@ -95,7 +96,9 @@ export async function runGenericAnalysis(
   const result = await llmClient.complete({
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
-    workflowId: 'analyze',
+    workflowId,
+    responseFormat: ANALYZE_STRUCTURED_RESPONSE_FORMAT,
+    ...(explicitModel && { model: explicitModel }),
     ...(signal && { signal }),
   });
   logger.debug(`[generic] Paper ${paperId}: LLM responded`, {
@@ -104,37 +107,32 @@ export async function runGenericAnalysis(
     latencyMs: Date.now() - llmStart,
   });
 
-  // Parse with validation — no conceptLookup (no concepts exist)
-  const parseContext: ParseContext = {
+  const validated = parseStructuredAnalyzeOutput(result.text, {
     paperId,
     model: result.model,
-  };
-
-  const validated = parseAndValidate(result.text, parseContext, logger);
+    workflow: workflowId,
+    frameworkState: 'zero_concepts',
+    workspaceRoot: workspacePath,
+  }, logger);
 
   if (!validated.success) {
     logger.warn(`[generic] Paper ${paperId}: parse failed`, {
       outputPreview: result.text.slice(0, 300),
+      rawPath: validated.rawPath,
     });
-    // Save raw output for diagnosis
-    const rawPath = path.join(workspacePath, 'analyses', `${paperId}.raw.txt`);
-    try {
-      fs.mkdirSync(path.dirname(rawPath), { recursive: true });
-      fs.writeFileSync(rawPath, result.text, 'utf-8');
-    } catch (err) { logger.debug(`Paper ${paperId}: failed to save raw output`, { error: (err as Error).message }); }
 
     return {
       success: false,
       suggestedConcepts: [],
       body: result.text,
-      frontmatter: null,
+      summary: '',
       warnings: ['Parse failed in generic analysis mode'],
-      strategy: 'parse_failed',
+      model: result.model,
+      rawPath: validated.rawPath,
     };
   }
 
   logger.debug(`[generic] Paper ${paperId}: parse succeeded`, {
-    strategy: validated.strategy,
     suggestedConcepts: validated.suggestedConcepts.length,
     warningCount: validated.warnings.length,
   });
@@ -143,8 +141,9 @@ export async function runGenericAnalysis(
     success: true,
     suggestedConcepts: validated.suggestedConcepts,
     body: validated.body,
-    frontmatter: validated.frontmatter,
+    summary: validated.summary,
     warnings: validated.warnings,
-    strategy: validated.strategy,
+    model: result.model,
+    rawPath: validated.rawPath,
   };
 }

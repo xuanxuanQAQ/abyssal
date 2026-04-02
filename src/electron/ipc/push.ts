@@ -43,6 +43,7 @@ export const PUSH_CHANNELS = {
   WORKFLOW_PROGRESS: 'push:workflowProgress',
   AGENT_STREAM: 'push:agentStream',
   DB_CHANGED: 'push:dbChanged',
+  SETTINGS_CHANGED: 'push:settingsChanged',
   NOTIFICATION: 'push:notification',
   ADVISORY_SUGGESTIONS: 'push:advisorySuggestions',
   MEMO_CREATED: 'push:memoCreated',
@@ -263,6 +264,12 @@ export class PushManager {
 
   pushDbHealth(data: { status: 'connected' | 'degraded' | 'disconnected' }): void {
     this.send(PUSH_CHANNELS.DB_HEALTH, data);
+  }
+
+  // ── settings-changed (no limit) ──
+
+  pushSettingsChanged(data: { section: string; keys: string[] }): void {
+    this.send(PUSH_CHANNELS.SETTINGS_CHANGED, data);
   }
 
   // ── export-progress (no limit) ──

@@ -7,13 +7,28 @@ import {
   STANDARD_FONT_URL,
 } from './pdfWorkerManager';
 
+export type PDFDocumentSource =
+  | { kind: 'data'; data: ArrayBuffer | Uint8Array }
+  | { kind: 'file'; path: string };
+
+export function filePathToPdfJsUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const encoded = normalized
+    .split('/')
+    .map((segment, index) => (index === 0 && /^[A-Za-z]:$/.test(segment)
+      ? segment
+      : encodeURIComponent(segment)))
+    .join('/');
+  return encoded.startsWith('/') ? `file://${encoded}` : `file:///${encoded}`;
+}
+
 export class PDFDocumentManager {
   private document: PDFDocumentProxy | null = null;
   private loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null;
   /** §5.4: Track in-flight page render tasks for cancellation on destroy. */
   private activeRenderTasks: Set<{ cancel(): void }> = new Set();
 
-  async loadDocument(buffer: ArrayBuffer | Uint8Array): Promise<PDFDocumentProxy> {
+  async loadDocument(source: PDFDocumentSource): Promise<PDFDocumentProxy> {
     // Cancel previous document if switching PDFs without explicit destroy
     if (this.document) {
       await this.destroy();
@@ -22,7 +37,9 @@ export class PDFDocumentManager {
     ensureWorkerInitialized();
 
     this.loadingTask = pdfjsLib.getDocument({
-      data: buffer,
+      ...(source.kind === 'data'
+        ? { data: source.data }
+        : { url: filePathToPdfJsUrl(source.path) }),
       cMapUrl: CMAP_URL,
       cMapPacked: CMAP_PACKED,
       standardFontDataUrl: STANDARD_FONT_URL,

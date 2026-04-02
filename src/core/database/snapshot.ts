@@ -156,7 +156,7 @@ export async function createSnapshot(
   const counts = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM papers) AS paper_count,
-      (SELECT COUNT(*) FROM papers WHERE analysis_status IN ('analyzed','reviewed','integrated')) AS analyzed_count,
+      (SELECT COUNT(*) FROM papers WHERE analysis_status = 'completed') AS analyzed_count,
       (SELECT COUNT(*) FROM concepts) AS concept_count,
       (SELECT COUNT(*) FROM paper_concept_map) AS mapping_count,
       (SELECT COUNT(*) FROM chunks) AS chunk_count,

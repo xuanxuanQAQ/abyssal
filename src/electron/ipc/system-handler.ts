@@ -77,8 +77,8 @@ export function registerSystemHandlers(ctx: AppContext): void {
       throw err;
     }
 
-    const buffer = await fs.readFile(pdfPath);
-    return { path: pdfPath, buffer } as any;
+    const data = await fs.readFile(pdfPath);
+    return { path: pdfPath, data } as any;
   });
 
   typedHandler('fs:savePDFAnnotations', logger, async (_e, paperId, annotations) => {

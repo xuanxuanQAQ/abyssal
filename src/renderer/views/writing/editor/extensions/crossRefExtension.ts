@@ -8,7 +8,15 @@
  * resolves display numbers at render time.
  */
 
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node, mergeAttributes, type CommandProps } from '@tiptap/core';
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    crossRef: {
+      insertCrossRef: (label: string, refType: string) => ReturnType;
+    };
+  }
+}
 
 export const crossRefExtension = Node.create({
   name: 'crossRef',
@@ -66,7 +74,7 @@ export const crossRefExtension = Node.create({
     return {
       insertCrossRef:
         (label: string, refType: string) =>
-        ({ chain }) => {
+        ({ chain }: CommandProps) => {
           return chain()
             .insertContent({
               type: this.name,

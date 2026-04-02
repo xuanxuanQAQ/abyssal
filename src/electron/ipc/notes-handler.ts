@@ -20,8 +20,22 @@ import type { TextChunk } from '../../core/types/chunk';
 import { asChunkId } from '../../core/types/common';
 import { createConceptFromDraft } from './shared/create-concept';
 
+/** CJK + Latin mixed word counting (mirrors frontend countWords) */
+function countWords(text: string): number {
+  const CJK_RANGE = /[\u4E00-\u9FFF\u3400-\u4DBF]/g;
+  const CJK_FULL_RANGE = /[\u4E00-\u9FFF\u3400-\u4DBF\u3000-\u303F]/g;
+
+  const cjkMatches = text.match(CJK_RANGE);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+
+  const processed = text.replace(CJK_FULL_RANGE, ' ');
+  const latinWords = processed.split(/\s+/).filter((w) => w.length > 0);
+
+  return cjkCount + latinWords.length;
+}
+
 /** Convert backend ResearchNote to frontend NoteMeta shape */
-function noteToFrontend(n: ResearchNote): NoteMeta {
+function noteToFrontend(n: ResearchNote, wordCount = 0): NoteMeta {
   return {
     id: n.id,
     title: n.title,
@@ -29,10 +43,25 @@ function noteToFrontend(n: ResearchNote): NoteMeta {
     linkedPaperIds: n.linkedPaperIds,
     linkedConceptIds: n.linkedConceptIds,
     tags: n.tags,
-    wordCount: 0,
+    wordCount,
     createdAt: n.createdAt,
     updatedAt: n.updatedAt,
   };
+}
+
+/** Read note file and compute word count */
+async function noteToFrontendWithWordCount(
+  n: ResearchNote,
+  workspaceRoot: string,
+): Promise<NoteMeta> {
+  let wc = 0;
+  try {
+    const absPath = path.join(workspaceRoot, n.filePath);
+    const content = await fsp.readFile(absPath, 'utf-8');
+    const fm = parseFrontmatter(content);
+    wc = countWords(fm.body);
+  } catch { /* file may not exist yet */ }
+  return noteToFrontend(n, wc);
 }
 
 /** Resolve the absolute path for a note file within the workspace */
@@ -169,19 +198,20 @@ export function registerNotesHandlers(ctx: AppContext): void {
   // ── db:notes:list ──
   typedHandler('db:notes:list', logger, async (_e, filter) => {
     const f = filter as NoteFilter | undefined;
+    let notes: ResearchNote[];
     if (f && (f.conceptIds?.length || f.paperIds?.length || f.tags?.length || f.searchText)) {
-      const notes = await ctx.dbProxy.queryNotes(f) as unknown as ResearchNote[];
-      return notes.map(noteToFrontend);
+      notes = await ctx.dbProxy.queryNotes(f) as unknown as ResearchNote[];
+    } else {
+      notes = await ctx.dbProxy.getAllNotes() as unknown as ResearchNote[];
     }
-    const notes = await ctx.dbProxy.getAllNotes() as unknown as ResearchNote[];
-    return notes.map(noteToFrontend);
+    return Promise.all(notes.map((n) => noteToFrontendWithWordCount(n, ctx.workspaceRoot)));
   });
 
   // ── db:notes:get ──
   typedHandler('db:notes:get', logger, async (_e, noteId) => {
     const note = await ctx.dbProxy.getNote(asNoteId(noteId)) as unknown as ResearchNote | null;
     if (!note) return null;
-    return noteToFrontend(note);
+    return noteToFrontendWithWordCount(note, ctx.workspaceRoot);
   });
 
   // ── db:notes:create ──
@@ -236,7 +266,7 @@ export function registerNotesHandlers(ctx: AppContext): void {
     const updated = await ctx.dbProxy.updateNoteMeta(asNoteId(noteId), p) as unknown as ResearchNote | null;
     if (!updated) throw new Error(`Note not found: ${noteId}`);
     ctx.pushManager?.enqueueDbChange(NOTE_TABLES, 'update');
-    return noteToFrontend(updated);
+    return noteToFrontendWithWordCount(updated, ctx.workspaceRoot);
   });
 
   // ── db:notes:delete ──

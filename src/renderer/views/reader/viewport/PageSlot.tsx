@@ -8,6 +8,7 @@ import type { Annotation, ContentBlockDTO } from '../../../../shared-types/model
 import type { PageMetadata } from '../core/pageMetadataPreloader';
 import type { Transform6 } from '../math/coordinateTransform';
 import type { MemoryBudget } from '../core/memoryBudget';
+import type { ColumnBounds } from '../selection/dragEnvelope';
 
 export interface PageSlotProps {
   pageNumber: number;
@@ -35,6 +36,8 @@ export interface PageSlotProps {
   /** DLA content blocks for this page */
   blocks?: ContentBlockDTO[];
   onBlockSelect?: (block: ContentBlockDTO) => void;
+  /** DLA highlight bounds from DragEnvelope for this page */
+  dragBounds?: ColumnBounds[] | undefined;
 }
 
 /**
@@ -59,6 +62,7 @@ const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
     memoryBudget,
     blocks = [],
     onBlockSelect,
+    dragBounds,
   } = props;
 
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
@@ -163,6 +167,7 @@ const PageSlot = React.memo(function PageSlot(props: PageSlotProps) {
         getPage={getPage}
         isInRenderWindow={true}
         blocks={blocks}
+        dragBounds={dragBounds}
       />
       <AnnotationLayer
         pageNumber={pageNumber}

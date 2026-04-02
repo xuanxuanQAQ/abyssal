@@ -177,6 +177,7 @@ export function HeatmapTab() {
 
   return (
     <div
+      className="analysis-scroll-stage analysis-heatmap-stage"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -197,7 +198,7 @@ export function HeatmapTab() {
       />
 
       {/* Grid — flex fill */}
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <div className="analysis-main-surface" style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <HeatmapGrid
           paperIds={sortedPaperIds}
           paperLabels={paperLabels}

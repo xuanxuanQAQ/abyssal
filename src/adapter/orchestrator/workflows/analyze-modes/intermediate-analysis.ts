@@ -4,16 +4,13 @@
  * Does NOT produce concept mappings — only extracts paper structure:
  * core_claims, method_summary, key_concepts, potential_relevance.
  *
- * Output is written as analyses/{paperId}.intermediate.json.
- * analysis_status = 'intermediate' (not 'completed').
+ * Output is returned to the parent workflow, which owns artifact/report writes
+ * and maps the result to a legal paper analysis status.
  *
  * Upgrade path: recommend_deep_analysis=true → queued for full analysis.
  *
  * See spec: §2.2
  */
-
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { LlmClient } from '../../../llm-client/llm-client';
 import type { Logger } from '../../../../core/infra/logger';
 import { extractBalancedJson } from '../../utils';
@@ -32,6 +29,11 @@ export interface IntermediateResult {
   keyConcepts: string[];
   potentialRelevance: number;
   recommendDeepAnalysis: boolean;
+  summary: string;
+  body: string;
+  model: string | null;
+  inputTruncated: boolean;
+  truncationMessage: string;
 }
 
 // ─── System prompt for intermediate analysis ───
@@ -61,6 +63,8 @@ export async function runIntermediateAnalysis(
   llmClient: LlmClient,
   logger: Logger,
   workspacePath: string,
+  workflowId = 'analyze.intermediate',
+  explicitModel?: string,
   signal?: AbortSignal,
 ): Promise<IntermediateResult | null> {
   // Truncate text for low-cost model (typically smaller context window).
@@ -88,7 +92,8 @@ export async function runIntermediateAnalysis(
       role: 'user',
       content: `Paper title: ${paperTitle}\n\n${truncatedText}`,
     }],
-    workflowId: 'discover_screen', // Use screening slot (low-cost)
+    workflowId,
+    ...(explicitModel && { model: explicitModel }),
     ...(signal && { signal }),
   });
   const llmMs = Date.now() - llmStart;
@@ -116,15 +121,19 @@ export async function runIntermediateAnalysis(
     recommendDeepAnalysis: parsed.recommendDeepAnalysis,
   });
 
-  // Write intermediate result
-  const analysesDir = path.join(workspacePath, 'analyses');
-  fs.mkdirSync(analysesDir, { recursive: true });
-  const outPath = path.join(analysesDir, `${paperId}.intermediate.json`);
-  const tmpPath = outPath + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, outPath);
+  const summary = buildIntermediateSummary(parsed);
+  const inputTruncated = truncatedText.length < fullText.length;
 
-  return parsed;
+  return {
+    ...parsed,
+    summary,
+    body: buildIntermediateReport(parsed),
+    model: result.model,
+    inputTruncated,
+    truncationMessage: inputTruncated
+      ? `Intermediate analysis truncated paper input from ${fullText.length} to ${truncatedText.length} characters`
+      : '',
+  };
 }
 
 // ─── Parse intermediate output ───
@@ -168,6 +177,56 @@ function parseIntermediateOutput(
       : [],
     potentialRelevance: Math.max(0, Math.min(1, Number(json['potential_relevance']) || 0.5)),
     recommendDeepAnalysis: json['recommend_deep_analysis'] === true,
+    summary: '',
+    body: '',
+    model: null,
+    inputTruncated: false,
+    truncationMessage: '',
   };
+}
+
+function buildIntermediateSummary(result: IntermediateResult): string {
+  if (result.methodSummary.trim().length > 0) {
+    return result.methodSummary.trim().slice(0, 2000);
+  }
+  if (result.coreClaims.length > 0) {
+    return result.coreClaims.map((claim) => claim.claim).join(' ').slice(0, 2000);
+  }
+  return result.keyConcepts.join(', ').slice(0, 2000);
+}
+
+function buildIntermediateReport(result: IntermediateResult): string {
+  const lines: string[] = [
+    '# Intermediate Analysis',
+    '',
+    `Paper ID: ${result.paperId}`,
+    `Paper Type: ${result.paperType}`,
+    `Potential Relevance: ${result.potentialRelevance.toFixed(2)}`,
+    `Recommend Deep Analysis: ${result.recommendDeepAnalysis ? 'yes' : 'no'}`,
+    '',
+  ];
+
+  if (result.methodSummary.trim().length > 0) {
+    lines.push('## Method Summary', '');
+    lines.push(result.methodSummary.trim(), '');
+  }
+
+  if (result.coreClaims.length > 0) {
+    lines.push('## Core Claims', '');
+    for (const claim of result.coreClaims) {
+      lines.push(`- ${claim.claim} (${claim.evidenceType}, ${claim.strength})`);
+    }
+    lines.push('');
+  }
+
+  if (result.keyConcepts.length > 0) {
+    lines.push('## Key Concepts', '');
+    for (const concept of result.keyConcepts) {
+      lines.push(`- ${concept}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n').trim() + '\n';
 }
 

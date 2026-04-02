@@ -16,10 +16,10 @@ export function ConceptsTab() {
   const selectedConceptId = useAppStore((s) => s.selectedConceptId);
 
   return (
-    <PanelGroup direction="horizontal" style={{ height: '100%' }}>
+    <PanelGroup className="workspace-panel-group analysis-concepts-stage" direction="horizontal" style={{ height: '100%' }}>
       {/* Left: Tree + Suggestions */}
       <Panel id="concept-tree" defaultSize={35} minSize={20} order={1}>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', borderRight: '1px solid var(--border-subtle)' }}>
+        <div className="workspace-lens-panel analysis-concepts-side" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', borderRight: '1px solid var(--border-subtle)' }}>
           <div style={{ flex: 1, overflow: 'auto' }}>
             <ConceptTree />
           </div>
@@ -32,9 +32,11 @@ export function ConceptsTab() {
       {/* Right: Detail */}
       <Panel id="concept-detail" defaultSize={65} minSize={30} order={2}>
         {selectedConceptId ? (
-          <ConceptDetail conceptId={selectedConceptId} />
+          <div className="workspace-main-stage analysis-concept-detail-stage">
+            <ConceptDetail conceptId={selectedConceptId} />
+          </div>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
+          <div className="workspace-empty-state" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
             选择左侧概念查看详情
           </div>
         )}

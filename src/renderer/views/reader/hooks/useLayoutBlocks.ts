@@ -8,27 +8,23 @@
  * Also triggers DLA analysis on document open and page changes.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { ContentBlockDTO } from '../../../../shared-types/models';
+import { getAPI } from '../../../core/ipc/bridge';
 
-declare global {
-  interface Window {
-    abyssal: {
-      dla: {
-        analyze: (paperId: string, pdfPath: string, pageIndices: number[]) => Promise<void>;
-        getBlocks: (paperId: string, pageIndex: number) => Promise<ContentBlockDTO[] | null>;
-        analyzeDocument: (paperId: string, pdfPath: string, totalPages: number) => Promise<void>;
-      };
-      on: {
-        dlaPageReady: (cb: (event: {
-          paperId: string;
-          pageIndex: number;
-          blocks: ContentBlockDTO[];
-        }) => void) => () => void;
-      };
-      [key: string]: unknown;
-    };
+interface DocumentBlocksPayload {
+  pageIndex: number;
+  blocks: ContentBlockDTO[];
+}
+
+export function groupDocumentBlocksByPage(
+  pages: DocumentBlocksPayload[],
+): Map<number, ContentBlockDTO[]> {
+  const grouped = new Map<number, ContentBlockDTO[]>();
+  for (const page of pages) {
+    grouped.set(page.pageIndex, page.blocks);
   }
+  return grouped;
 }
 
 interface UseLayoutBlocksOptions {
@@ -54,8 +50,9 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
   useEffect(() => {
     if (!paperId || !enabled) return;
 
+    const api = getAPI();
     console.log(`[DLA-Hook] Subscribing to dlaPageReady for paper=${paperId.slice(0, 8)}`);
-    const unsub = window.abyssal?.on?.dlaPageReady?.((event) => {
+    const unsub = api.on.dlaPageReady((event) => {
       if (event.paperId !== paperId) return;
 
       console.log(`[DLA-Hook] Page ${event.pageIndex} ready: ${event.blocks.length} blocks`);
@@ -80,31 +77,21 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
     if (!paperId || !enabled || totalPages === 0) return;
 
     let cancelled = false;
+    const api = getAPI();
 
     const loadFromDb = async () => {
-      // Try loading each page's blocks from DB (which checks persisted data first)
-      const loaded = new Map<number, ContentBlockDTO[]>();
-      for (let i = 0; i < totalPages; i++) {
-        try {
-          const blocks = await window.abyssal?.dla?.getBlocks?.(paperId, i);
-          if (blocks && blocks.length > 0 && !cancelled) {
-            loaded.set(i, blocks);
-          }
-        } catch {
-          break; // DB unavailable, stop trying
-        }
+      let loaded: Map<number, ContentBlockDTO[]>;
+      try {
+        const pages = await api.dla.getDocumentBlocks(paperId);
+        loaded = groupDocumentBlocksByPage(pages ?? []);
+      } catch {
+        loaded = new Map();
       }
 
       if (cancelled || loaded.size === 0) return;
 
       console.log(`[DLA-Hook] Loaded ${loaded.size} pages from DB for paper=${paperId.slice(0, 8)}`);
-      setBlockMap((prev) => {
-        const next = new Map(prev);
-        for (const [pageIdx, blocks] of loaded) {
-          if (!next.has(pageIdx)) next.set(pageIdx, blocks);
-        }
-        return next;
-      });
+      setBlockMap(loaded);
     };
 
     loadFromDb();
@@ -115,25 +102,34 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
   useEffect(() => {
     if (!paperId || !pdfPath || !enabled || totalPages === 0) return;
     if (triggeredDocRef.current === paperId) return;
+    if (blockMap.size >= totalPages) {
+      triggeredDocRef.current = paperId;
+      return;
+    }
 
+    const api = getAPI();
     triggeredDocRef.current = paperId;
     console.log(`[DLA-Hook] Triggering full document analysis for paper=${paperId.slice(0, 8)} (${totalPages} pages)`);
-    window.abyssal?.dla?.analyzeDocument?.(paperId, pdfPath, totalPages)?.catch((err) => {
+    api.dla.analyzeDocument(paperId, pdfPath, totalPages).catch((err) => {
       console.warn('[DLA-Hook] analyzeDocument failed (non-critical):', err);
     });
-  }, [paperId, pdfPath, totalPages, enabled]);
+  }, [paperId, pdfPath, totalPages, enabled, blockMap]);
 
   // Boost priority for current page range on scroll
   useEffect(() => {
     if (!paperId || !pdfPath || !enabled || currentPage < 1) return;
+    const api = getAPI();
 
     // Request P0/P1 pages around current viewport
     const nearby: number[] = [];
     for (let i = Math.max(0, currentPage - 3); i < Math.min(totalPages, currentPage + 2); i++) {
-      nearby.push(i);
+      if (!blockMap.has(i)) {
+        nearby.push(i);
+      }
     }
-    window.abyssal?.dla?.analyze?.(paperId, pdfPath, nearby)?.catch(() => {});
-  }, [paperId, pdfPath, currentPage, totalPages, enabled]);
+    if (nearby.length === 0) return;
+    api.dla.analyze(paperId, pdfPath, nearby).catch(() => {});
+  }, [paperId, pdfPath, currentPage, totalPages, enabled, blockMap]);
 
   return blockMap;
 }

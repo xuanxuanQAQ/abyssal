@@ -1,7 +1,7 @@
 /**
  * IPC handler: agent namespace
  *
- * Delegates to AgentLoop for conversational AI interactions.
+ * Delegates to SessionOrchestrator for conversational AI interactions.
  * Responses stream via push:agentStream channel.
  *
  * Session keying: frontend sends `context.contextKey` (e.g. "paper:abc123"),
@@ -13,21 +13,6 @@
 import type { AppContext } from '../app-context';
 import type { ChatContext } from '../../shared-types/ipc';
 import { typedHandler } from './register';
-
-// ─── In-memory conversation state ───
-// Keyed by `${workspaceRoot}::${contextKey}`.
-// `messages` uses the Anthropic message format (string or ContentBlock[])
-// so tool_use / tool_result history is preserved across turns.
-
-interface AgentMessage {
-  role: 'user' | 'assistant';
-  content: string | Array<Record<string, unknown>>;
-}
-
-const conversations = new Map<string, {
-  messages: AgentMessage[];
-  conversationId: string;
-}>();
 
 // Active AbortController per conversation (for cancellation support)
 const activeAbortControllers = new Map<string, AbortController>();
@@ -47,17 +32,15 @@ export function registerAgentHandlers(ctx: AppContext): void {
     const conversationId = 'workspace';
     const scoped = scopedKey(ctx.workspaceRoot, conversationId);
 
-    // Prefer SessionOrchestrator (capability-aware, session-enriched) over legacy AgentLoop
     const orchestrator = ctx.sessionOrchestrator;
-    const agentLoop = ctx.agentLoop;
 
     logger.info('[chat:send] Routing', {
       contextHint,
-      backend: orchestrator ? 'SessionOrchestrator' : agentLoop ? 'AgentLoop' : 'none',
+      backend: orchestrator ? 'SessionOrchestrator' : 'none',
       msgLen: (message as string).length,
     });
 
-    if (!orchestrator && !agentLoop) {
+    if (!orchestrator) {
       logger.warn('[chat:send] No AI backend available (no LLM configured)');
       ctx.pushManager?.pushAgentStream({
         type: 'error',
@@ -73,18 +56,7 @@ export function registerAgentHandlers(ctx: AppContext): void {
     activeAbortControllers.set(scoped, abortController);
 
     try {
-      if (orchestrator) {
-        // Route through SessionOrchestrator — includes session context, capabilities, proactive rules
-        await orchestrator.handleUserMessage(message as string, contextHint, abortController.signal);
-      } else {
-        // Fallback to legacy AgentLoop
-        let state = conversations.get(scoped);
-        if (!state) {
-          state = { messages: [], conversationId };
-          conversations.set(scoped, state);
-        }
-        await agentLoop!.run(message as string, state as any, chatCtx, abortController.signal);
-      }
+      await orchestrator.handleUserMessage(message as string, chatCtx, abortController.signal);
     } catch (err) {
       if (abortController.signal.aborted) {
         // Aborted by user — push done event so frontend can finalize
@@ -134,26 +106,9 @@ export function registerAgentHandlers(ctx: AppContext): void {
 
   // ─── Chat persistence ───
   // saveMessage writes to SQLite via DbProxy so history survives restart.
-  // The in-memory `conversations` map is kept only for agent loop context
-  // (which includes tool_use / tool_result blocks not stored in DB).
 
   typedHandler('db:chat:saveMessage', logger, async (_e, record) => {
-    const contextKey = record.contextSourceKey;
-    const scoped = scopedKey(ctx.workspaceRoot, contextKey);
-
-    // Persist to SQLite
     await ctx.dbProxy.saveChatMessage(record);
-
-    // Also maintain in-memory agent loop state
-    const existing = conversations.get(scoped);
-    if (existing) {
-      existing.messages.push({ role: record.role, content: record.content });
-    } else {
-      conversations.set(scoped, {
-        messages: [{ role: record.role, content: record.content }],
-        conversationId: contextKey,
-      });
-    }
   });
 
   typedHandler('db:chat:getHistory', logger, async (_e, contextKey, opts?) => {
@@ -164,11 +119,7 @@ export function registerAgentHandlers(ctx: AppContext): void {
   });
 
   typedHandler('db:chat:deleteSession', logger, async (_e, contextKey) => {
-    const scoped = scopedKey(ctx.workspaceRoot, contextKey);
-    // Delete from both SQLite and in-memory cache
     await ctx.dbProxy.deleteChatSession(contextKey);
-    conversations.delete(scoped);
-    // Also clear the orchestrator's in-memory conversation
     ctx.sessionOrchestrator?.clearConversation();
   });
 

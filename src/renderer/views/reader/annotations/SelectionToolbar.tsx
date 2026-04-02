@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Highlighter, StickyNote, Tag, ChevronDown, PenLine, MessageSquarePlus, Image } from 'lucide-react';
+import { Highlighter, StickyNote, Tag, ChevronDown, PenLine, Image } from 'lucide-react';
 import { ColorPicker } from './ColorPicker';
 import type { HighlightColor } from '../../../../shared-types/enums';
 import { HIGHLIGHT_COLOR_MAP as COLOR_MAP } from '../shared/highlightColors';
@@ -12,7 +12,6 @@ export function SelectionToolbar({
   onConceptTag,
   onColorChange,
   onMemo,
-  onAskAI,
   capturedImageCount = 0,
 }: {
   position: { x: number; y: number } | null;
@@ -23,8 +22,6 @@ export function SelectionToolbar({
   onColorChange: (color: HighlightColor) => void;
   /** v1.3: Record memo — opens QuickMemoFloat with selected text */
   onMemo?: () => void;
-  /** 将选中文本发送到聊天栏提问 */
-  onAskAI?: () => void;
   /** Number of auto-captured images (formula/figure/table) in the selection range */
   capturedImageCount?: number;
 }) {
@@ -181,17 +178,6 @@ export function SelectionToolbar({
             <Image size={14} />
             <span>{capturedImageCount}</span>
           </div>
-        </>
-      )}
-
-      {/* Ask AI about selection */}
-      {onAskAI && (
-        <>
-          <div style={separatorStyle} />
-          <button type="button" onClick={onAskAI} style={buttonStyle}>
-            <MessageSquarePlus size={16} />
-            <span>提问</span>
-          </button>
         </>
       )}
     </div>

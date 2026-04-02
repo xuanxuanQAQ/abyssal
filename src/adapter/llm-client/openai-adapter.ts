@@ -1,6 +1,5 @@
 /**
- * OpenAI-compatible adapter — supports four backends via baseURL routing:
- *   OpenAI, DeepSeek, Ollama, vLLM
+ * OpenAI-compatible adapter — supports cloud and OpenAI-compatible backends.
  *
  * Handles:
  * - system role as messages[0]
@@ -35,7 +34,7 @@ import { mapFinishReason, safeParseJson } from './shared';
 export interface OpenAIBackendConfig {
   baseURL?: string;
   apiKey: string;
-  provider: string; // 'openai' | 'deepseek' | 'ollama' | 'vllm'
+  provider: string; // 'openai' | 'deepseek' | 'gemini' | 'siliconflow' | 'vllm'
 }
 
 // ─── OpenAI adapter ───
@@ -47,7 +46,7 @@ export class OpenAIAdapter implements LlmAdapter {
   constructor(config: OpenAIBackendConfig) {
     this.provider = config.provider;
     this.client = new OpenAI({
-      apiKey: config.apiKey || 'not-needed', // Ollama doesn't need a key
+      apiKey: config.apiKey || 'not-needed', // local OpenAI-compatible adapters may not need a key
       baseURL: config.baseURL,
     });
   }
@@ -273,7 +272,7 @@ export class OpenAIAdapter implements LlmAdapter {
 
   private checkContextOverflow(model: string, systemPrompt: string, messages: Message[]): void {
     // Only check for local models where context window is a real concern
-    if (this.provider !== 'ollama' && this.provider !== 'vllm') return;
+    if (this.provider !== 'vllm') return;
 
     const window = getModelContextWindow(model);
     const allText = systemPrompt + messages.map((m) =>

@@ -43,6 +43,9 @@ export function insertLayoutBlocks(
 ): void {
   if (blocks.length === 0) return;
 
+  const paperIds = Array.from(new Set(blocks.map((block) => block.paperId)));
+  const deleteStmt = db.prepare('DELETE FROM layout_blocks WHERE paper_id = ?');
+
   const stmt = db.prepare(`
     INSERT INTO layout_blocks
       (paper_id, page_index, block_type, bbox_x, bbox_y, bbox_w, bbox_h,
@@ -52,6 +55,10 @@ export function insertLayoutBlocks(
   `);
 
   const batchInsert = db.transaction((rows: LayoutBlockRow[]) => {
+    for (const paperId of paperIds) {
+      deleteStmt.run(paperId);
+    }
+
     for (const b of rows) {
       stmt.run(
         b.paperId, b.pageIndex, b.blockType,
@@ -139,7 +146,10 @@ export function insertSectionBoundaries(
   db: Database.Database,
   boundaries: SectionBoundaryRow[],
 ): void {
-  if (boundaries.length === 0) return;
+  const paperIds = Array.from(new Set(boundaries.map((boundary) => boundary.paperId)));
+  if (paperIds.length === 0) return;
+
+  const deleteStmt = db.prepare('DELETE FROM section_boundaries WHERE paper_id = ?');
 
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO section_boundaries
@@ -148,6 +158,10 @@ export function insertSectionBoundaries(
   `);
 
   const batchInsert = db.transaction((rows: SectionBoundaryRow[]) => {
+    for (const paperId of paperIds) {
+      deleteStmt.run(paperId);
+    }
+
     for (const b of rows) {
       stmt.run(
         b.paperId, b.label, b.title, b.depth,

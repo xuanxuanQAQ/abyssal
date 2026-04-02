@@ -76,6 +76,7 @@ export function AnnotationList({
   if (paperId === null || !annotations || annotations.length === 0) {
     return (
       <div
+        className="reader-annotation-empty workspace-empty-state"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -92,6 +93,7 @@ export function AnnotationList({
 
   return (
     <div
+      className="reader-annotation-list"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -101,6 +103,7 @@ export function AnnotationList({
     >
       {/* Statistics line */}
       <div
+        className="reader-annotation-stats"
         style={{
           padding: '8px 12px',
           fontSize: 'var(--text-xs)',
@@ -114,8 +117,9 @@ export function AnnotationList({
       {/* Grouped annotation list */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 8 }}>
         {grouped.map((group) => (
-          <div key={group.page}>
+          <div key={group.page} className="reader-annotation-group">
             <div
+              className="reader-annotation-group-title"
               style={{
                 fontSize: 'var(--text-xs)',
                 fontWeight: 600,

@@ -42,6 +42,9 @@ const ThumbnailItem = React.memo(function ThumbnailItem(props: ThumbnailItemProp
 
   return (
     <div
+      className="reader-thumbnail-item"
+      data-current={isCurrent ? 'true' : 'false'}
+      data-annotated={hasAnnotations ? 'true' : 'false'}
       style={{
         position: 'relative',
         cursor: 'pointer',
@@ -53,6 +56,7 @@ const ThumbnailItem = React.memo(function ThumbnailItem(props: ThumbnailItemProp
     >
       <canvas
         ref={canvasRef}
+        className="reader-thumbnail-canvas"
         width={thumbWidth * dpr}
         height={thumbHeight * dpr}
         style={{
@@ -67,6 +71,7 @@ const ThumbnailItem = React.memo(function ThumbnailItem(props: ThumbnailItemProp
       />
       {hasAnnotations && annotationColor != null && (
         <div
+          className="reader-thumbnail-annotation-dot"
           style={{
             position: 'absolute',
             top: 2,
@@ -79,6 +84,7 @@ const ThumbnailItem = React.memo(function ThumbnailItem(props: ThumbnailItemProp
         />
       )}
       <span
+        className="reader-thumbnail-label"
         style={{
           fontSize: 'var(--text-xs)',
           color: 'var(--text-muted)',

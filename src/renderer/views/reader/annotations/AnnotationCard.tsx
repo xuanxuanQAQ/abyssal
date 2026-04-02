@@ -61,6 +61,7 @@ export function AnnotationCard({
           onClick={onClick}
           role="button"
           tabIndex={0}
+          className="reader-annotation-card"
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') onClick();
           }}
@@ -71,13 +72,7 @@ export function AnnotationCard({
             borderRadius: 'var(--radius-sm)',
             cursor: 'pointer',
             gap: 8,
-            transition: 'background-color 120ms ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = 'var(--bg-surface)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'transparent';
+            transition: 'background-color 120ms ease, transform 120ms ease, box-shadow 120ms ease',
           }}
         >
           {/* Left colored bar */}
@@ -158,6 +153,7 @@ export function AnnotationCard({
 
       <ContextMenu.Portal>
         <ContextMenu.Content
+          className="workspace-floating-menu reader-annotation-menu"
           style={{
             backgroundColor: '#1e1e1e',
             border: '1px solid #3a3a3a',
@@ -175,6 +171,7 @@ export function AnnotationCard({
             </ContextMenu.SubTrigger>
             <ContextMenu.Portal>
               <ContextMenu.SubContent
+                className="workspace-floating-menu reader-annotation-menu"
                 style={{
                   backgroundColor: '#1e1e1e',
                   border: '1px solid #3a3a3a',

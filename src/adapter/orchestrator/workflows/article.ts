@@ -37,6 +37,11 @@ import { buildProtectionBlock, verifyProtection } from './paragraph-protection/p
 import { resetForNewVersion } from './paragraph-protection/edit-tracker';
 import { generateSectionSummary, formatPrecedingContext } from './section-summary/deterministic-summary';
 
+const ARTICLE_STAGE_WORKFLOWS = {
+  section: 'article.section',
+  crag: 'article.crag',
+} as const;
+
 // ─── Services ───
 
 export interface ArticleServices {
@@ -91,6 +96,9 @@ async function generateSection(
   runner: WorkflowRunnerContext,
 ): Promise<void> {
   const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath } = services;
+  const sectionWorkflowId = ARTICLE_STAGE_WORKFLOWS.section;
+  const cragWorkflowId = ARTICLE_STAGE_WORKFLOWS.crag;
+  const sectionModel = llmClient.resolveModel(sectionWorkflowId);
 
   // ══ Step 1: Outline context read (§3.2) ══
   const entry = await dbProxy.getOutlineEntry(outlineEntryId);
@@ -232,7 +240,7 @@ async function generateSection(
       const r = await llmClient.complete({
         systemPrompt: sys,
         messages: [{ role: 'user', content: user }],
-        workflowId: 'discover_screen',
+        workflowId: cragWorkflowId,
       });
       return r.text;
     };
@@ -268,8 +276,8 @@ async function generateSection(
 
   const allocation = contextBudgetManager.allocate({
     taskType: 'article',
-    model: 'claude-opus-4',
-    modelContextWindow: llmClient.getContextWindow('article'),
+    model: sectionModel,
+    modelContextWindow: llmClient.getContextWindow(sectionWorkflowId),
     costPreference: 'balanced',
     sources: [
       { sourceType: 'writing_instruction' as const, estimatedTokens: countTokens(current.thesis + current.writingInstruction), priority: 'ABSOLUTE' as const, content: null },
@@ -325,7 +333,7 @@ async function generateSection(
   const result = await llmClient.complete({
     systemPrompt: fullSystemPrompt,
     messages: [{ role: 'user', content: userContent }],
-    workflowId: 'article',
+    workflowId: sectionWorkflowId,
   });
 
   // ══ Step 9: Citation validation ══

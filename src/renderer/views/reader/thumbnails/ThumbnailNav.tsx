@@ -72,6 +72,7 @@ export function ThumbnailNav({
   return (
     <div
       ref={containerRef}
+      className="reader-thumbnail-nav"
       style={{
         height: '100%',
         overflowY: 'auto',

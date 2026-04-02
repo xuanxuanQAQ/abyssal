@@ -84,6 +84,8 @@ export function NavRail() {
           flexDirection: 'column',
           width: 48,
           height: '100%',
+          padding: '10px 0 8px',
+          gap: 2,
           zIndex: Z_INDEX.NAV_RAIL,
         }}
       >

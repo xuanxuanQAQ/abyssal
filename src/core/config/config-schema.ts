@@ -502,7 +502,7 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     type: 'enum',
     default: 'anthropic',
     required: false,
-    constraints: { enum: ['claude', 'anthropic', 'openai', 'deepseek', 'ollama', 'siliconflow'] },
+    constraints: { enum: ['claude', 'anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow'] },
     cliFlag: '--provider',
     envVar: 'ABYSSAL_LLM_DEFAULT_PROVIDER',
   },
@@ -539,6 +539,14 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     sensitive: true,
     envVar: 'OPENAI_API_KEY',
     requiredWhen: (c) => usesProvider(c, 'openai'),
+  },
+  'apiKeys.geminiApiKey': {
+    type: 'string',
+    default: null,
+    required: false,
+    sensitive: true,
+    envVar: 'GEMINI_API_KEY',
+    requiredWhen: (c) => usesProvider(c, 'gemini'),
   },
   'apiKeys.deepseekApiKey': {
     type: 'string',

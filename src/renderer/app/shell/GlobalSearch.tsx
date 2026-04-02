@@ -127,6 +127,8 @@ export function GlobalSearch() {
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
+  const [isRendered, setIsRendered] = useState(globalSearchOpen);
+  const [isClosing, setIsClosing] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const queryIdRef = useRef(0); // stale query guard
 
@@ -279,6 +281,22 @@ export function GlobalSearch() {
     }
   }, [globalSearchOpen]);
 
+  useEffect(() => {
+    if (globalSearchOpen) {
+      setIsRendered(true);
+      const frame = requestAnimationFrame(() => setIsClosing(false));
+      return () => cancelAnimationFrame(frame);
+    }
+
+    if (!isRendered) return;
+    setIsClosing(true);
+    const timeout = setTimeout(() => {
+      setIsRendered(false);
+      setIsClosing(false);
+    }, 180);
+    return () => clearTimeout(timeout);
+  }, [globalSearchOpen, isRendered]);
+
   // §8.5 Escape 处理
   const handleEscape = useCallback(() => {
     if (globalSearchQuery) {
@@ -326,13 +344,14 @@ export function GlobalSearch() {
     }
   });
 
-  if (!globalSearchOpen) return null;
+  if (!isRendered) return null;
 
   return (
     <>
       {/* §8.2 遮罩层 */}
       <div
         className="global-search-backdrop"
+        data-state={isClosing ? 'closing' : 'open'}
         style={{ zIndex: Z_INDEX.MODAL_BACKDROP }}
         onClick={closeGlobalSearch}
       />
@@ -340,6 +359,8 @@ export function GlobalSearch() {
       {/* §8.2 弹层 */}
       <div
         className="global-search-panel"
+        data-state={isClosing ? 'closing' : 'open'}
+        data-mode={isCommandMode ? 'command' : 'search'}
         role="dialog"
         aria-modal="true"
         aria-label={t('globalSearch.title')}
@@ -348,6 +369,7 @@ export function GlobalSearch() {
       >
         {/* 搜索输入框 */}
         <div
+          className="global-search-input-shell"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -361,6 +383,7 @@ export function GlobalSearch() {
             : <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
           }
           <input
+            className="global-search-input"
             ref={inputRef}
             type="text"
             role="combobox"
@@ -378,8 +401,30 @@ export function GlobalSearch() {
               fontSize: 'var(--text-md)',
             }}
           />
+          {(isCommandMode || globalSearchQuery) && (
+            <span
+              className="global-search-mode-pill"
+              data-mode={isCommandMode ? 'command' : 'search'}
+              style={{
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                padding: '4px 7px',
+                borderRadius: '999px',
+                color: isCommandMode ? 'var(--accent-color)' : 'var(--text-muted)',
+                background: isCommandMode
+                  ? 'color-mix(in srgb, var(--accent-color) 10%, transparent)'
+                  : 'color-mix(in srgb, var(--bg-hover) 84%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--border-subtle) 82%, white 18%)',
+              }}
+            >
+              {isCommandMode ? 'Command' : 'Search'}
+            </span>
+          )}
           {globalSearchQuery && (
             <button
+              className="global-search-clear-btn"
               onClick={() => setGlobalSearchQuery('')}
               aria-label={t('globalSearch.clearSearch')}
               style={{
@@ -398,6 +443,7 @@ export function GlobalSearch() {
         {/* 结果列表 */}
         <div
           id="global-search-results"
+          className="global-search-results"
           role="listbox"
           style={{
             flex: 1,
@@ -407,7 +453,7 @@ export function GlobalSearch() {
         >
           {/* 分组标题 */}
           {!globalSearchQuery && recentItems.length > 0 && (
-            <div style={{ padding: '6px 16px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
+            <div className="global-search-section-title" style={{ padding: '6px 16px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
               {t('globalSearch.recent')}
             </div>
           )}
@@ -415,6 +461,8 @@ export function GlobalSearch() {
           {displayItems.map((item, index) => (
             <div
               key={item.id}
+              className="global-search-item"
+              data-active={index === highlightIndex ? 'true' : 'false'}
               role="option"
               aria-selected={index === highlightIndex}
               onClick={item.action}
@@ -424,20 +472,20 @@ export function GlobalSearch() {
                 gap: 8,
                 padding: '8px 16px',
                 cursor: 'pointer',
-                backgroundColor:
-                  index === highlightIndex ? 'var(--bg-hover)' : 'transparent',
-                borderLeft:
-                  index === highlightIndex
-                    ? '2px solid var(--accent-color)'
-                    : '2px solid transparent',
+                borderLeft: index === highlightIndex ? '2px solid var(--accent-color)' : '2px solid transparent',
+                transform: index === highlightIndex ? 'translateX(2px)' : 'translateX(0)',
+                animation: `shell-list-in 180ms var(--easing-default) both`,
+                animationDelay: `${Math.min(index, 6) * 20}ms`,
+                transition: 'background-color var(--duration-fast) var(--easing-default), border-color var(--duration-fast) var(--easing-default), transform var(--duration-fast) var(--easing-default)',
               }}
               onMouseEnter={() => setHighlightIndex(index)}
             >
-              <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+              <span className="global-search-item-icon" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
                 {item.icon}
               </span>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
+              <div className="global-search-item-copy" style={{ flex: 1, overflow: 'hidden' }}>
                 <div
+                  className="global-search-item-title"
                   style={{
                     color: 'var(--text-primary)',
                     fontSize: 'var(--text-sm)',
@@ -450,6 +498,7 @@ export function GlobalSearch() {
                 </div>
                 {item.subtitle && (
                   <div
+                    className="global-search-item-subtitle"
                     style={{
                       color: 'var(--text-muted)',
                       fontSize: 'var(--text-xs)',
@@ -466,7 +515,7 @@ export function GlobalSearch() {
           ))}
 
           {globalSearchQuery && !isCommandMode && results.length === 0 && !isSearching && (
-            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+            <div className="global-search-empty" style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
               {t('globalSearch.noResults')}
             </div>
           )}
@@ -479,6 +528,7 @@ export function GlobalSearch() {
 
         {/* 底部快捷键提示 */}
         <div
+          className="global-search-footer"
           style={{
             padding: '6px 16px',
             borderTop: '1px solid var(--border-subtle)',
@@ -488,10 +538,10 @@ export function GlobalSearch() {
             color: 'var(--text-muted)',
           }}
         >
-          <span>{t('globalSearch.hints.navigate')}</span>
-          <span>{t('globalSearch.hints.open')}</span>
-          <span>{t('globalSearch.hints.close')}</span>
-          <span style={{ marginLeft: 'auto' }}>{t('globalSearch.hints.commandMode')}</span>
+          <span className="global-search-hint-chip">{t('globalSearch.hints.navigate')}</span>
+          <span className="global-search-hint-chip">{t('globalSearch.hints.open')}</span>
+          <span className="global-search-hint-chip">{t('globalSearch.hints.close')}</span>
+          <span className="global-search-hint-chip" style={{ marginLeft: 'auto' }}>{t('globalSearch.hints.commandMode')}</span>
         </div>
       </div>
     </>

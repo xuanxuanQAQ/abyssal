@@ -7,9 +7,9 @@
  * - data-chat-input 属性用于 Peek 焦点保护
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, X, Quote, Image as ImageIcon } from 'lucide-react';
+import { Send, Square, X, Quote, Image as ImageIcon, Loader2, Wrench } from 'lucide-react';
 import { useChatStore } from '../../../core/store/useChatStore';
 import { useReaderStore } from '../../../core/store/useReaderStore';
 import type { ContextSource } from '../../../../shared-types/models';
@@ -23,6 +23,8 @@ interface ChatInputProps {
   onAbort?: () => void;
   disabled?: boolean;
   streaming?: boolean;
+  statusText?: string | undefined;
+  statusMode?: 'generating' | 'tool' | undefined;
 }
 
 function getPlaceholder(source: ContextSource, t: ReturnType<typeof import('react-i18next').useTranslation>['t']): string {
@@ -50,16 +52,23 @@ function getPlaceholder(source: ContextSource, t: ReturnType<typeof import('reac
   }
 }
 
-export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort, disabled, streaming }: ChatInputProps) {
+export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort, disabled, streaming, statusText, statusMode = 'generating' }: ChatInputProps) {
   const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shadowRef = useRef<HTMLDivElement>(null);
+  const [isFocused, setIsFocused] = useState(false);
   const draft = useChatStore((s) => s.chatInputDraft);
   const setDraft = useChatStore((s) => s.setChatInputDraft);
   const quotedSelection = useReaderStore((s) => s.quotedSelection);
   const selectionPayload = useReaderStore((s) => s.selectionPayload);
+  const mappedText = quotedSelection?.text ?? selectionPayload?.text ?? null;
+  const mappedPage = quotedSelection?.page ?? selectionPayload?.sourcePages?.[0] ?? null;
   const clearQuote = useCallback(() => useReaderStore.getState().setQuotedSelection(null), []);
   const clearPayload = useCallback(() => useReaderStore.getState().setSelectionPayload(null), []);
+  const clearMappedSelection = useCallback(() => {
+    clearQuote();
+    clearPayload();
+  }, [clearPayload, clearQuote]);
 
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -107,45 +116,65 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
   }, [onAbort]);
 
   const hasDraft = draft.trim().length > 0;
+  const showStatus = Boolean(streaming && statusText);
+  const composerTopPadding = showStatus ? 30 : 11;
 
   return (
     <div
+      className="chat-input-shell"
+      data-focused={isFocused ? 'true' : 'false'}
+      data-streaming={streaming ? 'true' : 'false'}
+      data-has-draft={hasDraft ? 'true' : 'false'}
+      data-has-selection={mappedText || selectionPayload?.images?.length ? 'true' : 'false'}
       style={{
-        padding: '8px 12px 12px',
+        padding: '10px 10px 10px',
         flexShrink: 0,
         position: 'relative',
+        backgroundColor: 'transparent',
       }}
     >
       {/* 引用卡片 */}
-      {quotedSelection && (
+      {mappedText && (
         <div
+          className="chat-input-attachment-card chat-input-quote-card"
           style={{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 6,
-            marginBottom: 8,
-            padding: '8px 10px',
-            backgroundColor: 'var(--bg-surface)',
+            marginBottom: 10,
+            padding: '9px 10px',
+            background: 'color-mix(in srgb, var(--bg-surface) 86%, transparent)',
             border: '1px solid var(--border-subtle)',
-            borderRadius: 8,
+            borderRadius: 12,
             fontSize: 12,
             lineHeight: 1.5,
             color: 'var(--text-secondary)',
           }}
         >
           <Quote size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.5 }} />
-          <span style={{
+          <div style={{
             flex: 1,
-            overflow: 'hidden',
-            display: '-webkit-box',
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: 'vertical',
           }}>
-            {quotedSelection.text}
-          </span>
+            <div
+              className="chat-input-quote-copy"
+              style={{
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: 'vertical',
+            }}>
+              {mappedText}
+            </div>
+            {mappedPage !== null && (
+              <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                p.{mappedPage}
+              </div>
+            )}
+          </div>
           <button
             type="button"
-            onClick={clearQuote}
+            onClick={clearMappedSelection}
+            className="chat-input-attachment-clear"
             style={{
               flexShrink: 0,
               background: 'none',
@@ -166,15 +195,16 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
       {/* DLA 图片截图预览 */}
       {selectionPayload?.images && selectionPayload.images.length > 0 && (
         <div
+          className="chat-input-attachment-card chat-input-image-card"
           style={{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 6,
-            marginBottom: 8,
-            padding: '8px 10px',
-            backgroundColor: 'var(--bg-surface)',
+            marginBottom: 10,
+            padding: '9px 10px',
+            background: 'color-mix(in srgb, var(--bg-surface) 86%, transparent)',
             border: '1px solid var(--border-subtle)',
-            borderRadius: 8,
+            borderRadius: 12,
           }}
         >
           <ImageIcon size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.5 }} />
@@ -182,6 +212,7 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
             {selectionPayload.images.map((img, idx) => (
               <div
                 key={idx}
+                className="chat-input-image-thumb"
                 style={{
                   position: 'relative',
                   borderRadius: 4,
@@ -221,6 +252,7 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
           <button
             type="button"
             onClick={clearPayload}
+            className="chat-input-attachment-clear"
             style={{
               flexShrink: 0,
               background: 'none',
@@ -242,108 +274,170 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
       <div
         ref={shadowRef}
         aria-hidden
+        className="chat-input-shadow"
         style={{
           position: 'absolute',
           visibility: 'hidden',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
-          width: 'calc(100% - 68px)',
-          padding: '10px 40px 10px 14px',
+          width: 'calc(100% - 80px)',
+          padding: `${composerTopPadding}px 52px 11px 16px`,
           fontSize: 13,
           lineHeight: 1.5,
           pointerEvents: 'none',
         }}
       />
 
-      <div style={{ position: 'relative' }}>
+      <div className="chat-input-composer" style={{ 
+        position: 'relative', 
+        marginTop: 0,
+        background: 'color-mix(in srgb, var(--bg-surface-lowest) 90%, transparent)',
+        border: streaming
+          ? '1px solid rgba(59, 130, 246, 0.24)'
+          : isFocused
+            ? '1px solid rgba(59, 130, 246, 0.16)'
+            : '1px solid var(--border-subtle)',
+        boxShadow: streaming
+          ? '0 0 0 2px color-mix(in srgb, var(--accent-color) 6%, transparent), inset 0 1px 0 rgba(255,255,255,0.26)'
+          : isFocused
+            ? '0 0 0 2px rgba(59, 130, 246, 0.05), inset 0 1px 0 rgba(255,255,255,0.26)'
+            : 'inset 0 1px 0 rgba(255,255,255,0.24)',
+        borderRadius: '18px',
+        transition: 'all 180ms var(--easing-default)',
+      }}>
+        {showStatus && (
+          <div className="chat-input-status-inline" data-mode={statusMode}>
+            {statusMode === 'tool' ? (
+              <Wrench size={11} style={{ flexShrink: 0 }} />
+            ) : (
+              <Loader2 size={11} style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+            )}
+            <span>{statusText}</span>
+          </div>
+        )}
+        <div
+          aria-hidden
+          className="chat-input-composer-edge"
+          style={{
+            position: 'absolute',
+            left: 16,
+            right: 52,
+            top: 0,
+            height: 1,
+            background: streaming
+              ? 'linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.28), transparent)'
+              : isFocused
+                ? 'linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.14), transparent)'
+                : 'transparent',
+            transition: 'background 180ms var(--easing-default)',
+          }}
+        />
         <textarea
           ref={textareaRef}
+          className="chat-input-textarea"
           data-chat-input="true"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
           placeholder={getPlaceholder(source, t)}
           rows={1}
           disabled={disabled}
           style={{
             width: '100%',
             resize: 'none',
-            border: '1px solid var(--border-default)',
-            borderRadius: 12,
-            padding: '10px 40px 10px 14px',
+            border: 'none',
+            borderRadius: 18,
+            padding: `${composerTopPadding}px 54px 11px 16px`,
             fontSize: 13,
             lineHeight: 1.5,
             color: 'var(--text-primary)',
-            backgroundColor: 'var(--bg-base)',
+            backgroundColor: 'transparent',
             outline: 'none',
             minHeight: MIN_HEIGHT,
             maxHeight: MAX_HEIGHT,
             overflow: 'auto',
             boxSizing: 'border-box',
-            transition: 'border-color 150ms ease, box-shadow 150ms ease',
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = 'var(--accent-color)';
-            e.currentTarget.style.boxShadow = '0 0 0 2px color-mix(in srgb, var(--accent-color) 20%, transparent)';
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = 'var(--border-default)';
-            e.currentTarget.style.boxShadow = 'none';
+            fontFamily: 'system-ui, -apple-system, sans-serif',
           }}
         />
 
         {streaming ? (
           <button
             onClick={handleAbort}
-            title={t('context.chat.stopGeneration')}
+            className="chat-input-action-btn chat-input-action-btn--stop"
+            title={t('context.chat.stopGeneration', 'Stop Generating')}
             style={{
               position: 'absolute',
-              right: 5,
-              top: 5,
-              width: 34,
-              height: 34,
+              right: 10,
+              bottom: 7,
+              width: 28,
+              height: 28,
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '50%',
+              background: 'color-mix(in srgb, var(--bg-surface-low) 86%, transparent)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              border: 'none',
-              borderRadius: 10,
-              backgroundColor: 'var(--danger, #ef4444)',
-              color: 'white',
-              cursor: 'pointer',
-              transition: 'all 150ms ease',
-              opacity: 1,
+              transition: 'background-color 180ms var(--easing-default), color 180ms var(--easing-default), border-color 180ms var(--easing-default)',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
+              e.currentTarget.style.color = 'var(--text-primary)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.backgroundColor = 'color-mix(in srgb, var(--bg-surface-low) 86%, transparent)';
+              e.currentTarget.style.color = 'var(--text-secondary)';
             }}
           >
-            <Square size={12} fill="white" />
+            <Square size={14} fill="currentColor" />
           </button>
         ) : (
           <button
             onClick={handleSend}
             disabled={!hasDraft || disabled}
-            title={t('context.chat.send')}
+            className="chat-input-action-btn chat-input-action-btn--send"
+            title={t('context.chat.send', 'Send message')}
             style={{
               position: 'absolute',
-              right: 5,
-              top: 5,
-              width: 34,
-              height: 34,
+              right: 10,
+              bottom: 7,
+              width: 28,
+              height: 28,
+              border: hasDraft && !disabled ? '1px solid rgba(59, 130, 246, 0.16)' : '1px solid var(--border-subtle)',
+              borderRadius: '50%',
+              background: hasDraft && !disabled
+                ? 'linear-gradient(180deg, var(--accent-color), color-mix(in srgb, var(--accent-color) 82%, #0f172a))'
+                : 'color-mix(in srgb, var(--bg-surface-low) 86%, transparent)',
+              color: hasDraft && !disabled ? '#ffffff' : 'var(--text-muted)',
+              cursor: hasDraft && !disabled ? 'pointer' : 'default',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              border: 'none',
-              borderRadius: 10,
-              backgroundColor: hasDraft ? 'var(--accent-color)' : 'transparent',
-              color: hasDraft ? 'white' : 'var(--text-muted)',
-              cursor: hasDraft ? 'pointer' : 'default',
-              transition: 'all 150ms ease',
-              opacity: hasDraft ? 1 : 0.5,
+              transition: 'background-color 180ms var(--easing-default), transform 180ms var(--easing-default), box-shadow 180ms var(--easing-default), border-color 180ms var(--easing-default)',
+              transform: hasDraft && !disabled ? 'scale(1)' : 'scale(0.96)',
+              boxShadow: hasDraft && !disabled ? '0 8px 18px color-mix(in srgb, var(--accent-color) 26%, transparent)' : 'none',
+            }}
+            onMouseEnter={e => {
+              if (hasDraft && !disabled) {
+                e.currentTarget.style.backgroundColor = 'var(--accent-hover)';
+                e.currentTarget.style.transform = 'scale(1.04)';
+              }
+            }}
+            onMouseLeave={e => {
+              if (hasDraft && !disabled) {
+                e.currentTarget.style.background = 'linear-gradient(180deg, var(--accent-color), color-mix(in srgb, var(--accent-color) 82%, #0f172a))';
+                e.currentTarget.style.transform = 'scale(1)';
+              }
             }}
           >
-            <Send size={14} />
+            <Send size={14} style={{ marginLeft: 1 }} />
           </button>
         )}
       </div>
-
     </div>
   );
 });

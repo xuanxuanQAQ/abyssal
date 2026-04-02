@@ -47,7 +47,7 @@ internal = "en"
 output_default = "zh"
 
 [llm]
-default_provider = "claude"                  # claude / openai / deepseek / ollama
+default_provider = "claude"                  # claude / openai / deepseek
 default_model = "claude-sonnet-4-20250514"
 
 [llm.discovery]

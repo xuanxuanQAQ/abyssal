@@ -763,6 +763,11 @@ export const en = {
       },
       stopGeneration: 'Stop generation',
       send: 'Send (Enter)',
+      status: {
+        generating: 'Generating...',
+        invokingTool: 'Invoking {{tool}}...',
+        invokingTools: 'Invoking {{count}} tools...',
+      },
       sessions: {
         global: 'Global conversation',
         paper: 'Paper {{id}}',

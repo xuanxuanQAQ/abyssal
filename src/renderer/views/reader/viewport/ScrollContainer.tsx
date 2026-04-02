@@ -12,6 +12,7 @@ import type { PageMetadataMap } from '../core/pageMetadataPreloader';
 import type { RenderWindowResult } from '../core/renderWindow';
 import type { Annotation, ContentBlockDTO } from '../../../../shared-types/models';
 import type { Transform6 } from '../math/coordinateTransform';
+import type { ColumnBounds } from '../selection/dragEnvelope';
 import { useCurrentPage } from '../hooks/useCurrentPage';
 import { useReaderStore } from '../../../core/store/useReaderStore';
 
@@ -46,6 +47,8 @@ export interface ScrollContainerProps {
   /** DLA block map: pageIndex (0-based) → blocks */
   blockMap?: Map<number, ContentBlockDTO[]>;
   onBlockSelect?: (block: ContentBlockDTO) => void;
+  /** Per-page DLA highlight bounds from DragEnvelope */
+  dragBoundsMap?: Map<number, ColumnBounds[]>;
 }
 
 const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
@@ -65,6 +68,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       onAnnotationClick,
       blockMap,
       onBlockSelect,
+      dragBoundsMap,
     } = props;
 
     const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -186,6 +190,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
             onAnnotationClick={onAnnotationClick}
             blocks={pageBlocks}
             {...(onBlockSelect ? { onBlockSelect } : {})}
+            dragBounds={dragBoundsMap?.get(i)}
           />,
         );
       }
@@ -205,6 +210,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       onAnnotationClick,
       blockMap,
       onBlockSelect,
+      dragBoundsMap,
     ]);
 
     return (

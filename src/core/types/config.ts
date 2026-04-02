@@ -123,6 +123,7 @@ export interface LlmConfig {
 export interface ApiKeysConfig {
   anthropicApiKey: string | null;
   openaiApiKey: string | null;
+  geminiApiKey: string | null;
   deepseekApiKey: string | null;
   semanticScholarApiKey: string | null;
   openalexEmail: string | null;

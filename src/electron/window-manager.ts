@@ -158,8 +158,8 @@ export function createMainWindow(opts: WindowManagerOptions): BrowserWindow {
   mainWindow.webContents.session.webRequest.onHeadersReceived(
     (details, callback) => {
       const csp = opts.isDev
-        ? "default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:5173 http://localhost:5173;"
-        : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';";
+        ? "default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://localhost:5173 http://localhost:5173;"
+        : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;";
       callback({
         responseHeaders: {
           ...details.responseHeaders,

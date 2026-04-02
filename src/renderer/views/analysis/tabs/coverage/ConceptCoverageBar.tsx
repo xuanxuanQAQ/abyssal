@@ -63,6 +63,7 @@ export function ConceptCoverageBar({
 
   return (
     <div
+      className="analysis-coverage-card"
       style={{
         padding: '8px 12px',
         border: '1px solid var(--border-subtle)',
@@ -142,6 +143,7 @@ export function ConceptCoverageBar({
             return (
               <div
                 key={seg.label}
+                className="analysis-coverage-segment"
                 title={`${seg.label}: ${seg.count}`}
                 style={{
                   width: `${pct}%`,
@@ -209,6 +211,7 @@ export function ConceptCoverageBar({
         <button
           type="button"
           onClick={onSearchRelated}
+          className="analysis-action-btn analysis-coverage-search-btn"
           style={{
             marginTop: 6,
             padding: '4px 10px',

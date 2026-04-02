@@ -56,11 +56,7 @@ import { FailureMemory } from '../core/acquire/failure-memory';
 import { createRateLimiter } from '../core/infra/rate-limiter';
 import { HttpClient } from '../core/infra/http-client';
 import { createArticleWorkflow } from '../adapter/orchestrator/workflows/article';
-import { AgentLoop } from '../adapter/agent-loop/agent-loop';
-import { ToolRegistry, type ToolServices } from '../adapter/agent-loop/tool-registry';
-import type { ActivePaperContext, ActiveConceptContext } from '../adapter/agent-loop/system-prompt-builder';
 import { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
-import type { ChatContext } from '../shared-types/ipc';
 import { CookieJar } from '../core/infra/cookie-jar';
 import { ReconCache, type ReconCacheDb } from '../core/acquire/recon-cache';
 import { setupEventBridge } from './ipc/event-bridge';
@@ -68,6 +64,7 @@ import { EventBus } from '../core/event-bus';
 import { ResearchSession } from '../core/session';
 import { createCapabilityRegistry, type CapabilityServices } from '../adapter/capabilities';
 import { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
+import { buildChatSystemPrompt } from './chat-system-prompt';
 
 // ─── ParsedArgs ───
 
@@ -610,210 +607,6 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
 
   ctx.appContext.orchestrator = workflowRunner;
 
-  // AgentLoop (requires LlmClient)
-  if (llmClient) {
-    const toolServices: ToolServices = {
-      dbProxy: dbProxy as any,
-      searchService: searchModule,
-      ragService: ragService as any,
-      webSearchService,
-      getWebSearchDisabledReason,
-      orchestrator: workflowRunner as any,
-      addPaper: async (paper) => {
-        const { generatePaperId } = await import('../core/search/paper-id');
-        const id = generatePaperId(
-          (paper['doi'] as string) ?? null,
-          null,
-          (paper['title'] as string) ?? '',
-        );
-        await dbProxy.addPaper({ ...paper, id } as any, { fulltextStatus: 'not_attempted' } as any);
-        return id;
-      },
-      updatePaper: async (id, fields) => {
-        await dbProxy.updatePaper(id as any, fields as any);
-      },
-    };
-
-    // Hot-reload WebSearchService when webSearch or apiKeys config changes
-    configProvider.onChange((event) => {
-      if (event.changedSections.includes('webSearch') || event.changedSections.includes('apiKeys')) {
-        toolServices.webSearchService = buildWebSearchService(event.current);
-        if (toolServices.webSearchService) {
-          logger.info('WebSearchService recreated after config change');
-        } else {
-          logger.info('WebSearchService disabled after config change');
-        }
-      }
-    });
-
-    const toolRegistry = new ToolRegistry(toolServices);
-    const agentLoop = new AgentLoop({
-      llmClient,
-      toolRegistry,
-      pushManager,
-      getSystemPromptContext: async (chatContext?: ChatContext) => {
-        const stats = await ctx.appContext!.getStats();
-        const allConcepts = (await dbProxy.getAllConcepts()) as unknown as Array<Record<string, unknown>>;
-        const activeConcepts = allConcepts.filter((c) => !c['deprecated']);
-        // Fetch detailed stats
-        let analyzedPapers = 0;
-        let acquiredPapers = 0;
-        let memoCount = 0;
-        let noteCount = 0;
-        try {
-          const detailedStats = await dbProxy.getStats() as unknown as Record<string, unknown>;
-          analyzedPapers = (detailedStats['analyzedPapers'] as number) ?? 0;
-          acquiredPapers = (detailedStats['acquiredPapers'] as number) ?? 0;
-          memoCount = (detailedStats['memoCount'] as number) ?? 0;
-          noteCount = (detailedStats['noteCount'] as number) ?? 0;
-        } catch { /* use defaults */ }
-
-        // ── Resolve active paper(s) context from ChatContext ──
-        let activePaper: ActivePaperContext | undefined;
-        let activePapers: ActivePaperContext[] | undefined;
-        let activeConcept: ActiveConceptContext | undefined;
-
-        // Multi-paper context (Library multi-select)
-        if (chatContext?.selectedPaperIds && chatContext.selectedPaperIds.length > 1) {
-          try {
-            const papers: ActivePaperContext[] = [];
-            // Limit to 8 papers to keep prompt compact
-            for (const pid of chatContext.selectedPaperIds.slice(0, 8)) {
-              const paper = await dbProxy.getPaper(pid as any) as Record<string, unknown> | null;
-              if (!paper) continue;
-
-              let mappedConcepts: string[] | undefined;
-              try {
-                const mappings = await dbProxy.getRelationGraph({ centerId: pid as any, depth: 1 }) as Record<string, unknown>;
-                const nodes = (mappings['nodes'] ?? []) as Array<Record<string, unknown>>;
-                mappedConcepts = nodes
-                  .filter((n) => n['type'] === 'concept')
-                  .map((n) => (n['nameEn'] ?? n['name_en'] ?? n['label'] ?? '') as string)
-                  .filter(Boolean)
-                  .slice(0, 5);
-              } catch { /* ignore */ }
-
-              papers.push({
-                id: pid,
-                title: (paper['title'] as string) ?? 'Untitled',
-                authors: (paper['authors'] as string) ?? '',
-                year: (paper['year'] as number) ?? null,
-                abstract: ((paper['abstract'] as string) ?? '').slice(0, 500),
-                analysisStatus: (paper['analysisStatus'] ?? paper['analysis_status'] ?? 'pending') as string,
-                fulltextStatus: (paper['fulltextStatus'] ?? paper['fulltext_status'] ?? 'missing') as string,
-                ...(mappedConcepts && mappedConcepts.length > 0 ? { mappedConcepts } : {}),
-              });
-            }
-            if (papers.length > 1) {
-              activePapers = papers;
-            }
-          } catch (err) {
-            logger.warn('Failed to load multi-paper context', { error: (err as Error).message });
-          }
-        }
-
-        // Single paper context
-        if (!activePapers && chatContext?.selectedPaperId) {
-          try {
-            const paper = await dbProxy.getPaper(chatContext.selectedPaperId as any) as Record<string, unknown> | null;
-            if (paper) {
-              // Build authors string
-              const authors = (paper['authors'] as string) ?? '';
-
-              // Try to load analysis summary if analysis is completed
-              let analysisSummary: string | undefined;
-              if (paper['analysisStatus'] === 'completed' || paper['analysis_status'] === 'completed') {
-                try {
-                  const analysisPath = (paper['analysisPath'] ?? paper['analysis_path']) as string | undefined;
-                  if (analysisPath) {
-                    const fs = await import('node:fs/promises');
-                    const analysisText = await fs.readFile(analysisPath, 'utf-8');
-                    const analysisData = JSON.parse(analysisText);
-                    // Extract the summary section (keep it concise for context window)
-                    analysisSummary = (analysisData.summary ?? analysisData.overview ?? '').slice(0, 2000);
-                  }
-                } catch { /* analysis file not available */ }
-              }
-
-              // Get mapped concepts for this paper
-              let mappedConcepts: string[] | undefined;
-              try {
-                const mappings = await dbProxy.getRelationGraph({ centerId: chatContext.selectedPaperId as any, depth: 1 }) as Record<string, unknown>;
-                const nodes = (mappings['nodes'] ?? []) as Array<Record<string, unknown>>;
-                mappedConcepts = nodes
-                  .filter((n) => n['type'] === 'concept')
-                  .map((n) => (n['nameEn'] ?? n['name_en'] ?? n['label'] ?? '') as string)
-                  .filter(Boolean)
-                  .slice(0, 10);
-              } catch { /* ignore */ }
-
-              activePaper = {
-                id: chatContext.selectedPaperId,
-                title: (paper['title'] as string) ?? 'Untitled',
-                authors,
-                year: (paper['year'] as number) ?? null,
-                abstract: ((paper['abstract'] as string) ?? '').slice(0, 1500),
-                analysisStatus: (paper['analysisStatus'] ?? paper['analysis_status'] ?? 'pending') as string,
-                fulltextStatus: (paper['fulltextStatus'] ?? paper['fulltext_status'] ?? 'missing') as string,
-                ...(paper['doi'] ? { doi: paper['doi'] as string } : {}),
-                ...(analysisSummary ? { analysisSummary } : {}),
-                ...(mappedConcepts && mappedConcepts.length > 0 ? { mappedConcepts } : {}),
-              };
-            }
-          } catch (err) {
-            logger.warn('Failed to load active paper for system prompt', { paperId: chatContext.selectedPaperId, error: (err as Error).message });
-          }
-        }
-
-        if (chatContext?.selectedConceptId) {
-          try {
-            const concept = await dbProxy.getConcept(chatContext.selectedConceptId as any) as Record<string, unknown> | null;
-            if (concept) {
-              activeConcept = {
-                id: chatContext.selectedConceptId,
-                nameEn: (concept['nameEn'] ?? concept['name_en'] ?? '') as string,
-                definition: ((concept['definition'] as string) ?? '').slice(0, 1000),
-                maturity: (concept['maturity'] as string) ?? 'working',
-                mappedPaperCount: (concept['mappedPaperCount'] ?? concept['mapped_paper_count'] ?? 0) as number,
-              };
-            }
-          } catch (err) {
-            logger.warn('Failed to load active concept for system prompt', { conceptId: chatContext.selectedConceptId, error: (err as Error).message });
-          }
-        }
-
-        return {
-          projectName: configProvider.config.project.name,
-          frameworkState: ctx.appContext!.frameworkState,
-          conceptCount: activeConcepts.length,
-          tentativeCount: activeConcepts.filter((c) => c['maturity'] === 'tentative').length,
-          workingCount: activeConcepts.filter((c) => c['maturity'] === 'working').length,
-          establishedCount: activeConcepts.filter((c) => c['maturity'] === 'established').length,
-          totalPapers: stats.paperCount,
-          analyzedPapers,
-          acquiredPapers,
-          memoCount,
-          noteCount,
-          topConcepts: activeConcepts.slice(0, 10).map((c) => ({
-            nameEn: (c['nameEn'] ?? c['name_en']) as string ?? '',
-            maturity: (c['maturity'] as string) ?? 'working',
-            mappedPapers: 0,
-          })),
-          advisorySuggestions: ctx.appContext!.advisoryAgent?.getLatestSuggestions() ?? [],
-          toolCount: toolRegistry.toolCount,
-          activePaper,
-          activePapers,
-          activeConcept,
-          pdfPage: chatContext?.pdfPage,
-          defaultOutputLanguage: configProvider.config.language.defaultOutputLanguage,
-        };
-      },
-    });
-    ctx.appContext.agentLoop = agentLoop;
-  } else {
-    logger.warn('AgentLoop not created — no LLM client available');
-  }
-
   // ── Layer 5.5: AI-Centric Workbench (EventBus + Session + Capabilities + Orchestrator) ──
 
   const eventBus = new EventBus({
@@ -849,6 +642,13 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
       await dbProxy.updatePaper(id as any, fields as any);
     },
     pushManager: pushManager as any,
+    writeNoteFile: async (noteId: string, content: string) => {
+      const fsp = await import('node:fs/promises');
+      const notesDir = path.join(ctx.args.workspace, 'notes');
+      await fsp.mkdir(notesDir, { recursive: true });
+      const absPath = path.join(notesDir, `${noteId}.md`);
+      await fsp.writeFile(absPath, content, 'utf-8');
+    },
     confirmWrite: null, // Set up after IPC registration
     configProvider: {
       config: configProvider.config as any,
@@ -876,13 +676,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
       capabilities: capabilityRegistry,
       llmClient,
       pushManager,
-      buildSystemPrompt: async () => {
-        // Reuse the existing system prompt builder from AgentLoop
-        if (ctx.appContext!.agentLoop) {
-          return (ctx.appContext!.agentLoop as any).getSystemPrompt?.() ?? '';
-        }
-        return `You are Abyssal, an AI research assistant for project "${configProvider.config.project.name}".`;
-      },
+      buildSystemPrompt: async (chatContext) => buildChatSystemPrompt(ctx.appContext!, chatContext),
       maxRounds: 15,
       proactiveEnabled: (configProvider.config as any).ai?.proactiveSuggestions ?? false,
       logger: (msg, data) => logger.debug(msg, data as Record<string, unknown>),

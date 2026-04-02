@@ -80,7 +80,7 @@ export interface AppContext {
   bibliographyModule: BibliographyService | null;
 
   // ── Adaptation layer modules ──
-  /** LlmClient — four-backend adapter (Claude/OpenAI/DeepSeek/Ollama) */
+  /** LlmClient — multi-backend adapter (Claude/OpenAI/DeepSeek/Gemini/SiliconFlow/vLLM) */
   llmClient: LlmClient | null;
   /** Context Budget Manager — token budget allocation engine */
   contextBudgetManager: ContextBudgetManager | null;

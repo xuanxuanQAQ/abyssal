@@ -22,9 +22,10 @@ import type { ChatMessage } from '../../../../shared-types/models';
 interface ChatBubbleProps {
   message: ChatMessage;
   onRetry?: ((messageId: string) => void) | undefined;
+  showAssistantLabel?: boolean;
 }
 
-function ChatBubbleInner({ message, onRetry }: ChatBubbleProps) {
+function ChatBubbleInner({ message, onRetry, showAssistantLabel = false }: ChatBubbleProps) {
   const { t } = useTranslation();
   const isUser = message.role === 'user';
   const displayContent = message.status === 'streaming'
@@ -35,90 +36,120 @@ function ChatBubbleInner({ message, onRetry }: ChatBubbleProps) {
     if (!isUser) return null;
     switch (message.status) {
       case 'sending':
-        return <Clock size={10} style={{ color: 'var(--text-muted)' }} />;
+        return <Clock size={12} style={{ color: 'var(--text-muted)' }} />;
       case 'sent':
-        return <Check size={10} style={{ color: 'var(--text-muted)' }} />;
+        return <Check size={12} style={{ color: 'var(--text-muted)', opacity: 0.5 }} />;
       case 'error':
-        return <AlertCircle size={10} style={{ color: 'var(--danger)' }} />;
+        return <AlertCircle size={12} style={{ color: 'var(--danger)' }} />;
       default:
         return null;
     }
   })();
 
+  // 用户的提问：右侧边线，极简旁注风格
+  if (isUser) {
+    return (
+      <div className="chat-bubble chat-bubble--user" style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 24px 0 30px', marginBottom: 24 }}>
+        <div className="chat-bubble-user-shell" style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          maxWidth: '78%'
+        }}>
+          <div className="chat-bubble-user-copy" style={{
+            paddingRight: 12,
+            borderRight: '2px solid rgba(59, 130, 246, 0.28)',
+            color: 'var(--text-secondary)',
+            fontSize: '13px',
+            lineHeight: 1.6,
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+            textAlign: 'right',
+          }}>
+            {displayContent}
+          </div>
+          {statusIcon && <div style={{ marginTop: 6, opacity: 0.6 }}>{statusIcon}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // AI 的回答：左侧对齐的文档流，带有一点精美的标识
   return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: isUser ? 'flex-end' : 'flex-start',
-        padding: '3px 12px',
-      }}
-    >
-      <div
-        style={{
-          maxWidth: isUser ? '82%' : '92%',
-          padding: isUser ? '8px 14px' : '10px 14px',
-          borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-          backgroundColor: isUser
-            ? 'rgba(var(--accent-color-rgb, 59, 130, 246), 0.13)'
-            : 'var(--bg-surface)',
-          border:
-            message.status === 'error'
-              ? '1px solid var(--danger)'
-              : isUser
-                ? '1px solid rgba(var(--accent-color-rgb, 59, 130, 246), 0.2)'
-                : '1px solid var(--border-subtle)',
-          boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-          fontSize: 'var(--text-sm)',
-          lineHeight: 1.6,
-          color: 'var(--text-primary)',
-          position: 'relative',
-          wordBreak: 'break-word',
-        }}
-      >
-        {/* Tool Calls — 折叠为紧凑步骤组 */}
+    <div className="chat-bubble chat-bubble--assistant" style={{ padding: '0 24px 0 32px', marginBottom: 30 }}>
+      {showAssistantLabel && (
+        <div className="chat-bubble-assistant-divider" style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: 14,
+          opacity: 0.72,
+        }}>
+          <div style={{
+            width: 22,
+            height: 1,
+            backgroundColor: 'var(--accent-color)',
+            opacity: 0.45,
+            flexShrink: 0,
+          }} />
+          <div style={{
+            height: 1,
+            backgroundColor: 'var(--border-subtle)',
+            flex: 1,
+          }} />
+        </div>
+      )}
+
+      <div className="chat-bubble-assistant-shell" style={{
+        fontSize: '15px',
+        lineHeight: 1.78,
+        color: 'var(--text-primary)',
+        fontFamily: '"Playfair Display", "Source Serif 4", Georgia, serif',
+      }}>
+        {/* Tool Calls */}
         {message.toolCalls && message.toolCalls.length > 0 && (
-          <ToolCallGroup toolCalls={message.toolCalls} />
+          <div style={{ marginBottom: 16, fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: '13px' }}>
+            <ToolCallGroup toolCalls={message.toolCalls} />
+          </div>
         )}
 
-        {/* Markdown 内容 */}
+        {/* Markdown内容 */}
         {displayContent && (
-          <div className="chat-markdown">
+          <div 
+            className="chat-markdown cognitive-content"
+            style={{
+              '--text-primary': 'var(--text-primary)',
+              '--text-secondary': 'var(--text-secondary)',
+              '--link-color': 'var(--accent-color)',
+              fontSize: '15px',
+            } as React.CSSProperties}
+          >
             <Markdown remarkPlugins={[remarkGfm]}>
               {displayContent}
             </Markdown>
           </div>
         )}
 
-        {/* 用户消息状态图标 */}
-        {statusIcon && (
-          <div
-            style={{
-              position: 'absolute',
-              right: 4,
-              bottom: 2,
-            }}
-          >
-            {statusIcon}
-          </div>
-        )}
-
         {/* 错误状态重试按钮 */}
         {message.status === 'error' && onRetry && (
-          <button
-            onClick={() => onRetry(message.id)}
-            style={{
-              marginTop: 4,
-              padding: '2px 8px',
-              fontSize: 'var(--text-xs)',
-              color: 'var(--danger)',
-              background: 'none',
-              border: '1px solid var(--danger)',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-            }}
-          >
-            {t('context.chat.retry')}
-          </button>
+          <div style={{ marginTop: 16 }}>
+            <button
+              onClick={() => onRetry(message.id)}
+              className="chat-bubble-retry-btn"
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                color: 'var(--danger)',
+                background: 'rgba(255,255,255,0.75)',
+                border: '1px solid var(--danger)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 500,
+              }}
+            >
+              {t('context.chat.retry', 'Retry Generation')}
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -133,6 +164,8 @@ export const ChatBubble = React.memo(
     // 状态变化需要重渲染（如 error → sending）
     if (prev.message.status !== next.message.status) return false;
     // 已完成消息完全静态化
-    return prev.message.id === next.message.id && prev.message.content === next.message.content;
+    return prev.message.id === next.message.id
+      && prev.message.content === next.message.content
+      && prev.showAssistantLabel === next.showAssistantLabel;
   }
 );

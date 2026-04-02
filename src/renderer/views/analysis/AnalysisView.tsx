@@ -26,9 +26,10 @@ export function AnalysisView() {
   }, []);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+    <div className="workspace-view workspace-view--analysis" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
       {/* Tab bar */}
       <div
+        className="analysis-tab-bar"
         role="tablist"
         aria-label={t('analysis.tabBar', { defaultValue: 'Analysis views' })}
         style={{
@@ -43,6 +44,7 @@ export function AnalysisView() {
           <button
             key={tab}
             type="button"
+            className="analysis-tab"
             role="tab"
             ref={setTabRef(tab)}
             id={`analysis-tab-${tab}`}
@@ -85,9 +87,10 @@ export function AnalysisView() {
       </div>
 
       {/* Tab content */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div className="analysis-content-stage" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         {/* Heatmap uses keep-alive: always mounted, hidden via display + aria-hidden */}
         <div
+          className="analysis-tab-panel"
           role="tabpanel"
           id="analysis-tabpanel-heatmap"
           aria-labelledby="analysis-tab-heatmap"
@@ -102,6 +105,7 @@ export function AnalysisView() {
 
         {activeTab === 'review' && (
           <div
+            className="analysis-tab-panel"
             role="tabpanel"
             id="analysis-tabpanel-review"
             aria-labelledby="analysis-tab-review"
@@ -112,6 +116,7 @@ export function AnalysisView() {
         )}
         {activeTab === 'coverage' && (
           <div
+            className="analysis-tab-panel"
             role="tabpanel"
             id="analysis-tabpanel-coverage"
             aria-labelledby="analysis-tab-coverage"
@@ -122,6 +127,7 @@ export function AnalysisView() {
         )}
         {activeTab === 'concepts' && (
           <div
+            className="analysis-tab-panel"
             role="tabpanel"
             id="analysis-tabpanel-concepts"
             aria-labelledby="analysis-tab-concepts"

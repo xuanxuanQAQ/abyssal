@@ -71,6 +71,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
   return (
     <>
       <div
+        className="workspace-toolbar library-toolbar"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -83,6 +84,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
       >
         {/* 搜索输入框 */}
         <div
+          className="library-toolbar-search"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -97,6 +99,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
         >
           <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
           <input
+            className="library-toolbar-search-input"
             value={localQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
             onFocus={() => setInputFocused(true)}
@@ -113,6 +116,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
           />
           {localQuery && (
             <button
+              className="library-toolbar-clear"
               onClick={clearSearch}
               style={{
                 background: 'none',
@@ -133,6 +137,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
           {filterTags.map((tag) => (
             <span
               key={tag.key}
+              className="library-filter-tag"
               style={{
                 padding: '2px 6px',
                 borderRadius: 'var(--radius-sm)',
@@ -156,6 +161,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <button
+              className="library-toolbar-action"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -176,6 +182,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
+              className="workspace-floating-menu library-import-menu"
               sideOffset={4}
               style={{
                 backgroundColor: 'var(--bg-surface)',

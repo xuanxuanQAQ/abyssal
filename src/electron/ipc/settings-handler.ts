@@ -153,6 +153,7 @@ export function registerSettingsHandlers(ctx: AppContext): void {
       apiKeys: {
         anthropicApiKey: maskKey(c.apiKeys.anthropicApiKey),
         openaiApiKey: maskKey(c.apiKeys.openaiApiKey),
+        geminiApiKey: maskKey(c.apiKeys.geminiApiKey),
         deepseekApiKey: maskKey(c.apiKeys.deepseekApiKey),
         semanticScholarApiKey: maskKey(c.apiKeys.semanticScholarApiKey),
         unpaywallEmail: c.apiKeys.unpaywallEmail,
@@ -208,6 +209,11 @@ export function registerSettingsHandlers(ctx: AppContext): void {
         enableWanfang: newConfig.acquire.enableWanfang,
       } : {}),
     });
+
+    ctx.pushManager?.pushSettingsChanged({
+      section,
+      keys: Object.keys(patch),
+    });
   });
 
   // ── settings:updateApiKey ──
@@ -223,6 +229,11 @@ export function registerSettingsHandlers(ctx: AppContext): void {
     ctx.configProvider.update(newConfig);
 
     logger.info('API key updated', { keyName: keyName.replace(/Key$/, '') });
+
+    ctx.pushManager?.pushSettingsChanged({
+      section: 'apiKeys',
+      keys: [keyName],
+    });
   });
 
   // ── settings:testApiKey ──
@@ -254,6 +265,15 @@ export function registerSettingsHandlers(ctx: AppContext): void {
           if (!keys.openaiApiKey) return { ok: false, message: 'Key not configured' };
           const res = await fetch('https://api.openai.com/v1/models', {
             headers: { Authorization: `Bearer ${keys.openaiApiKey}` },
+          });
+          return res.ok
+            ? { ok: true, message: 'Connected' }
+            : { ok: false, message: `HTTP ${res.status}` };
+        }
+        case 'gemini': {
+          if (!keys.geminiApiKey) return { ok: false, message: 'Key not configured' };
+          const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/models', {
+            headers: { Authorization: `Bearer ${keys.geminiApiKey}` },
           });
           return res.ok
             ? { ok: true, message: 'Connected' }

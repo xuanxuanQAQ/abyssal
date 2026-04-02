@@ -32,6 +32,7 @@ function defaultGlobalToml(): string {
 [apiKeys]
 # anthropicApiKey = "sk-ant-..."
 # openaiApiKey = "sk-..."
+# geminiApiKey = "AIza..."
 # deepseekApiKey = ""
 # semanticScholarApiKey = ""
 # openalexEmail = ""
@@ -241,6 +242,7 @@ export function saveGlobalConfig(
 const ENV_MAP: Record<string, [keyof GlobalConfig, string]> = {
   ABYSSAL_ANTHROPIC_API_KEY: ['apiKeys', 'anthropicApiKey'],
   ABYSSAL_OPENAI_API_KEY: ['apiKeys', 'openaiApiKey'],
+  ABYSSAL_GEMINI_API_KEY: ['apiKeys', 'geminiApiKey'],
   ABYSSAL_DEEPSEEK_API_KEY: ['apiKeys', 'deepseekApiKey'],
   ABYSSAL_SEMANTIC_SCHOLAR_API_KEY: ['apiKeys', 'semanticScholarApiKey'],
   ABYSSAL_OPENALEX_EMAIL: ['apiKeys', 'openalexEmail'],

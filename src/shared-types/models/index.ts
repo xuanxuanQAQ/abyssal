@@ -920,6 +920,7 @@ export interface SettingsData {
   apiKeys: {
     anthropicApiKey: string | null;
     openaiApiKey: string | null;
+    geminiApiKey: string | null;
     deepseekApiKey: string | null;
     semanticScholarApiKey: string | null;
     unpaywallEmail: string | null;

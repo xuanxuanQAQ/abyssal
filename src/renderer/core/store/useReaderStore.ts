@@ -22,7 +22,7 @@ type AnnotationTool =
   | 'smartSelect'
   | null;
 
-/** 用户在 PDF 中选取文本后点击"提问"产生的引用片段 */
+/** 用户在 PDF 中选取文本后自动注入聊天输入区的引用片段 */
 export interface QuotedSelection {
   text: string;
   page: number;
@@ -51,7 +51,7 @@ interface ReaderState {
   zoomMode: ZoomMode;
   activeAnnotationTool: AnnotationTool;
   highlightColor: HighlightColor;
-  /** 待提问的引用文本（由 SelectionToolbar "提问" 按钮写入，发送后清除） */
+  /** 当前注入聊天输入区的引用文本（由 PDF 选区自动写入，发送后清除） */
   quotedSelection: QuotedSelection | null;
   /** 扩展选取载荷（支持图片截图，由 DLA 智能选取写入） */
   selectionPayload: SelectionPayload | null;

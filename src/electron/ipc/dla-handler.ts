@@ -6,6 +6,23 @@ import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
 import type { ContentBlockDTO } from '../../shared-types/models';
 
+function mapRowToContentBlock(row: Record<string, unknown>): ContentBlockDTO {
+  const bbox = row['bbox'] as { x: number; y: number; w: number; h: number } | undefined;
+  return {
+    type: (row['blockType'] as string ?? row['block_type'] as string) as ContentBlockDTO['type'],
+    bbox: bbox
+      ? { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h }
+      : {
+          x: row['bbox_x'] as number,
+          y: row['bbox_y'] as number,
+          w: row['bbox_w'] as number,
+          h: row['bbox_h'] as number,
+        },
+    confidence: (row['confidence'] as number) ?? 0,
+    pageIndex: (row['pageIndex'] as number) ?? (row['page_index'] as number) ?? 0,
+  };
+}
+
 export function registerDlaHandlers(ctx: AppContext): void {
   const { logger } = ctx;
 
@@ -26,18 +43,7 @@ export function registerDlaHandlers(ctx: AppContext): void {
         const dbRows = await proxy['getLayoutBlocksByPage'](paperId, pageIndex) as Array<Record<string, unknown>> | null;
         if (dbRows && dbRows.length > 0) {
           logger.debug?.(`[DLA-IPC] dla:getBlocks DB hit paper=${paperId.slice(0, 8)} page=${pageIndex} (${dbRows.length} blocks)`);
-          return dbRows.map((row): ContentBlockDTO => {
-            // DAO returns LayoutBlockRow with camelCase fields and nested bbox
-            const bbox = row['bbox'] as { x: number; y: number; w: number; h: number } | undefined;
-            return {
-              type: (row['blockType'] as string ?? row['block_type'] as string) as ContentBlockDTO['type'],
-              bbox: bbox
-                ? { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h }
-                : { x: row['bbox_x'] as number, y: row['bbox_y'] as number, w: row['bbox_w'] as number, h: row['bbox_h'] as number },
-              confidence: (row['confidence'] as number) ?? 0,
-              pageIndex: (row['pageIndex'] as number) ?? (row['page_index'] as number) ?? 0,
-            };
-          });
+          return dbRows.map(mapRowToContentBlock);
         }
       }
     } catch {
@@ -60,6 +66,48 @@ export function registerDlaHandlers(ctx: AppContext): void {
       confidence: b.confidence,
       pageIndex: b.pageIndex,
     }));
+  });
+
+  typedHandler('dla:getDocumentBlocks', logger, async (_e, paperId): Promise<Array<{ pageIndex: number; blocks: ContentBlockDTO[] }>> => {
+    try {
+      const proxy = ctx.dbProxy as Record<string, (...args: unknown[]) => Promise<unknown>>;
+      if (typeof proxy['getLayoutBlocks'] === 'function') {
+        const dbRows = await proxy['getLayoutBlocks'](paperId) as Array<Record<string, unknown>> | null;
+        if (dbRows && dbRows.length > 0) {
+          const grouped = new Map<number, ContentBlockDTO[]>();
+          for (const row of dbRows) {
+            const block = mapRowToContentBlock(row);
+            const pageBlocks = grouped.get(block.pageIndex) ?? [];
+            pageBlocks.push(block);
+            grouped.set(block.pageIndex, pageBlocks);
+          }
+          logger.debug?.(`[DLA-IPC] dla:getDocumentBlocks DB hit paper=${paperId.slice(0, 8)} pages=${grouped.size}`);
+          return Array.from(grouped.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map(([pageIndex, blocks]) => ({ pageIndex, blocks }));
+        }
+      }
+    } catch {
+      // DB query failed (migration not yet applied) — fall through to cache
+    }
+
+    if (!ctx.dlaScheduler) return [];
+
+    const cached = ctx.dlaScheduler.getAllCachedBlocks(paperId);
+    if (!cached || cached.size === 0) return [];
+
+    logger.debug?.(`[DLA-IPC] dla:getDocumentBlocks cache hit paper=${paperId.slice(0, 8)} pages=${cached.size}`);
+    return Array.from(cached.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([pageIndex, blocks]) => ({
+        pageIndex,
+        blocks: blocks.map((b) => ({
+          type: b.type,
+          bbox: { x: b.bbox.x, y: b.bbox.y, w: b.bbox.w, h: b.bbox.h },
+          confidence: b.confidence,
+          pageIndex: b.pageIndex,
+        })),
+      }));
   });
 
   typedHandler('dla:analyzeDocument', logger, async (_e, paperId, pdfPath, totalPages) => {

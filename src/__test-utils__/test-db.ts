@@ -118,6 +118,7 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
     apiKeys: {
       anthropicApiKey: 'test-key',
       openaiApiKey: null,
+      geminiApiKey: null,
       deepseekApiKey: null,
       semanticScholarApiKey: null,
       openalexEmail: null,
@@ -167,6 +168,9 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
     },
     personalization: {
       authorDisplayThreshold: 1,
+    },
+    ai: {
+      proactiveSuggestions: false,
     },
     webSearch: {
       enabled: false,

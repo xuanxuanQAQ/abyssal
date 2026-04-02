@@ -39,6 +39,11 @@ import { validateCitations, extractCitedPaperIds } from './citation/citation-val
 import { preformatCitations, type CitationFormatter } from './citation/citation-preformatter';
 import { classifyError } from '../error-classifier';
 
+const SYNTHESIZE_STAGE_WORKFLOWS = {
+  draft: 'synthesize.draft',
+  crag: 'synthesize.crag',
+} as const;
+
 // ─── Services ───
 
 export interface SynthesizeServices {
@@ -112,6 +117,9 @@ async function synthesizeConcept(
   },
 ): Promise<void> {
   const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath, runner } = ctx;
+  const draftWorkflowId = SYNTHESIZE_STAGE_WORKFLOWS.draft;
+  const cragWorkflowId = SYNTHESIZE_STAGE_WORKFLOWS.crag;
+  const draftModel = llmClient.resolveModel(draftWorkflowId);
 
   // ══ Step 1: Concept & mappings (§2.2) ══
   const concept = await dbProxy.getConcept(conceptId);
@@ -184,7 +192,7 @@ async function synthesizeConcept(
       const r = await llmClient.complete({
         systemPrompt: sys,
         messages: [{ role: 'user', content: user }],
-        workflowId: 'discover_screen', // Use lightweight model
+        workflowId: cragWorkflowId,
       });
       return r.text;
     };
@@ -249,8 +257,8 @@ async function synthesizeConcept(
 
   const allocation = contextBudgetManager.allocate({
     taskType: 'synthesize',
-    model: 'claude-opus-4',
-    modelContextWindow: llmClient.getContextWindow('synthesize'),
+    model: draftModel,
+    modelContextWindow: llmClient.getContextWindow(draftWorkflowId),
     costPreference: 'balanced',
     sources: [
       { sourceType: 'concept_framework' as const, estimatedTokens: 500, priority: 'ABSOLUTE' as const, content: null },
@@ -297,7 +305,7 @@ async function synthesizeConcept(
   const result = await llmClient.complete({
     systemPrompt,
     messages: [{ role: 'user', content: userContent }],
-    workflowId: 'synthesize',
+    workflowId: draftWorkflowId,
   });
 
   // ══ Step 9: Citation validation + preformatting (§2.5) ══

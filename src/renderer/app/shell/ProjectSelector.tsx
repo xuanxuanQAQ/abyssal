@@ -19,6 +19,7 @@ import { Z_INDEX } from '../../styles/zIndex';
 export function ProjectSelector() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const [isOpen, setIsOpen] = useState(false);
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
 
@@ -87,27 +88,34 @@ export function ProjectSelector() {
   }, []);
 
   return (
-    <DropdownMenu.Root onOpenChange={(open: boolean) => { if (open) loadProjects(); }}>
+    <DropdownMenu.Root onOpenChange={(open: boolean) => {
+      setIsOpen(open);
+      if (open) loadProjects();
+    }}>
       <DropdownMenu.Trigger asChild>
         <button
-          className="titlebar__interactive"
+          className="titlebar__interactive project-selector-trigger"
+          data-open={isOpen}
+          type="button"
           onDoubleClick={(e) => e.stopPropagation()}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 6,
             maxWidth: 200,
-            height: 28,
-            padding: '0 8px',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-sm)',
-            background: 'transparent',
+            height: 30,
+            padding: '0 10px',
+            border: '1px solid var(--project-selector-border, var(--lens-border))',
+            borderRadius: 'var(--radius-pill)',
+            background: 'var(--project-selector-bg, var(--lens-surface))',
             color: 'var(--text-primary)',
             cursor: 'pointer',
             fontSize: 'var(--text-sm)',
             overflow: 'hidden',
             whiteSpace: 'nowrap',
             textOverflow: 'ellipsis',
+            boxShadow: 'var(--project-selector-shadow, var(--lens-shadow-soft, var(--lens-shadow)))',
+            transition: 'transform var(--duration-fast) var(--easing-default), box-shadow var(--duration-fast) var(--easing-default), background-color var(--duration-fast) var(--easing-default), border-color var(--duration-fast) var(--easing-default)',
           }}
         >
           <FolderOpen size={14} style={{ flexShrink: 0 }} />
@@ -120,16 +128,19 @@ export function ProjectSelector() {
 
       <DropdownMenu.Portal>
         <DropdownMenu.Content
+          className="project-selector-content"
           sideOffset={4}
           align="start"
           style={{
             minWidth: 200,
             maxWidth: 280,
-            backgroundColor: 'var(--bg-surface)',
-            border: '1px solid var(--border-default)',
-            borderRadius: 'var(--radius-md)',
+            backgroundColor: 'var(--lens-surface-strong)',
+            border: '1px solid var(--lens-border)',
+            borderRadius: 'var(--radius-xl)',
             padding: '4px',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            boxShadow: 'var(--lens-shadow)',
+            backdropFilter: 'blur(24px) saturate(1.08)',
+            transformOrigin: 'var(--radix-dropdown-menu-content-transform-origin)',
             zIndex: Z_INDEX.DROPDOWN,
           }}
         >

@@ -21,7 +21,7 @@ import type { ResearchSession } from '../../core/session';
 import type { CapabilityRegistry, OperationResult } from '../capabilities';
 import type { LlmClient, Message, ContentBlock } from '../llm-client/llm-client';
 import type { PushManager } from '../../electron/ipc/push';
-import type { AgentStreamEvent } from '../../shared-types/ipc';
+import type { AgentStreamEvent, ChatContext } from '../../shared-types/ipc';
 import { countTokens } from '../llm-client/token-counter';
 
 // ─── Types ───
@@ -33,7 +33,7 @@ export interface SessionOrchestratorOptions {
   llmClient: LlmClient;
   pushManager: PushManager | null;
   /** System prompt builder for the current context */
-  buildSystemPrompt: () => Promise<string>;
+  buildSystemPrompt: (chatContext?: ChatContext) => Promise<string>;
   /** Maximum tool-use rounds per user message (default 15) */
   maxRounds?: number;
   /** Enable proactive mode (default true) */
@@ -74,7 +74,7 @@ export class SessionOrchestrator {
   private readonly capabilities: CapabilityRegistry;
   private readonly llmClient: LlmClient;
   private readonly pushManager: PushManager | null;
-  private readonly buildSystemPrompt: () => Promise<string>;
+  private readonly buildSystemPrompt: (chatContext?: ChatContext) => Promise<string>;
   private readonly maxRounds: number;
   private proactiveEnabled: boolean;
   private readonly logger: (msg: string, data?: unknown) => void;
@@ -130,9 +130,10 @@ export class SessionOrchestrator {
    */
   async handleUserMessage(
     userMessage: string,
-    contextHint: string,
+    chatContext?: ChatContext,
     signal?: AbortSignal,
   ): Promise<void> {
+    const contextHint = chatContext?.contextKey ?? 'global';
     const conversationId = 'workspace';
     const startMs = Date.now();
     this.logger('[Orchestrator:chat] Start', {
@@ -150,7 +151,7 @@ export class SessionOrchestrator {
     const conversation = this.conversation;
 
     // Build system prompt with session context
-    let systemPrompt = await this.buildSystemPrompt();
+    let systemPrompt = await this.buildSystemPrompt(chatContext);
     const sessionContext = this.session.buildContextForPrompt();
     systemPrompt += '\n\n' + sessionContext;
     this.logger('[Orchestrator:chat] Prompt built', {

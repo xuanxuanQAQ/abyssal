@@ -9,6 +9,14 @@ import type { AnnotationPosition } from '../../../../shared-types/models';
 import type { HighlightColor, AnnotationType } from '../../../../shared-types/enums';
 import { generateGroupId } from '../selection/crossPageDetection';
 
+interface CrossPageAnnotationEntry {
+  page: number;
+  position: AnnotationPosition;
+  selectedText: string;
+  text?: string | null;
+  conceptId?: string | null;
+}
+
 export function useAnnotationCRUD(paperId: string | null) {
   const createAnnotationMutation = useCreateAnnotation();
   const updateAnnotationMutation = useUpdateAnnotation();
@@ -99,11 +107,7 @@ export function useAnnotationCRUD(paperId: string | null) {
 
   const createCrossPageAnnotations = useCallback(
     (
-      pages: Array<{
-        page: number;
-        position: AnnotationPosition;
-        selectedText: string;
-      }>,
+      pages: CrossPageAnnotationEntry[],
       type: AnnotationType,
       color: HighlightColor,
     ): void => {
@@ -118,8 +122,8 @@ export function useAnnotationCRUD(paperId: string | null) {
           page: entry.page,
           position: entry.position,
           color,
-          text: null,
-          conceptId: null,
+          text: entry.text ?? null,
+          conceptId: entry.conceptId ?? null,
           selectedText: entry.selectedText,
           groupId,
           pdfSyncStatus: undefined,

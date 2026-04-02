@@ -677,12 +677,7 @@ function nodeFromJSON(json: JSONContent, schema: Schema): ProseMirrorNode {
     return paragraphType.create(null, schema.text(json.text ?? ''));
   }
 
-  // Atom nodes / leaf nodes without content
-  if (nodeType.isAtom || (nodeType.isLeaf && !json.content)) {
-    return nodeType.create(json.attrs ?? null);
-  }
-
-  // Text nodes
+  // Text nodes must be created through schema.text, not NodeType.create.
   if (json.type === 'text') {
     const text = json.text ?? '';
     const marks = (json.marks ?? []).map((markJson) => {
@@ -693,6 +688,11 @@ function nodeFromJSON(json: JSONContent, schema: Schema): ProseMirrorNode {
     }).filter((m): m is Mark => m !== null);
 
     return schema.text(text, marks.length > 0 ? marks : undefined);
+  }
+
+  // Atom nodes / leaf nodes without content
+  if (nodeType.isAtom || (nodeType.isLeaf && !json.content)) {
+    return nodeType.create(json.attrs ?? null);
   }
 
   // Container nodes with children

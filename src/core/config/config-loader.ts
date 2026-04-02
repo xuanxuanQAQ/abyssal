@@ -472,6 +472,7 @@ export const DEFAULT_LLM: LlmConfig = {
 export const DEFAULT_API_KEYS: ApiKeysConfig = {
   anthropicApiKey: null,
   openaiApiKey: null,
+  geminiApiKey: null,
   deepseekApiKey: null,
   semanticScholarApiKey: null,
   openalexEmail: null,

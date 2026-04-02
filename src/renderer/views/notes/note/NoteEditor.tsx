@@ -20,6 +20,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { useNote, useNoteFileContent, useSaveNoteFile, useUpdateNoteMeta } from '../../../core/ipc/hooks/useNotes';
 import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
 import { usePaperList } from '../../../core/ipc/hooks/usePapers';
+import { parseFromMarkdown, serializeToMarkdown } from '../../writing/editor/extensions/markdownSerializer';
 
 interface NoteEditorProps {
   noteId: string;
@@ -91,8 +92,8 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
       clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         if (ed.isDestroyed) return;
-        const html = ed.getHTML();
-        const fullContent = frontmatterRef.current + html;
+        const markdown = serializeToMarkdown(ed.state.doc);
+        const fullContent = frontmatterRef.current + markdown;
         saveMutation.mutate(
           { noteId, content: fullContent },
           {
@@ -125,7 +126,18 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
       contentInitialized.current = true;
       const { frontmatter, body } = stripFrontmatter(initialContent);
       frontmatterRef.current = frontmatter;
-      editor.commands.setContent(body || '<p></p>', false);
+
+      if (!body.trim()) {
+        editor.commands.setContent('<p></p>', false);
+      } else if (/<(p|h[1-6]|div|ul|ol|li|blockquote|pre)\b/i.test(body)) {
+        // Legacy HTML content (from previous saves) — load as HTML
+        editor.commands.setContent(body, false);
+      } else {
+        // Markdown content (from AI or new format) — parse to ProseMirror
+        const doc = parseFromMarkdown(body, editor.state.schema);
+        editor.commands.setContent(doc.toJSON(), false);
+      }
+
       // Focus at end after content is set
       requestAnimationFrame(() => {
         editor.commands.focus('end');

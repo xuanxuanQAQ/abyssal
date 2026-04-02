@@ -54,6 +54,10 @@ export const PaperRow = memo(
           ref={dragRef}
           {...dragAttributes}
           {...dragListeners}
+          className="library-paper-row"
+          data-focused={isFocused ? 'true' : 'false'}
+          data-selected={isSelected ? 'true' : 'false'}
+          data-expanded={isExpanded ? 'true' : 'false'}
           role="row"
           aria-rowindex={row.index + 2}
           aria-selected={isSelected}
@@ -73,10 +77,11 @@ export const PaperRow = memo(
                 : '3px solid transparent',
             cursor: 'default',
             userSelect: 'none',
+            transition: 'background-color var(--duration-fast) var(--easing-default), border-color var(--duration-fast) var(--easing-default), transform var(--duration-fast) var(--easing-default), box-shadow var(--duration-fast) var(--easing-default)',
           }}
         >
           {/* 主行 */}
-          <div style={{ display: 'flex', minHeight: 40, alignItems: 'center' }}>
+          <div className="library-paper-row-main" style={{ display: 'flex', minHeight: 40, alignItems: 'center' }}>
             {cells.map((cell) => {
               const columnId = cell.column.id;
               const size = cell.column.getSize();
@@ -134,6 +139,7 @@ export const PaperRow = memo(
           {isExpanded && paper.abstract && (
             <div
               ref={abstractRef}
+              className="library-paper-row-abstract"
               style={{
                 padding: '4px 8px 8px 52px',
                 borderTop: '1px dashed var(--border-subtle)',

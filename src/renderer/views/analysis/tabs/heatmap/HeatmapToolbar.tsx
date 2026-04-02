@@ -45,6 +45,7 @@ export function HeatmapToolbar({
   const { t } = useTranslation();
   return (
     <div
+      className="workspace-toolbar analysis-toolbar"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -59,6 +60,7 @@ export function HeatmapToolbar({
     >
       {/* Sort dropdown */}
       <label
+        className="analysis-toolbar-label"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -69,6 +71,7 @@ export function HeatmapToolbar({
       >
         {t('analysis.heatmap.sort')}
         <select
+          className="analysis-toolbar-select"
           value={sortBy}
           onChange={(e) => onSortChange(e.target.value as SortOption)}
           aria-label={t('analysis.heatmap.sort')}
@@ -102,6 +105,7 @@ export function HeatmapToolbar({
 
       {/* Show grid checkbox */}
       <label
+        className="analysis-toolbar-label"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -134,6 +138,7 @@ export function HeatmapToolbar({
           <button
             type="button"
             onClick={onEditFramework}
+            className="analysis-toolbar-btn"
             title={t('analysis.heatmap.editFramework')}
             aria-label={t('analysis.heatmap.editFramework')}
             style={iconButtonStyle}
@@ -151,6 +156,7 @@ export function HeatmapToolbar({
       <button
         type="button"
         onClick={onRefresh}
+        className="analysis-toolbar-btn"
         title={t('analysis.heatmap.refresh')}
         aria-label={t('analysis.heatmap.refresh')}
         style={iconButtonStyle}
@@ -171,6 +177,7 @@ export function HeatmapToolbar({
       <button
         type="button"
         onClick={onExportPNG}
+        className="analysis-toolbar-btn"
         title={t('analysis.heatmap.exportPng')}
         aria-label={t('analysis.heatmap.exportPng')}
         style={iconButtonStyle}
@@ -183,6 +190,7 @@ export function HeatmapToolbar({
       <button
         type="button"
         onClick={onExportCSV}
+        className="analysis-toolbar-btn"
         title={t('analysis.heatmap.exportCsv')}
         aria-label={t('analysis.heatmap.exportCsv')}
         style={iconButtonStyle}

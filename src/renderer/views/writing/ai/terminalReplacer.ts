@@ -74,57 +74,101 @@ export function performTerminalReplacement(
 /**
  * Minimal markdown-to-HTML converter for Tiptap schema parsing.
  *
- * Handles: paragraphs, H2/H3 headings, bold, italic, inline code,
- * blockquotes, unordered lists, and citation markers `[@id]`.
+ * Handles: paragraphs, H1–H6 headings, bold, italic, inline code,
+ * blockquotes, unordered/ordered lists, fenced code blocks,
+ * links, and citation markers `[@id]`.
  */
 function markdownToSimpleHTML(md: string): string {
-  let html = md
-    // Headings (must come before paragraph wrapping)
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    // Blockquotes
-    .replace(/^> (.+)$/gm, '<blockquote><p>$1</p></blockquote>')
-    // List items
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    // Inline marks
+  const lines = md.split('\n');
+  const result: string[] = [];
+  let inUl = false;
+  let inOl = false;
+  let inCodeBlock = false;
+  const codeLines: string[] = [];
+
+  function closeList(): void {
+    if (inUl) { result.push('</ul>'); inUl = false; }
+    if (inOl) { result.push('</ol>'); inOl = false; }
+  }
+
+  for (const line of lines) {
+    // Fenced code blocks
+    if (line.startsWith('```')) {
+      if (inCodeBlock) {
+        result.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
+        codeLines.length = 0;
+        inCodeBlock = false;
+      } else {
+        closeList();
+        inCodeBlock = true;
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    // Headings
+    const headingMatch = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (headingMatch) {
+      closeList();
+      const level = headingMatch[1]!.length;
+      result.push(`<h${level}>${inlineMarks(headingMatch[2]!)}</h${level}>`);
+      continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      closeList();
+      result.push(`<blockquote><p>${inlineMarks(line.slice(2))}</p></blockquote>`);
+      continue;
+    }
+
+    // Unordered list item
+    if (/^[-*+]\s/.test(line)) {
+      if (inOl) { result.push('</ol>'); inOl = false; }
+      if (!inUl) { result.push('<ul>'); inUl = true; }
+      result.push(`<li>${inlineMarks(line.replace(/^[-*+]\s/, ''))}</li>`);
+      continue;
+    }
+
+    // Ordered list item
+    const olMatch = /^\d+\.\s(.*)$/.exec(line);
+    if (olMatch) {
+      if (inUl) { result.push('</ul>'); inUl = false; }
+      if (!inOl) { result.push('<ol>'); inOl = true; }
+      result.push(`<li>${inlineMarks(olMatch[1]!)}</li>`);
+      continue;
+    }
+
+    // Non-list line closes any open list
+    closeList();
+
+    // Empty line
+    if (line.trim() === '') continue;
+
+    // Regular paragraph
+    result.push(`<p>${inlineMarks(line)}</p>`);
+  }
+
+  closeList();
+  if (inCodeBlock) {
+    result.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
+  }
+
+  return result.join('\n');
+}
+
+/** Apply inline markdown marks to a single line of text. */
+function inlineMarks(text: string): string {
+  return text
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
-    // Citation markers → cite-node custom element
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
     .replace(
       new RegExp(CITATION_REGEX.source, 'g'),
       '<cite-node data-paper-id="$1">@$1</cite-node>',
     );
-
-  // Wrap remaining plain-text lines in <p> tags and group <li> runs into <ul>
-  const lines = html.split('\n');
-  const result: string[] = [];
-  let inList = false;
-
-  for (const line of lines) {
-    if (line.startsWith('<li>')) {
-      if (!inList) {
-        result.push('<ul>');
-        inList = true;
-      }
-      result.push(line);
-    } else {
-      if (inList) {
-        result.push('</ul>');
-        inList = false;
-      }
-      if (
-        line.startsWith('<h') ||
-        line.startsWith('<blockquote>') ||
-        line.trim() === ''
-      ) {
-        result.push(line);
-      } else if (line.trim()) {
-        result.push(`<p>${line}</p>`);
-      }
-    }
-  }
-  if (inList) result.push('</ul>');
-
-  return result.join('\n');
 }

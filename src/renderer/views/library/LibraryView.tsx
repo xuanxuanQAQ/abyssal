@@ -93,9 +93,10 @@ export function LibraryView() {
   );
 
   return (
-    <div style={{ height: '100%', position: 'relative' }}>
+    <div className="workspace-view workspace-view--library" style={{ height: '100%', position: 'relative' }}>
       <ExternalFileDrop>
         <PanelGroup
+          className="workspace-panel-group"
           direction="horizontal"
           autoSaveId="abyssal-library"
         >
@@ -112,7 +113,9 @@ export function LibraryView() {
                   if (librarySidebarOpen) toggleLibrarySidebar();
                 }}
               >
-                <LibrarySidebar counts={counts ?? null} />
+                <div className="workspace-side-stage library-sidebar-stage">
+                  <LibrarySidebar counts={counts ?? null} />
+                </div>
               </Panel>
               <PanelResizeHandle
                 style={{
@@ -126,11 +129,13 @@ export function LibraryView() {
             </>
           )}
           <Panel id="library-table" order={2} minSize={50}>
-            <PaperTable
-              papers={papers ?? []}
-              isLoading={isLoading}
-              filter={filter}
-            />
+            <div className="workspace-main-stage library-table-stage">
+              <PaperTable
+                papers={papers ?? []}
+                isLoading={isLoading}
+                filter={filter}
+              />
+            </div>
           </Panel>
         </PanelGroup>
       </ExternalFileDrop>

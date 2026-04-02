@@ -56,13 +56,15 @@ describe('validators — enum checks', () => {
   });
 
   it('accepts valid analysis statuses', () => {
-    expect(() => validateAnalysisStatus('pending')).not.toThrow();
+    expect(() => validateAnalysisStatus('not_started')).not.toThrow();
     expect(() => validateAnalysisStatus('in_progress')).not.toThrow();
     expect(() => validateAnalysisStatus('completed')).not.toThrow();
+    expect(() => validateAnalysisStatus('needs_review')).not.toThrow();
     expect(() => validateAnalysisStatus('failed')).not.toThrow();
   });
 
   it('rejects old analysis status values', () => {
+    expect(() => validateAnalysisStatus('pending' as never)).toThrow(IntegrityError);
     expect(() => validateAnalysisStatus('analyzed' as never)).toThrow(IntegrityError);
     expect(() => validateAnalysisStatus('reviewed' as never)).toThrow(IntegrityError);
   });

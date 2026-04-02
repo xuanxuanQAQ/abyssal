@@ -94,7 +94,7 @@ concept_mappings:
 More text here.`;
 
     const result = parseOutput(input);
-    expect(result.strategy).toBe('code_block_yaml');
+    expect(result.strategy).toBe('code_block');
     expect(result.frontmatter).not.toBeNull();
     expect(result.body).toContain('More text');
   });
@@ -124,7 +124,7 @@ More text here.`;
 \`\`\``;
 
     const result = parseOutput(input);
-    expect(result.strategy).toBe('json_fallback');
+    expect(result.strategy).toBe('json_repaired');
     expect(result.frontmatter).not.toBeNull();
   });
 
@@ -213,8 +213,10 @@ describe('extractConceptMappings', () => {
       ],
     };
     const mappings = extractConceptMappings(fm);
-    expect(mappings).toHaveLength(1);
+    expect(mappings).toHaveLength(2);
     expect(mappings[0]!.concept_id).toBe('ok');
+    expect(mappings[1]!.concept_id).toBe('no_rel');
+    expect(mappings[1]!.relation).toBe('supports');
   });
 
   it('defaults confidence to 0.5 when missing', () => {
@@ -264,14 +266,14 @@ describe('buildParseDiagnostic', () => {
     const output = '---\nconcept_id: affordance\nrelation: supports\n---\nBody text.';
     const diag = buildParseDiagnostic(output);
     expect(diag['outputLength']).toBe(output.length);
-    expect(diag['hasYamlFence']).toBe(true);
-    expect(diag['hasConceptMapping']).toBe(true); // regex: /concept_id/i
+    expect(diag['hasTripleDash']).toBe(true);
+    expect(diag['hasYamlKeywords']).toBe(true);
     expect((diag['preview'] as string).length).toBeLessThanOrEqual(500);
   });
 
   it('detects absence of YAML markers', () => {
     const diag = buildParseDiagnostic('Just plain text.');
-    expect(diag['hasYamlFence']).toBe(false);
+    expect(diag['hasTripleDash']).toBe(false);
     expect(diag['hasCodeBlock']).toBe(false);
   });
 });

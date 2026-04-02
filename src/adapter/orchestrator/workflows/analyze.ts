@@ -39,18 +39,17 @@ import {
   type MemoForFormat,
 } from '../../prompt-assembler/section-formatter';
 
-import {
-  parseAndValidate,
-  buildParseDiagnostic,
-  type ParseContext,
-} from '../../output-parser/output-parser';
-
 import { createPromptAssembler } from '../../prompt-assembler/prompt-assembler';
 import { formatAnnotations, type AnnotationForFormat } from '../../prompt-assembler/section-formatter';
 import { countTokens } from '../../llm-client/token-counter';
+import { getModelContextWindow } from '../../llm-client/model-router';
 
 // New modules
-import { resolveAnalysisRoute, type PaperFeatures } from './analyze-modes/model-router';
+import {
+  resolveAnalysisRoute,
+  type PaperFeatures,
+  type AnalyzeStageWorkflowId,
+} from './analyze-modes/model-router';
 import { runIntermediateAnalysis } from './analyze-modes/intermediate-analysis';
 import { runGenericAnalysis } from './analyze-modes/generic-analysis';
 import {
@@ -58,9 +57,17 @@ import {
   type ConceptForSubset,
   type SubsetSelectorDb,
 } from '../../prompt-assembler/concept-subset-selector';
-import { resolveMaturityParams, buildMaturityInstructions } from './concept-evolution/maturity-evaluator';
+import { buildMaturityInstructions } from './concept-evolution/maturity-evaluator';
 import { aggregateSuggestions, type SuggestionDb, type PushNotifier } from './suggested-concepts/suggestion-aggregator';
-import { computeRelationsAfterAnalysis, type RelationComputeDb } from './relations/compute-relations';
+import {
+  ANALYZE_STRUCTURED_RESPONSE_FORMAT,
+  parseStructuredAnalyzeOutput,
+} from './analyze-structured-output';
+import {
+  extractArtifactSummary,
+  writeAnalysisArtifact,
+  type AnalysisArtifactQualityWarning,
+} from './analysis-artifact';
 
 // ─── Services interface ───
 
@@ -108,6 +115,13 @@ export interface AnalyzeServices {
   outputLanguage?: string | undefined;
 }
 
+type AnalyzeSingleResult =
+  | { status: 'completed' }
+  | { status: 'skipped' }
+  | { status: 'deferred' }
+  | { status: 'cancelled' }
+  | { status: 'failed'; stage: string; message: string };
+
 // ─── Workflow ───
 
 export function createAnalyzeWorkflow(services: AnalyzeServices) {
@@ -116,6 +130,10 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     const frameworkState = typeof services.frameworkState === 'function'
       ? services.frameworkState()
       : services.frameworkState;
+    const modelRouterConfig = {
+      frontierModel: services.modelRouterConfig?.frontierModel ?? llmClient.resolveModel('analyze.full'),
+      lowCostModel: services.modelRouterConfig?.lowCostModel ?? llmClient.resolveModel('analyze.intermediate'),
+    };
 
     // ── §11.2: Stale in_progress detection ──
     // Only reset papers that are in_progress but have NO active in-memory task.
@@ -130,7 +148,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
       });
       if (staleResult.items.length > 0) {
         logger.warn(
-          `Found ${staleResult.items.length} papers stuck in in_progress (previous crash?), resetting to pending`,
+          `Found ${staleResult.items.length} papers stuck in in_progress (previous crash?), resetting to not_started`,
         );
         for (const p of staleResult.items) {
           await dbProxy.updatePaper(p['id'] as string, { analysisStatus: 'not_started' });
@@ -144,8 +162,8 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     let paperIds = options.paperIds;
     if (!paperIds || paperIds.length === 0) {
       const result = await dbProxy.queryPapers({
-        analysisStatus: ['pending', 'failed'],
-        fulltextStatus: ['acquired', 'available'],
+        analysisStatus: ['not_started', 'failed', 'needs_review'],
+        fulltextStatus: ['available'],
         limit: 1000,
       });
       paperIds = result.items.map((p) => p['id'] as string);
@@ -336,7 +354,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
         runner.reportProgress({ currentItem: paperId, currentStage: 'checking' });
 
         try {
-          await analyzeSinglePaper(paperId, {
+          const outcome = await analyzeSinglePaper(paperId, {
             dbProxy,
             llmClient,
             contextBudgetManager,
@@ -355,14 +373,25 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             upgradeQueue,
             upgradeQueueSeen,
             pushNotifier: services.pushNotifier ?? null,
-            modelRouterConfig: services.modelRouterConfig,
+            modelRouterConfig,
             force: false,
             outputLanguage: services.outputLanguage,
             conceptSnapshotHash,
           });
-          completedPaperIds.push(paperId);
-          runner.reportComplete(paperId);
+
+          if (outcome.status === 'completed') {
+            completedPaperIds.push(paperId);
+            runner.reportComplete(paperId);
+          } else if (outcome.status === 'failed') {
+            runner.reportFailed(paperId, outcome.stage, new Error(outcome.message));
+          } else if (outcome.status === 'cancelled') {
+            logger.info(`[analyze] Paper ${paperId}: cancelled`);
+          }
         } catch (error) {
+          if (isAbortError(error, runner.signal)) {
+            logger.info(`[analyze] Paper ${paperId}: cancelled during execution`);
+            break;
+          }
           runner.reportFailed(paperId, 'analyze', error as Error);
           try {
             await dbProxy.updatePaper(paperId, {
@@ -406,8 +435,8 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
         if (runner.signal.aborted) break;
         try {
           // Reset status so full analysis picks them up
-          await dbProxy.updatePaper(pid, { analysisStatus: 'pending' });
-          await analyzeSinglePaper(pid, {
+          await dbProxy.updatePaper(pid, { analysisStatus: 'not_started', failureReason: null });
+          const outcome = await analyzeSinglePaper(pid, {
             dbProxy,
             llmClient,
             contextBudgetManager,
@@ -426,13 +455,26 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             upgradeQueue: [], // prevent recursive upgrades
             upgradeQueueSeen: new Set(), // empty — no further upgrades
             pushNotifier: services.pushNotifier ?? null,
-            modelRouterConfig: services.modelRouterConfig,
+            modelRouterConfig,
             force: true,
             outputLanguage: services.outputLanguage,
             conceptSnapshotHash,
           });
-          completedPaperIds.push(pid);
+
+          if (outcome.status === 'completed') {
+            completedPaperIds.push(pid);
+            runner.reportComplete(pid);
+          } else if (outcome.status === 'failed') {
+            runner.reportFailed(pid, outcome.stage, new Error(outcome.message));
+          } else if (outcome.status === 'cancelled') {
+            logger.info(`[analyze] Paper ${pid}: cancelled during upgrade`);
+            break;
+          }
         } catch (err) {
+          if (isAbortError(err, runner.signal)) {
+            logger.info(`[analyze] Paper ${pid}: cancelled during upgrade`);
+            break;
+          }
           logger.warn(`Upgrade analysis failed for ${pid}: ${(err as Error).message}`);
         }
       }
@@ -463,13 +505,21 @@ async function analyzeSinglePaper(
     upgradeQueue: string[];
     upgradeQueueSeen: Set<string>;
     pushNotifier: PushNotifier | null;
-    modelRouterConfig: { frontierModel: string; lowCostModel: string } | undefined;
+    modelRouterConfig: { frontierModel: string; lowCostModel: string };
     force: boolean;
     outputLanguage?: string | undefined;
     conceptSnapshotHash: string;
   },
-): Promise<void> {
+): Promise<AnalyzeSingleResult> {
   const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath, runner } = ctx;
+  const qualityWarnings: AnalysisArtifactQualityWarning[] = [];
+  const reportQualityWarning = (
+    type: AnalysisArtifactQualityWarning['type'],
+    message: string,
+  ) => {
+    qualityWarnings.push({ type, message });
+    runner.reportQualityWarning(paperId, type, message);
+  };
 
   // ══ Step 1: Precheck (§6.1) ══
   const paper = await dbProxy.getPaper(paperId);
@@ -478,17 +528,32 @@ async function analyzeSinglePaper(
   const analysisStatus = paper['analysisStatus'] as string | undefined;
   if (analysisStatus === 'completed' && !ctx.force) {
     runner.reportSkipped(paperId);
-    return;
+    return { status: 'skipped' };
   }
 
-  const fulltextStatus = paper['fulltextStatus'] as string | undefined;
-  if (fulltextStatus !== 'acquired' && fulltextStatus !== 'available') {
+  let fulltextStatus = paper['fulltextStatus'] as string | undefined;
+  if (fulltextStatus === 'acquired') {
+    fulltextStatus = 'available';
+    try {
+      await dbProxy.updatePaper(paperId, { fulltextStatus: 'available' } as Record<string, unknown>);
+    } catch (err) {
+      logger.debug(`Paper ${paperId}: failed to normalize legacy acquired status`, { error: (err as Error).message });
+    }
+  }
+  if (fulltextStatus !== 'available') {
     logger.warn(`Paper ${paperId}: fulltext not acquired, skipping`);
     runner.reportSkipped(paperId);
-    return;
+    return { status: 'skipped' };
   }
 
+  if (runner.signal.aborted) {
+    return { status: 'cancelled' };
+  }
+
+  const previousAnalysisStatus = normalizeAnalysisStatusForResume(analysisStatus);
   await dbProxy.updatePaper(paperId, { analysisStatus: 'in_progress' });
+
+  try {
 
   const textPath = path.join(workspacePath, 'texts', `${paperId}.txt`);
   let fullText = '';
@@ -521,8 +586,8 @@ async function analyzeSinglePaper(
 
     const allocation = contextBudgetManager.allocate({
       taskType: 'analyze',
-      model: 'claude-opus-4',
-      modelContextWindow: llmClient.getContextWindow('analyze'),
+      model: ctx.modelRouterConfig.frontierModel,
+      modelContextWindow: getModelContextWindow(ctx.modelRouterConfig.frontierModel),
       costPreference: 'balanced',
       sources: [
         { sourceType: 'paper_fulltext' as const, estimatedTokens: countTokens(fullText), priority: 'HIGH' as const, content: fullText },
@@ -532,21 +597,53 @@ async function analyzeSinglePaper(
       frameworkState: ctx.frameworkState,
     });
 
+    if (allocation.truncated) {
+      reportQualityWarning('context_truncated', buildTruncationWarning(allocation.truncationDetails));
+    }
+
     const genericResult = await runGenericAnalysis(
       paperId, paperTitle, paperType, fullText,
       rawAnnotations as Array<Record<string, unknown>>,
       memos, allocation, llmClient, logger, workspacePath,
+      'analyze.generic',
+      ctx.modelRouterConfig.frontierModel,
       ctx.outputLanguage,
       runner.signal,
     );
 
     if (!genericResult.success) {
       await dbProxy.updatePaper(paperId, { analysisStatus: 'failed', failureReason: 'parse_failed' });
-      return;
+      return { status: 'failed', stage: 'generic_analysis', message: 'Generic analysis parse failed' };
     }
 
     // Write suggestions via aggregator
     await writeSuggestions(genericResult.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger);
+
+    writeAnalysisArtifact(
+      {
+        version: 2,
+        paperId,
+        stage: 'analyze.generic',
+        mode: 'generic',
+        businessStatus: 'completed',
+        model: genericResult.model,
+        summary: extractArtifactSummary(genericResult.summary, genericResult.body),
+        body: genericResult.body,
+        warnings: genericResult.warnings,
+        qualityWarnings,
+        metrics: {
+          conceptMappingCount: 0,
+          suggestedConceptCount: genericResult.suggestedConcepts.length,
+          truncated: allocation.truncated,
+        },
+        parse: {
+          rawPath: genericResult.rawPath,
+        },
+        generatedAt: new Date().toISOString(),
+      },
+      workspacePath,
+      logger,
+    );
 
     // Write report
     const genericReportPath = writeReport(paperId, genericResult.body, workspacePath);
@@ -554,7 +651,7 @@ async function analyzeSinglePaper(
       analysisStatus: 'completed',
       ...(genericReportPath && { analysisPath: genericReportPath }),
     });
-    return;
+    return { status: 'completed' };
   }
 
   // ── Model routing (§2) ──
@@ -568,10 +665,24 @@ async function analyzeSinglePaper(
     seedType,
   };
 
-  const route = resolveAnalysisRoute(features, ctx.modelRouterConfig);
+  const route = ctx.force
+    ? {
+        mode: 'full' as const,
+        workflowId: 'analyze.full' as const,
+        reason: 'forced_full_upgrade',
+      }
+    : analysisStatus === 'needs_review' && !ctx.force
+    ? {
+        mode: 'full' as const,
+        workflowId: 'analyze.full' as const,
+        reason: 'needs_review_resume_full',
+      }
+    : resolveAnalysisRoute(features);
+  const routeModel = resolveStageModel(route.workflowId, ctx.modelRouterConfig);
   logger.debug(`[analyze] Paper ${paperId}: route decision`, {
     mode: route.mode,
-    model: route.model,
+    workflowId: route.workflowId,
+    model: routeModel,
     reason: route.reason,
     relevance,
     paperType,
@@ -581,7 +692,7 @@ async function analyzeSinglePaper(
   if (route.mode === 'skip') {
     runner.reportSkipped(paperId);
     await dbProxy.updatePaper(paperId, { analysisStatus: 'completed' });
-    return;
+    return { status: 'skipped' };
   }
 
   if (route.mode === 'intermediate') {
@@ -590,19 +701,62 @@ async function analyzeSinglePaper(
 
     const intermediateResult = await runIntermediateAnalysis(
       paperId, fullText, paperTitle, llmClient, logger, workspacePath,
+      route.workflowId ?? 'analyze.intermediate',
+      routeModel ?? ctx.modelRouterConfig.lowCostModel,
       runner.signal,
     );
 
     if (intermediateResult) {
-      await dbProxy.updatePaper(paperId, { analysisStatus: 'intermediate' as any });
+      const intermediateStatus = intermediateResult.recommendDeepAnalysis ? 'needs_review' : 'completed';
+      if (intermediateResult.inputTruncated) {
+        reportQualityWarning('context_truncated', intermediateResult.truncationMessage);
+      }
+      writeAnalysisArtifact(
+        {
+          version: 2,
+          paperId,
+          stage: route.workflowId ?? 'analyze.intermediate',
+          mode: 'intermediate',
+          businessStatus: intermediateStatus,
+          model: intermediateResult.model,
+          summary: extractArtifactSummary(intermediateResult.summary, intermediateResult.body),
+          body: intermediateResult.body,
+          warnings: [],
+          qualityWarnings,
+          metrics: {
+            conceptMappingCount: 0,
+            suggestedConceptCount: 0,
+            truncated: intermediateResult.inputTruncated,
+          },
+          extra: {
+            paperType: intermediateResult.paperType,
+            coreClaims: intermediateResult.coreClaims,
+            methodSummary: intermediateResult.methodSummary,
+            keyConcepts: intermediateResult.keyConcepts,
+            potentialRelevance: intermediateResult.potentialRelevance,
+            recommendDeepAnalysis: intermediateResult.recommendDeepAnalysis,
+          },
+          generatedAt: new Date().toISOString(),
+        },
+        workspacePath,
+        logger,
+      );
+      const intermediateReportPath = writeReport(paperId, intermediateResult.body, workspacePath);
+      await dbProxy.updatePaper(paperId, {
+        analysisStatus: intermediateStatus,
+        failureReason: null,
+        ...(intermediateReportPath && { analysisPath: intermediateReportPath }),
+      });
       if (intermediateResult.recommendDeepAnalysis && !ctx.upgradeQueueSeen.has(paperId)) {
         ctx.upgradeQueueSeen.add(paperId);
         ctx.upgradeQueue.push(paperId);
+        return { status: 'deferred' };
       }
+      return { status: 'completed' };
     } else {
       await dbProxy.updatePaper(paperId, { analysisStatus: 'failed', failureReason: 'intermediate_parse_failed' });
+      return { status: 'failed', stage: 'intermediate_analysis', message: 'Intermediate analysis parse failed' };
     }
-    return;
   }
 
   // ══ Full analysis mode ══
@@ -642,19 +796,14 @@ async function analyzeSinglePaper(
 
       // Propagate RAG quality warnings to UI
       if (ragQualityReport && ragQualityReport.coverage !== 'sufficient') {
-        runner.reportQualityWarning(
-          paperId,
+        reportQualityWarning(
           'rag_degraded',
           `RAG coverage: ${ragQualityReport.coverage}, gaps: ${ragQualityReport.gaps.join('; ')}, passages: ${ragPassages.length}`,
         );
       }
     } catch (err) {
       ragQualityReport = { coverage: 'insufficient', retryCount: 0, gaps: ['RAG retrieval failed entirely'] };
-      runner.reportQualityWarning(
-        paperId,
-        'rag_degraded',
-        `RAG retrieval failed: ${(err as Error).message}`,
-      );
+      reportQualityWarning('rag_degraded', `RAG retrieval failed: ${(err as Error).message}`);
     }
   }
 
@@ -672,7 +821,6 @@ async function analyzeSinglePaper(
   const ragText = ragPassages.map((p) => p.text).join('\n');
 
   // Resolve maturity-driven parameters (§4)
-  const maturityParams = resolveMaturityParams(conceptMaturities);
   const maturityInstructions = buildMaturityInstructions(conceptMaturities);
 
   const sources: Array<{ sourceType: string; estimatedTokens: number; priority: string; content: unknown }> = [
@@ -694,8 +842,8 @@ async function analyzeSinglePaper(
 
   const allocation = contextBudgetManager.allocate({
     taskType: 'analyze',
-    model: route.model,
-    modelContextWindow: llmClient.getContextWindow('analyze'),
+    model: routeModel ?? ctx.modelRouterConfig.frontierModel,
+    modelContextWindow: getModelContextWindow(routeModel ?? ctx.modelRouterConfig.frontierModel),
     costPreference: 'balanced',
     sources: sources as any,
     conceptMaturities,
@@ -738,6 +886,16 @@ async function analyzeSinglePaper(
     outputLanguage: ctx.outputLanguage,
   });
 
+  if (assembled.truncated || allocation.truncated) {
+    reportQualityWarning(
+      'context_truncated',
+      buildTruncationWarning([
+        ...allocation.truncationDetails,
+        ...assembled.truncationDetails,
+      ]),
+    );
+  }
+
   // Inject maturity-specific instructions into system prompt
   if (maturityInstructions) {
     assembled.systemPrompt = assembled.systemPrompt + '\n\n' + maturityInstructions;
@@ -749,7 +907,10 @@ async function analyzeSinglePaper(
   }
 
   // ── Abort check before expensive LLM call ──
-  if (runner.signal.aborted) return;
+  if (runner.signal.aborted) {
+    await restoreAnalysisStatusAfterCancellation(dbProxy, paperId, previousAnalysisStatus, logger);
+    return { status: 'cancelled' };
+  }
 
   // ── Step 8: LLM call ──
   runner.reportProgress({ currentStage: 'analyzing' });
@@ -757,7 +918,8 @@ async function analyzeSinglePaper(
   const systemTokens = countTokens(assembled.systemPrompt);
   const userTokens = countTokens(assembled.userMessage);
   logger.debug(`[analyze] Paper ${paperId}: LLM call starting`, {
-    model: route.model,
+    workflowId: route.workflowId,
+    model: routeModel,
     systemPromptTokens: systemTokens,
     userMessageTokens: userTokens,
     totalInputTokens: systemTokens + userTokens,
@@ -767,7 +929,9 @@ async function analyzeSinglePaper(
   const result = await llmClient.complete({
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
-    workflowId: 'analyze',
+    workflowId: route.workflowId ?? 'analyze.full',
+    model: routeModel ?? ctx.modelRouterConfig.frontierModel,
+    responseFormat: ANALYZE_STRUCTURED_RESPONSE_FORMAT,
     signal: runner.signal,
   });
   const llmLatencyMs = Date.now() - llmStartMs;
@@ -783,35 +947,32 @@ async function analyzeSinglePaper(
   // ── Step 9: Output parsing with validation ──
   runner.reportProgress({ currentStage: 'parsing' });
 
-  const parseContext: ParseContext = {
+  const validated = parseStructuredAnalyzeOutput(result.text, {
     paperId,
     model: result.model,
-  };
-  // Attach concept lookup for FK-safe diversion of unknown concept_ids
-  if (ctx.conceptsForPrompt.length > 0) {
-    parseContext.conceptLookup = {
+    workflow: route.workflowId ?? 'analyze.full',
+    frameworkState: ctx.frameworkState,
+    workspaceRoot: workspacePath,
+    knownConceptIds: new Set(ctx.conceptsForPrompt.map((concept) => concept.id)),
+    getConceptName: (conceptId: string) => {
+      const concept = ctx.conceptsForPrompt.find((entry) => entry.id === conceptId);
+      return concept?.nameEn || concept?.nameZh || null;
+    },
+    conceptLookup: ctx.conceptsForPrompt.length > 0 ? {
       exists: (cid: string) => ctx.conceptsForPrompt.some((c) => c.id === cid),
-    };
-  }
-
-  const validated = parseAndValidate(result.text, parseContext, logger);
+    } : undefined,
+  }, logger);
 
   if (!validated.success) {
-    const rawPath = path.join(workspacePath, 'analyses', `${paperId}.raw.txt`);
-    try {
-      fs.mkdirSync(path.dirname(rawPath), { recursive: true });
-      fs.writeFileSync(rawPath, result.text, 'utf-8');
-    } catch (err) { logger.debug(`Paper ${paperId}: failed to save raw output`, { error: (err as Error).message }); }
-
-    const diagnostic = buildParseDiagnostic(result.text);
-    logger.warn(`Paper ${paperId}: parse_failed`, diagnostic);
+    logger.warn(`Paper ${paperId}: parse_failed`, {
+      diagnostics: validated.diagnostics,
+      rawPath: validated.rawPath,
+    });
     await dbProxy.updatePaper(paperId, { analysisStatus: 'failed', failureReason: 'parse_failed' });
-    return;
+    return { status: 'failed', stage: 'parsing', message: 'Analyze output parse failed' };
   }
 
   logger.debug(`[analyze] Paper ${paperId}: parse succeeded`, {
-    strategy: validated.strategy,
-    repairRules: validated.repairRules,
     conceptMappings: validated.conceptMappings.length,
     suggestedConcepts: validated.suggestedConcepts.length,
     warningCount: validated.warnings.length,
@@ -820,12 +981,15 @@ async function analyzeSinglePaper(
 
   if (validated.warnings.length > 0) {
     logger.warn(`[analyze] Paper ${paperId}: validation warnings`, {
-      warnings: validated.warnings, strategy: validated.strategy, repairRules: validated.repairRules,
+      warnings: validated.warnings,
     });
   }
 
   // ── Abort check before committing results ──
-  if (runner.signal.aborted) return;
+  if (runner.signal.aborted) {
+    await restoreAnalysisStatusAfterCancellation(dbProxy, paperId, previousAnalysisStatus, logger);
+    return { status: 'cancelled' };
+  }
 
   // ── Step 10: Result write (transactional) ──
   runner.reportProgress({ currentStage: 'writing' });
@@ -834,8 +998,7 @@ async function analyzeSinglePaper(
   if (validated.conceptMappings.length > 0) {
     const isStale = await checkConceptStaleness(dbProxy, ctx.conceptSnapshotHash);
     if (isStale) {
-      runner.reportQualityWarning(
-        paperId,
+      reportQualityWarning(
         'concept_stale',
         'Concept framework was modified during batch analysis; mappings may reference outdated concept state',
       );
@@ -883,6 +1046,32 @@ async function analyzeSinglePaper(
   // 10c: Concept suggestions via aggregator (§6.8) — outside transaction (non-critical)
   await writeSuggestions(validated.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger);
 
+  writeAnalysisArtifact(
+    {
+      version: 2,
+      paperId,
+      stage: route.workflowId ?? 'analyze.full',
+      mode: 'full',
+      businessStatus: 'completed',
+      model: result.model,
+      summary: extractArtifactSummary(validated.summary, validated.body),
+      body: validated.body,
+      warnings: validated.warnings,
+      qualityWarnings,
+      metrics: {
+        conceptMappingCount: validated.conceptMappings.length,
+        suggestedConceptCount: validated.suggestedConcepts.length,
+        truncated: allocation.truncated || assembled.truncated,
+      },
+      parse: {
+        rawPath: validated.rawPath,
+      },
+      generatedAt: new Date().toISOString(),
+    },
+    workspacePath,
+    logger,
+  );
+
   // 10b: Analysis report (file write — outside transaction)
   const reportPath = writeReport(paperId, validated.body, workspacePath);
   if (reportPath) {
@@ -898,6 +1087,14 @@ async function analyzeSinglePaper(
   // Relations are NOT computed per-paper — O(N²) cost with hot concepts.
   // Instead, analyzed paper IDs are collected and relations are computed
   // in a single post-batch pass (see workflow entry function).
+  return { status: 'completed' };
+  } catch (error) {
+    if (isAbortError(error, runner.signal)) {
+      await restoreAnalysisStatusAfterCancellation(dbProxy, paperId, previousAnalysisStatus, logger);
+      return { status: 'cancelled' };
+    }
+    throw error;
+  }
 }
 
 // ─── Helpers ───
@@ -913,6 +1110,64 @@ async function collectMemos(
     conceptIds: (m['conceptIds'] as string[]) ?? [],
     paperIds: (m['paperIds'] as string[]) ?? [],
   }));
+}
+
+function normalizeAnalysisStatusForResume(status: string | undefined): string {
+  if (status === 'failed' || status === 'needs_review' || status === 'completed') {
+    return status;
+  }
+  return 'not_started';
+}
+
+async function restoreAnalysisStatusAfterCancellation(
+  dbProxy: AnalyzeServices['dbProxy'],
+  paperId: string,
+  previousAnalysisStatus: string,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await dbProxy.updatePaper(paperId, { analysisStatus: previousAnalysisStatus });
+  } catch (err) {
+    logger.debug(`Paper ${paperId}: failed to restore status after cancellation`, {
+      error: (err as Error).message,
+      previousAnalysisStatus,
+    });
+  }
+}
+
+function buildTruncationWarning(
+  details: Array<{ sourceType: string; originalTokens: number; truncatedTo: number }>,
+): string {
+  const normalized = new Map<string, { originalTokens: number; truncatedTo: number }>();
+  for (const detail of details) {
+    const existing = normalized.get(detail.sourceType);
+    if (!existing || detail.truncatedTo < existing.truncatedTo) {
+      normalized.set(detail.sourceType, {
+        originalTokens: detail.originalTokens,
+        truncatedTo: detail.truncatedTo,
+      });
+    }
+  }
+
+  const samples = [...normalized.entries()]
+    .slice(0, 3)
+    .map(([sourceType, entry]) => `${sourceType} ${entry.originalTokens}->${entry.truncatedTo}`);
+
+  if (samples.length === 0) {
+    return 'Prompt context was truncated to fit the model context window.';
+  }
+
+  return `Prompt context was truncated to fit the model context window: ${samples.join('; ')}`;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: string }).code;
+  return error.name === 'AbortError'
+    || code === 'ABORT_ERR'
+    || code === 'ABORTED'
+    || /aborted|cancelled|canceled/i.test(error.message);
 }
 
 function formatRawAnnotations(raw: Array<Record<string, unknown>>): AnnotationForFormat[] {
@@ -992,6 +1247,15 @@ function writeReport(paperId: string, body: string, workspacePath: string): stri
   } catch {
     return null;
   }
+}
+
+function resolveStageModel(
+  workflowId: AnalyzeStageWorkflowId | null,
+  modelRouterConfig: { frontierModel: string; lowCostModel: string },
+): string | null {
+  if (workflowId == null) return null;
+  if (workflowId === 'analyze.intermediate') return modelRouterConfig.lowCostModel;
+  return modelRouterConfig.frontierModel;
 }
 
 /**

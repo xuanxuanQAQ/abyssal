@@ -36,8 +36,8 @@ describe('CostTracker', () => {
   it('treats local models as free', () => {
     const tracker = new CostTracker();
     const record = tracker.record({
-      model: 'ollama/llama3',
-      provider: 'ollama',
+      model: 'vllm/qwen2.5:14b',
+      provider: 'vllm',
       inputTokens: 10_000_000,
       outputTokens: 1_000_000,
       durationMs: 60000,

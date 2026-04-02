@@ -48,7 +48,12 @@ process.on('message', async (msg: DlaProcessMessage) => {
 
 async function handleLifecycle(msg: DlaProcessMessage & { type: 'lifecycle' }): Promise<void> {
   const respond = (success: boolean, error?: string) => {
-    const resp: DlaLifecycleResponse = { type: 'lifecycle', action: msg.action, success, error };
+    const resp: DlaLifecycleResponse = {
+      type: 'lifecycle',
+      action: msg.action,
+      success,
+      ...(error ? { error } : {}),
+    };
     process.send?.(resp);
   };
 
@@ -182,7 +187,7 @@ async function loadMupdf(): Promise<any> {
     try {
       mupdfModule = await import('mupdf');
     } catch {
-      mupdfModule = await import('mupdf/dist/mupdf.js');
+      mupdfModule = await import('mupdf/dist/mupdf.js' as string);
     }
   }
   return mupdfModule;
@@ -195,29 +200,32 @@ function renderPageToImage(
   targetSize: number,
 ): RawImage {
   const page = doc.loadPage(pageIndex);
-  const bounds = page.getBounds();
-  // getBounds() returns [x0, y0, x1, y1] — account for non-zero origin
-  const pageW = bounds[2] - bounds[0];
-  const pageH = bounds[3] - bounds[1];
+  let pixmap: any = null;
+  try {
+    const bounds = page.getBounds();
+    // getBounds() returns [x0, y0, x1, y1] — account for non-zero origin
+    const pageW = bounds[2] - bounds[0];
+    const pageH = bounds[3] - bounds[1];
 
-  // Compute scale to make longest edge = targetSize
-  const longEdge = Math.max(pageW, pageH);
-  const scale = targetSize / longEdge;
+    // Compute scale to make longest edge = targetSize
+    const longEdge = Math.max(pageW, pageH);
+    const scale = targetSize / longEdge;
 
-  const matrix = mupdf.Matrix.scale(scale, scale);
-  const pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false);
+    const matrix = mupdf.Matrix.scale(scale, scale);
+    pixmap = page.toPixmap(matrix, mupdf.ColorSpace.DeviceRGB, false);
 
-  const width = pixmap.getWidth();
-  const height = pixmap.getHeight();
-  const samples = pixmap.getPixels();
+    const width = pixmap.getWidth();
+    const height = pixmap.getHeight();
+    const samples = pixmap.getPixels();
 
-  // mupdf pixmap.getPixels() returns RGB Uint8Array
-  const data = Buffer.from(samples);
+    // mupdf pixmap.getPixels() returns RGB Uint8Array
+    const data = Buffer.from(samples);
 
-  page.destroy?.();
-  pixmap.destroy?.();
-
-  return { data, width, height, channels: 3 };
+    return { data, width, height, channels: 3 };
+  } finally {
+    try { pixmap?.destroy?.(); } catch { /* ignore cleanup failure */ }
+    try { page.destroy?.(); } catch { /* ignore cleanup failure */ }
+  }
 }
 
 // ─── Helpers ───

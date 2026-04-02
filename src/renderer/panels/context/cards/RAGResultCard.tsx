@@ -69,125 +69,128 @@ function getPathColor(path: RetrievalPath): string {
 
 // ── Static styles ──
 
-const cardContainerStyle: React.CSSProperties = {
-  margin: '4px 12px',
-  padding: '8px 10px',
+const cardBaseStyle: React.CSSProperties = {
+  margin: '10px 12px',
+  padding: '14px 16px',
   backgroundColor: 'var(--bg-surface)',
   border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  fontSize: 'var(--text-xs)',
+  borderRadius: 'var(--radius-lg)', // more rounded, softer
+  fontSize: 'var(--text-sm)',
+  transition: 'transform var(--duration-normal) var(--easing-spring), box-shadow var(--duration-normal) var(--easing-spring), border-color var(--duration-normal) var(--easing-default)',
+  position: 'relative',
 };
 
-const sourceRowStyle: React.CSSProperties = {
+const headerRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  gap: 8,
+  marginBottom: 8,
+};
+
+const sourceTitleContainerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 4,
-  marginBottom: 4,
+  gap: 6,
+  flex: 1,
+  minWidth: 0, // Enable ellipsis
+  color: 'var(--text-primary)',
+  fontWeight: 600,
+  fontSize: 'var(--text-sm)',
 };
 
 const fileIconStyle: React.CSSProperties = {
-  color: 'var(--text-muted)',
+  color: 'var(--text-secondary)',
+  flexShrink: 0,
 };
 
 const sourceTitleStyle: React.CSSProperties = {
-  fontWeight: 500,
-  flex: 1,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 };
 
-const sectionMetadataStyle: React.CSSProperties = {
+const metaRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: '8px 12px',
+  marginBottom: 12,
+  color: 'var(--text-secondary)',
+  fontSize: 'var(--text-xs)',
+};
+
+const badgeStyle = (path: RetrievalPath): React.CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 8px',
+  borderRadius: '12px',
+  backgroundColor: 'var(--bg-surface-low)', // subtler than explicit borders
+  border: `1px solid ${getPathColor(path)}40`, // 25% opacity border
+  color: getPathColor(path),
+  fontSize: '10px',
+  lineHeight: 1,
+  flexShrink: 0,
+});
+
+const relevanceGroupStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  marginBottom: 4,
-  color: 'var(--text-muted)',
-  fontSize: 10,
-};
-
-const sectionTypeBadgeStyle: React.CSSProperties = {
-  padding: '0 4px',
-  backgroundColor: 'var(--bg-surface-low)',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border-subtle)',
-};
-
-const relevanceRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  marginBottom: 6,
-};
-
-const relevanceLabelStyle: React.CSSProperties = {
-  color: 'var(--text-muted)',
 };
 
 const relevanceBarTrackStyle: React.CSSProperties = {
-  flex: 1,
-  height: 3,
-  backgroundColor: 'var(--bg-surface-low)',
+  width: 48,
+  height: 4,
+  backgroundColor: 'var(--bg-surface-high)',
   borderRadius: 2,
   overflow: 'hidden',
 };
 
 const expandBtnStyle: React.CSSProperties = {
-  display: 'flex',
+  display: 'inline-flex',
   alignItems: 'center',
-  gap: 2,
+  gap: 4,
   background: 'none',
   border: 'none',
   color: 'var(--accent-color)',
   fontSize: 'var(--text-xs)',
+  fontWeight: 500,
   cursor: 'pointer',
   padding: 0,
-  marginBottom: 6,
+  marginTop: 6,
+  transition: 'opacity var(--duration-fast)',
 };
 
-const contextBtnBaseStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 2,
-  background: 'none',
-  border: 'none',
+const contextBtnStyle: React.CSSProperties = {
+  ...expandBtnStyle,
   color: 'var(--text-muted)',
-  fontSize: 10,
-  cursor: 'pointer',
-  padding: 0,
+  marginLeft: 16,
 };
 
 const contextBoxStyle: React.CSSProperties = {
-  marginBottom: 6,
-  padding: '4px 8px',
-  backgroundColor: 'var(--bg-surface-low)',
-  borderRadius: 'var(--radius-sm)',
+  marginTop: 12,
+  padding: '10px 14px',
+  backgroundColor: 'var(--bg-surface-lowest)',
+  borderRadius: 'var(--radius-md)',
   border: '1px solid var(--border-subtle)',
-  fontSize: 10,
-  color: 'var(--text-muted)',
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-secondary)',
   lineHeight: 1.5,
 };
 
 const actionRowStyle: React.CSSProperties = {
   display: 'flex',
-  gap: 6,
+  gap: 8,
+  marginTop: 16,
 };
 
-const viewInReaderBtnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 3,
-  padding: '2px 8px',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'none',
-  color: 'var(--text-secondary)',
-  fontSize: 'var(--text-xs)',
-  cursor: 'pointer',
-};
+const btnHoverTransition = 'all var(--duration-fast) var(--easing-default)';
 
 const fontWeightBold: React.CSSProperties = {
   fontWeight: 600,
+  color: 'var(--text-primary)',
 };
 
 export const RAGResultCard = React.memo(function RAGResultCard({ result, sectionTitle }: RAGResultCardProps) {
@@ -195,6 +198,7 @@ export const RAGResultCard = React.memo(function RAGResultCard({ result, section
   const [expanded, setExpanded] = useState(false);
   const [inserted, setInserted] = useState(false);
   const [showContext, setShowContext] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const navigateTo = useAppStore((s) => s.navigateTo);
 
   const handleInsert = () => {
@@ -215,153 +219,196 @@ export const RAGResultCard = React.memo(function RAGResultCard({ result, section
   const hasContext = Boolean(result.contextBefore ?? result.contextAfter);
 
   const snippetStyle: React.CSSProperties = {
-    color: 'var(--text-secondary)',
-    lineHeight: 1.5,
-    maxHeight: expanded ? undefined : 48,
+    color: 'var(--text-primary)',
+    fontSize: '13px',         // Improved typographic scale for reading
+    lineHeight: 1.65,         // Academic reading standard
+    maxHeight: expanded ? undefined : 64, // Approximately 3 lines
     overflow: 'hidden',
-    marginBottom: 6,
+    position: 'relative',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
   };
 
   const relevanceBarFillStyle: React.CSSProperties = {
     height: '100%',
     width: `${result.score * 100}%`,
     backgroundColor: 'var(--accent-color)',
+    borderRadius: 2,
   };
 
   const insertBtnStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
-    gap: 3,
-    padding: '2px 8px',
-    border: '1px solid',
-    borderColor: inserted ? 'var(--text-muted)' : 'var(--accent-color)',
-    borderRadius: 'var(--radius-sm)',
-    background: 'none',
-    color: inserted ? 'var(--text-muted)' : 'var(--accent-color)',
+    gap: 6,
+    padding: '6px 12px',
+    border: '1px solid var(--border-strong)',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: inserted ? 'var(--bg-surface-low)' : 'var(--bg-surface)',
+    color: inserted ? 'var(--text-muted)' : 'var(--text-primary)',
     fontSize: 'var(--text-xs)',
+    fontWeight: 500,
     cursor: inserted ? 'default' : 'pointer',
+    transition: btnHoverTransition,
+    opacity: inserted ? 0.7 : 1,
   };
 
-  const contextBtnStyle: React.CSSProperties = {
-    ...contextBtnBaseStyle,
-    marginBottom: showContext ? 4 : 6,
+  const viewInReaderBtnStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    border: '1px solid transparent',
+    borderRadius: 'var(--radius-md)',
+    backgroundColor: 'var(--accent-color)',
+    color: '#fff', // always white
+    fontSize: 'var(--text-xs)',
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: btnHoverTransition,
   };
 
   return (
-    <div style={cardContainerStyle}>
-      {/* Source row */}
-      <div style={sourceRowStyle}>
-        <FileText size={10} style={fileIconStyle} />
-        <span style={sourceTitleStyle}>
-          {result.paperTitle}, p.{result.page}
-        </span>
-        {/* Retrieval path badge */}
+    <div 
+      style={{
+        ...cardBaseStyle,
+        transform: isHovered ? 'translateY(-2px)' : 'none',
+        boxShadow: isHovered ? 'var(--shadow-md)' : 'none',
+        borderColor: isHovered ? 'var(--border-default)' : 'var(--border-subtle)',
+      }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {/* 1. Header row: Source title & Path badge */}
+      <div style={headerRowStyle}>
+        <div style={sourceTitleContainerStyle}>
+          <FileText size={14} style={fileIconStyle} />
+          <span style={sourceTitleStyle} title={result.paperTitle}>
+            {result.paperTitle}, p.{result.page}
+          </span>
+        </div>
         {result.retrievalPath && (
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-              padding: '1px 6px',
-              borderRadius: 10,
-              border: `1px solid ${getPathColor(result.retrievalPath)}`,
-              color: getPathColor(result.retrievalPath),
-              fontSize: 10,
-              lineHeight: 1,
-              flexShrink: 0,
-            }}
-          >
+          <div style={badgeStyle(result.retrievalPath)}>
             {getPathIcon(result.retrievalPath)}
             {getPathLabel(result.retrievalPath)}
-          </span>
+          </div>
         )}
       </div>
 
-      {/* Section metadata */}
-      {(result.sectionTitle ?? result.sectionType) && (
-        <div style={sectionMetadataStyle}>
-          {result.sectionTitle && (
-            <span>{result.sectionTitle}</span>
-          )}
-          {result.sectionType && (
-            <span style={sectionTypeBadgeStyle}>
-              {result.sectionType}
-            </span>
-          )}
+      {/* 2. Metadata row: Relevance, Section Info */}
+      <div style={metaRowStyle}>
+        <div style={relevanceGroupStyle} title={`${t('context.rag.relevance')}: ${(result.score * 100).toFixed(0)}%`}>
+          <div style={relevanceBarTrackStyle}>
+            <div style={relevanceBarFillStyle} />
+          </div>
+          <span>{result.score.toFixed(2)}</span>
         </div>
-      )}
 
-      {/* Relevance score */}
-      <div style={relevanceRowStyle}>
-        <span style={relevanceLabelStyle}>{t('context.rag.relevance')}:</span>
-        <div style={relevanceBarTrackStyle}>
-          <div style={relevanceBarFillStyle} />
-        </div>
-        <span>{result.score.toFixed(2)}</span>
+        {(result.sectionTitle ?? result.sectionType) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ opacity: 0.4 }}>•</span>
+            {result.sectionType && (
+              <span style={{ 
+                padding: '2px 6px', 
+                backgroundColor: 'var(--bg-surface-low)', 
+                borderRadius: '4px',
+                border: '1px solid var(--border-subtle)',
+                fontSize: '10px'
+              }}>
+                {result.sectionType}
+              </span>
+            )}
+            {result.sectionTitle && (
+              <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                {result.sectionTitle}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Text snippet */}
+      {/* 3. Text snippet */}
       <div style={snippetStyle}>
-        &quot;{result.text}&quot;
+        {result.text}
+        {/* Soft fade out for collapsed text */}
+        {!expanded && result.text.length > 160 && (
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 24,
+            background: 'linear-gradient(to bottom, transparent, var(--bg-surface))',
+            pointerEvents: 'none',
+          }} />
+        )}
       </div>
 
-      {result.text.length > 160 && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          style={expandBtnStyle}
-        >
-          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          {expanded ? t('common.collapse') : t('context.rag.expandFull')}
-        </button>
-      )}
+      {/* 4. Expand / Context Controls */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {result.text.length > 160 && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            style={expandBtnStyle}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+          >
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            {expanded ? t('common.collapse', 'Collapse') : t('context.rag.expandFull', 'Read more')}
+          </button>
+        )}
 
-      {/* Collapsible context before/after */}
-      {hasContext && (
-        <>
+        {hasContext && (
           <button
             onClick={() => setShowContext(!showContext)}
             style={contextBtnStyle}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
           >
-            {showContext ? (
-              <ChevronDown size={10} />
-            ) : (
-              <ChevronRight size={10} />
-            )}
-            {t('context.rag.context')}
+            {showContext ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            {t('context.rag.context', 'Surrounding context')}
           </button>
-          {showContext && (
-            <div style={contextBoxStyle}>
-              {result.contextBefore && (
-                <div style={{ marginBottom: result.contextAfter ? 4 : 0 }}>
-                  <span style={fontWeightBold}>Before: </span>
-                  {result.contextBefore}
-                </div>
-              )}
-              {result.contextAfter && (
-                <div>
-                  <span style={fontWeightBold}>After: </span>
-                  {result.contextAfter}
-                </div>
-              )}
+        )}
+      </div>
+
+      {/* Context before/after box */}
+      {hasContext && showContext && (
+        <div style={contextBoxStyle}>
+          {result.contextBefore && (
+            <div style={{ marginBottom: result.contextAfter ? 12 : 0 }}>
+              <span style={fontWeightBold}>Before: </span>
+              {result.contextBefore}
             </div>
           )}
-        </>
+          {result.contextAfter && (
+            <div>
+              <span style={fontWeightBold}>After: </span>
+              {result.contextAfter}
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Action buttons */}
+      {/* 5. Action buttons */}
       <div style={actionRowStyle}>
         <button
           onClick={handleInsert}
           disabled={inserted}
           style={insertBtnStyle}
+          onMouseEnter={(e) => { if (!inserted) e.currentTarget.style.backgroundColor = 'var(--bg-surface-low)'; }}
+          onMouseLeave={(e) => { if (!inserted) e.currentTarget.style.backgroundColor = 'var(--bg-surface)'; }}
         >
-          {inserted ? <><Check size={10} /> {t('context.rag.alreadyInserted')}</> : t('context.rag.insertCitation')}
+          {inserted ? (
+            <><Check size={14} /> {t('context.rag.alreadyInserted', 'Inserted')}</>
+          ) : (
+            <><BookMarked size={14} /> {t('context.rag.insertCitation', 'Cite')}</>
+          )}
         </button>
         <button
           onClick={handleOpenInReader}
           style={viewInReaderBtnStyle}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-color)'}
         >
-          <ArrowRight size={10} /> {t('context.rag.viewInReader')}
+          <ArrowRight size={14} /> {t('context.rag.viewInReader', 'Open PDF')}
         </button>
       </div>
     </div>

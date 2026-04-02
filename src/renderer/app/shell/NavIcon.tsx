@@ -47,32 +47,36 @@ export function NavIcon({
           className="nav-icon-btn"
           style={{
             position: 'relative',
-            width: 48,
-            height: 48,
+            width: 40,
+            height: 40,
+            margin: '0 auto',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            border: 'none',
-            background: isActive ? 'var(--bg-active)' : 'transparent',
+            border: isActive ? '1px solid var(--lens-border)' : '1px solid transparent',
+            borderRadius: 14,
+            background: isActive ? 'var(--lens-surface)' : 'transparent',
             cursor: 'pointer',
             color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+            boxShadow: isActive ? 'var(--lens-shadow-soft, var(--lens-shadow))' : 'none',
+            transition: 'transform var(--duration-fast) var(--easing-default), background-color var(--duration-fast) var(--easing-default), color var(--duration-fast) var(--easing-default), box-shadow var(--duration-fast) var(--easing-default)',
           }}
         >
           {/* §4.3 左侧激活条 */}
-          {isActive && (
-            <span
-              style={{
-                position: 'absolute',
-                left: 0,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                width: 3,
-                height: 20,
-                borderRadius: '0 1.5px 1.5px 0',
-                backgroundColor: 'var(--accent-color)',
-              }}
-            />
-          )}
+          <span
+            className="nav-icon-indicator"
+            style={{
+              position: 'absolute',
+              left: 2,
+              top: '50%',
+              transform: `translateY(-50%) scaleY(${isActive ? 1 : 0.45})`,
+              opacity: isActive ? 1 : 0,
+              width: 2,
+              height: 14,
+              borderRadius: 999,
+              backgroundColor: 'var(--accent-color)',
+            }}
+          />
 
           {/* 图标 */}
           <span style={{ width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -115,6 +119,7 @@ export function NavIcon({
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
+          className="nav-tooltip-content"
           side="right"
           sideOffset={8}
           style={{
@@ -125,6 +130,7 @@ export function NavIcon({
             fontSize: 'var(--text-sm)',
             zIndex: Z_INDEX.TOOLTIP,
             boxShadow: 'var(--shadow-sm)',
+            transformOrigin: 'var(--radix-tooltip-content-transform-origin)',
           }}
         >
           {tooltipContent}

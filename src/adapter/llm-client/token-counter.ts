@@ -57,7 +57,6 @@ function getCjkDiscount(model: string, text: string): number {
     model.startsWith('qwen') ||
     model.startsWith('glm') ||
     model.startsWith('yi-') ||
-    model.startsWith('ollama/') ||
     model.startsWith('vllm/');
 
   if (!needsDiscount) return 1.0;

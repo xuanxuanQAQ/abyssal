@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { getAPI } from '../../../core/ipc/bridge';
 import { PDFDocumentManager } from '../core/pdfDocumentManager';
 import {
-  preloadAllPageMetadata,
+  buildEstimatedPageMetadataMap,
+  preloadRemainingPageMetadata,
+  readPageMetadata,
   type PageMetadataMap,
 } from '../core/pageMetadataPreloader';
 import { useReaderStore } from '../../../core/store/useReaderStore';
@@ -52,16 +54,17 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
     activeLoadRef.current = loadId;
     setStatus('loading');
     setError(null);
+    const metadataAbort = new AbortController();
 
     const loadDocument = async (): Promise<void> => {
       try {
         const api = getAPI();
-        const { path: filePath, buffer } = await api.fs.openPDF(paperId);
+        const { path: filePath, data } = await api.fs.openPDF(paperId);
 
         if (activeLoadRef.current !== loadId) return;
 
         const docManager = new PDFDocumentManager();
-        await docManager.loadDocument(buffer);
+        await docManager.loadDocument({ kind: 'data', data });
 
         if (activeLoadRef.current !== loadId) {
           docManager.destroy();
@@ -77,20 +80,38 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
 
         const doc = docManager.getDocument();
         if (!doc) throw new Error('Document loaded but proxy is null');
-        const metadata = await preloadAllPageMetadata(
-          doc as unknown as import('../core/pageMetadataPreloader').PDFDocumentLike,
-          numPages,
-        );
+        const pdfDocument = doc as unknown as import('../core/pageMetadataPreloader').PDFDocumentLike;
+        const firstPageMetadata = await readPageMetadata(pdfDocument, 1);
 
         if (activeLoadRef.current !== loadId) {
           docManager.destroy();
           return;
         }
 
-        setPageMetadataMap(metadata);
+        const initialMetadata = buildEstimatedPageMetadataMap(numPages, firstPageMetadata);
+        setPageMetadataMap(initialMetadata);
         setPdfPath(filePath);
         setStatus('ready');
         emitUserAction({ action: 'openPaper', paperId: loadId, hasPdf: true });
+
+        void preloadRemainingPageMetadata(pdfDocument, numPages, {
+          signal: metadataAbort.signal,
+          concurrency: 6,
+          batchSize: 8,
+          onBatch: (entries) => {
+            if (activeLoadRef.current !== loadId || entries.length === 0) return;
+            setPageMetadataMap((previous) => {
+              const next = new Map(previous ?? initialMetadata);
+              for (const [pageNumber, pageMetadata] of entries) {
+                next.set(pageNumber, pageMetadata);
+              }
+              return next;
+            });
+          },
+        }).catch((preloadError) => {
+          if (metadataAbort.signal.aborted || activeLoadRef.current !== loadId) return;
+          console.warn('[Reader] Background page metadata preload failed:', preloadError);
+        });
       } catch (err) {
         if (activeLoadRef.current !== loadId) return;
 
@@ -104,6 +125,7 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
     loadDocument();
 
     return () => {
+      metadataAbort.abort();
       activeLoadRef.current = null;
       if (managerRef.current) {
         managerRef.current.destroy();

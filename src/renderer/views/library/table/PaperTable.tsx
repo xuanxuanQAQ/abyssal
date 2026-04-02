@@ -118,6 +118,7 @@ export function PaperTable({ papers, isLoading, filter }: PaperTableProps) {
 
   return (
     <div
+      className="workspace-paper-surface library-table-shell"
       role="grid"
       aria-rowcount={filteredData.length}
       aria-colcount={columns.length}
