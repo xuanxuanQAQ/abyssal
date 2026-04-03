@@ -16,7 +16,7 @@ import Link from '@tiptap/extension-link';
 import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
-import Table from '@tiptap/extension-table';
+import { Table } from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
@@ -178,7 +178,7 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       if (editor && !editor.isDestroyed) {
         // Prevent the update callback from marking as unsaved during
         // programmatic content replacement.
-        editor.commands.setContent(content, false);
+        editor.commands.setContent(content, { emitUpdate: false });
         setUnsavedChanges(false);
       }
     }, [content, editor, setUnsavedChanges]);
@@ -191,7 +191,7 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       contentJsonRef.current = contentJson;
 
       if (editor && !editor.isDestroyed && contentJson) {
-        editor.commands.setContent(contentJson, false);
+        editor.commands.setContent(contentJson, { emitUpdate: false });
         setUnsavedChanges(false);
       }
     }, [contentJson, editor, setUnsavedChanges]);

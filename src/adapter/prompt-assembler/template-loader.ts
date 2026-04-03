@@ -24,9 +24,7 @@ import * as path from 'node:path';
 
 // Re-export fragment assembly engine from new module
 export {
-  assembleTemplate,
   loadFile as loadTemplateFile,
-  type FragmentAssemblyParams,
 } from './variable-injector';
 
 // ─── Template directory ───
@@ -107,7 +105,6 @@ export interface TemplateVariables {
   paper_type?: string;
   project_name?: string;
   concept_framework?: string;
-  maturity_instructions?: string;
   yaml_example?: string;
   researcher_notes?: string;
   annotations?: string;
@@ -134,7 +131,6 @@ export function injectVariables(template: string, variables: TemplateVariables):
     'paper_type',
     'project_name',
     'concept_framework',
-    'maturity_instructions',
     'yaml_example',
     'researcher_notes',
     'annotations',

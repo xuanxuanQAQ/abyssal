@@ -25,11 +25,10 @@ function scopedKey(workspaceRoot: string, contextKey: string): string {
 export function registerAgentHandlers(ctx: AppContext): void {
   const { logger } = ctx;
 
-  typedHandler('chat:send', logger, async (_e, message, context?) => {
+  typedHandler('chat:send', logger, async (_e, message, context?, conversationKey?) => {
     const chatCtx = context as ChatContext | undefined;
     const contextHint = chatCtx?.contextKey ?? 'global';
-    // Unified conversation per workspace — contextHint is only used for prompt injection
-    const conversationId = 'workspace';
+    const conversationId = conversationKey ?? chatCtx?.conversationKey ?? 'workspace';
     const scoped = scopedKey(ctx.workspaceRoot, conversationId);
 
     const orchestrator = ctx.sessionOrchestrator;
@@ -56,7 +55,7 @@ export function registerAgentHandlers(ctx: AppContext): void {
     activeAbortControllers.set(scoped, abortController);
 
     try {
-      await orchestrator.handleUserMessage(message as string, chatCtx, abortController.signal);
+      await orchestrator.handleUserMessage(message as string, chatCtx, abortController.signal, conversationId);
     } catch (err) {
       if (abortController.signal.aborted) {
         // Aborted by user — push done event so frontend can finalize
@@ -120,7 +119,7 @@ export function registerAgentHandlers(ctx: AppContext): void {
 
   typedHandler('db:chat:deleteSession', logger, async (_e, contextKey) => {
     await ctx.dbProxy.deleteChatSession(contextKey);
-    ctx.sessionOrchestrator?.clearConversation();
+    ctx.sessionOrchestrator?.clearConversation(contextKey);
   });
 
   typedHandler('db:chat:listSessions', logger, async () => {

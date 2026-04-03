@@ -7,7 +7,7 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
 import { useAnnotations } from '../../core/ipc/hooks/useAnnotations';
 import { usePDFDocument } from './hooks/usePDFDocument';
@@ -57,7 +57,7 @@ export function ReaderView() {
         if (!ctx) return;
 
         ctx.scale(dpr, dpr);
-        renderTask = page.render({ canvasContext: ctx, viewport });
+        renderTask = page.render({ canvas, canvasContext: ctx, viewport });
         await renderTask.promise;
       })();
       return {
@@ -141,13 +141,13 @@ export function ReaderView() {
 
   return (
     <div className="workspace-view workspace-view--reader" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <PanelGroup className="workspace-panel-group" direction="horizontal" style={{ flex: 1 }}>
+      <Group className="workspace-panel-group" orientation="horizontal" style={{ flex: 1 }}>
         {readerThumbsOpen && (
           <>
             <Panel
-              defaultSize={7}
-              minSize={4}
-              maxSize={10}
+              defaultSize="7%"
+              minSize="4%"
+              maxSize="10%"
               collapsible
               style={{
                 background: 'var(--bg-surface-low)',
@@ -163,7 +163,7 @@ export function ReaderView() {
                 />
               </div>
             </Panel>
-            <PanelResizeHandle
+            <Separator
               style={{
                 width: 1,
                 background: 'var(--border-subtle)',
@@ -186,16 +186,16 @@ export function ReaderView() {
 
         {readerAnnotationListOpen && (
           <>
-            <PanelResizeHandle
+            <Separator
               style={{
                 width: 1,
                 background: 'var(--border-subtle)',
               }}
             />
             <Panel
-              defaultSize={20}
-              minSize={14}
-              maxSize={28}
+              defaultSize="20%"
+              minSize="14%"
+              maxSize="28%"
               collapsible
               style={{
                 background: 'var(--bg-surface-low)',
@@ -211,7 +211,7 @@ export function ReaderView() {
             </Panel>
           </>
         )}
-      </PanelGroup>
+      </Group>
     </div>
   );
 }

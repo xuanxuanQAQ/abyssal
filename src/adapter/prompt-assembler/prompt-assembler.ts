@@ -45,8 +45,6 @@ import {
   type TrimBlock,
 } from './truncation-engine';
 
-// §2.1: Fragment assembly engine
-import { assembleTemplate, type FragmentAssemblyParams } from './variable-injector';
 // §8: Compact mode
 import { shouldUseCompactMode, compactConceptFormat, compactMemos, compactAnnotations } from './compact-mode';
 
@@ -453,6 +451,19 @@ export class PromptAssembler {
         output_language: request.outputLanguage ?? '',
         language_instruction: loadFragment('fragments/language_instruction.md')
           .replace(/\{output_language\}/g, request.outputLanguage ?? ''),
+        output_format: taskType === 'analyze'
+          ? loadFragment(`output/output_${templateId.replace('analyze-', '')}.md`)
+              .replace(/\{paper_id\}/g, paperId)
+          : '',
+        bilingual_evidence: taskType === 'analyze'
+          ? loadFragment('fragments/bilingual_evidence.md')
+          : '',
+        confidence_calibration: taskType === 'analyze' && frameworkState !== 'zero_concepts'
+          ? loadFragment('fragments/confidence_calibration.md')
+          : '',
+        suggested_concepts_instruction: taskType === 'analyze'
+          ? loadFragment('fragments/suggested_concepts_instruction.md')
+          : '',
       };
       renderedTemplate = injectVariables(rawTemplate, vars);
     }

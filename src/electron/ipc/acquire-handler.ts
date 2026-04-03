@@ -174,8 +174,13 @@ export function registerAcquireHandlers(ctx: AppContext): void {
 
     // Optionally try a lightweight HEAD request to verify cookies work
     try {
+      const acquireModule = ctx.acquireModule;
+      if (!acquireModule) {
+        return { valid: true, detail: 'Cookies present, but AcquireService not available for verification' };
+      }
+      // Reuse the HttpClient from AcquireService via a lightweight import
       const { HttpClient } = await import('../../core/infra/http-client');
-      const http = new HttpClient({ logger });
+      const http = new HttpClient({ logger }); // lightweight per-verification instance (no proxy needed for publisher home)
       const cookieHeader = cookieJar.getCookieHeader(`https://${pub.domain}/`);
       const headers: Record<string, string> = {};
       if (cookieHeader) headers['Cookie'] = cookieHeader;

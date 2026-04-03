@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../../../core/store';
 import { ConceptTree } from './ConceptTree';
 import { ConceptDetail } from './ConceptDetail';
@@ -16,9 +16,9 @@ export function ConceptsTab() {
   const selectedConceptId = useAppStore((s) => s.selectedConceptId);
 
   return (
-    <PanelGroup className="workspace-panel-group analysis-concepts-stage" direction="horizontal" style={{ height: '100%' }}>
+    <Group className="workspace-panel-group analysis-concepts-stage" orientation="horizontal" style={{ height: '100%' }}>
       {/* Left: Tree + Suggestions */}
-      <Panel id="concept-tree" defaultSize={35} minSize={20} order={1}>
+      <Panel id="concept-tree" defaultSize="35%" minSize="20%">
         <div className="workspace-lens-panel analysis-concepts-side" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', borderRight: '1px solid var(--border-subtle)' }}>
           <div style={{ flex: 1, overflow: 'auto' }}>
             <ConceptTree />
@@ -27,10 +27,10 @@ export function ConceptsTab() {
         </div>
       </Panel>
 
-      <PanelResizeHandle className="panel-resize-handle" />
+      <Separator className="panel-resize-handle" />
 
       {/* Right: Detail */}
-      <Panel id="concept-detail" defaultSize={65} minSize={30} order={2}>
+      <Panel id="concept-detail" defaultSize="65%" minSize="30%">
         {selectedConceptId ? (
           <div className="workspace-main-stage analysis-concept-detail-stage">
             <ConceptDetail conceptId={selectedConceptId} />
@@ -41,6 +41,6 @@ export function ConceptsTab() {
           </div>
         )}
       </Panel>
-    </PanelGroup>
+    </Group>
   );
 }

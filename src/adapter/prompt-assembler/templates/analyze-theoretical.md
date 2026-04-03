@@ -31,8 +31,6 @@ In addition to concept mappings, extract:
 
 4. **Internal Tensions**: Logical tensions or unresolved contradictions WITHIN the paper's own argument (at least 1). If truly none exist, explain why the argument is unusually coherent.
 
-{maturity_instructions}
-
 {suggested_concepts_instruction}
 
 {output_format}

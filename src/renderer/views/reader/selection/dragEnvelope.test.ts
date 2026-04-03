@@ -102,7 +102,10 @@ describe('computePageBounds (same page)', () => {
 describe('computePageBounds (cross-page)', () => {
   it('start page', () => {
     const bounds = computePageBounds(envelope(pt(3, 0.3, 0.8), pt(5, 0.7, 0.3)), 3);
-    expect(bounds).toEqual([{ col: 'L', top: 0.8, bottom: 1.0 }]);
+    expect(bounds).toEqual([
+      { col: 'L', top: 0.8, bottom: 1.0 },
+      { col: 'R', top: 0.0, bottom: 1.0 },
+    ]);
   });
 
   it('middle page → full', () => {
@@ -112,7 +115,10 @@ describe('computePageBounds (cross-page)', () => {
 
   it('end page', () => {
     const bounds = computePageBounds(envelope(pt(3, 0.3, 0.8), pt(5, 0.7, 0.3)), 5);
-    expect(bounds).toEqual([{ col: 'R', top: 0.0, bottom: 0.3 }]);
+    expect(bounds).toEqual([
+      { col: 'L', top: 0.0, bottom: 1.0 },
+      { col: 'R', top: 0.0, bottom: 0.3 },
+    ]);
   });
 
   it('reverse cross-page (page 5 → page 3) → same result', () => {
@@ -120,7 +126,10 @@ describe('computePageBounds (cross-page)', () => {
       envelope(pt(5, 0.7, 0.3), pt(3, 0.3, 0.8)),
       3,
     );
-    expect(boundsStartPage).toEqual([{ col: 'L', top: 0.8, bottom: 1.0 }]);
+    expect(boundsStartPage).toEqual([
+      { col: 'L', top: 0.8, bottom: 1.0 },
+      { col: 'R', top: 0.0, bottom: 1.0 },
+    ]);
 
     const boundsMiddle = computePageBounds(
       envelope(pt(5, 0.7, 0.3), pt(3, 0.3, 0.8)),
@@ -132,7 +141,10 @@ describe('computePageBounds (cross-page)', () => {
       envelope(pt(5, 0.7, 0.3), pt(3, 0.3, 0.8)),
       5,
     );
-    expect(boundsEndPage).toEqual([{ col: 'R', top: 0.0, bottom: 0.3 }]);
+    expect(boundsEndPage).toEqual([
+      { col: 'L', top: 0.0, bottom: 1.0 },
+      { col: 'R', top: 0.0, bottom: 0.3 },
+    ]);
   });
 
   it('page before range → empty', () => {

@@ -29,8 +29,6 @@ Analyze this review/survey paper against the researcher's concept framework. Rev
    - `reason`: Why it's relevant to the researcher's framework.
    - Priority: papers that appear in multiple review categories or are cited as foundational works.
 
-{maturity_instructions}
-
 {suggested_concepts_instruction}
 
 {output_format}

@@ -12,37 +12,13 @@ import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
 import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
 import { parseSetCookieHeaders, mergeCookieStrings } from '../../infra/cookie-utils';
+import { cjkTitleMatch } from '../cjk-match';
 
 const SOURCE_NAME = 'cnki';
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 // KNS8 cross-database product codes (总库)
 const KUAKU_CODE = 'YSTT4HG0,LSTPFY1C,JUP3MUPD,MPMFIG1A,EMRPGLPA,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R';
-
-// ─── Title similarity (CJK-aware) ───
-
-function normalizeCjk(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/\s+/g, '')
-    .replace(/[，。、；：？！""''（）【】《》\u3000]/g, '')
-    .replace(/[,.\-;:?!'"()\[\]<>{}]/g, '')
-    .trim();
-}
-
-function cjkTitleMatch(query: string, candidate: string): number {
-  const q = normalizeCjk(query);
-  const c = normalizeCjk(candidate);
-  if (q === c) return 1.0;
-  if (q.length === 0 || c.length === 0) return 0;
-
-  // Character-level Jaccard for CJK
-  const setQ = new Set([...q]);
-  const setC = new Set([...c]);
-  const intersection = [...setQ].filter((ch) => setC.has(ch)).length;
-  const union = new Set([...setQ, ...setC]).size;
-  return union > 0 ? intersection / union : 0;
-}
 
 // ─── CNKI KNS8 API search ───
 
@@ -224,7 +200,7 @@ async function searchOnHost(
   timeoutMs: number,
   log: Logger | null,
 ): Promise<{ results: CnkiSearchResult[]; sessionCookies: string[]; bodySnippet: string }> {
-  let sessionCookies: string[] = [];
+  const sessionCookies: string[] = [];
 
   const baseHeaders: Record<string, string> = {
     'User-Agent': BROWSER_UA,
@@ -561,7 +537,7 @@ export async function tryCnki(
       await downloadPdf(http, downloadUrl, tempPath, timeoutMs, dlHeaders);
     }
 
-    // ── Step 6: Validate ──
+    // ── Step 5: Validate ──
     const validation = await validatePdf(tempPath);
     if (!validation.valid) {
       deleteFileIfExists(tempPath);

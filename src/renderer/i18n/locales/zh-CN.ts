@@ -17,6 +17,8 @@ export const zhCN = {
     open: '打开',
     back: '返回',
     next: '下一步',
+    add: '添加',
+    remove: '移除',
     loading: '加载中…',
     retry: '重试',
     search: '搜索',
@@ -43,6 +45,12 @@ export const zhCN = {
     reject: '拒绝',
     expand: '展开',
     collapse: '收起',
+    time: {
+      justNow: '刚刚',
+      minutesAgo: '{{count}} 分钟前',
+      hoursAgo: '{{count}} 小时前',
+      daysAgo: '{{count}} 天前',
+    },
   },
 
   // ─── 导航栏 ───
@@ -543,6 +551,10 @@ export const zhCN = {
 
   // ─── 笔记视图 ───
   notes: {
+    tabs: {
+      memos: '碎片笔记',
+      researchNotes: '研究笔记',
+    },
     memo: {
       title: '备忘',
       quickNote: '快速笔记',
@@ -742,7 +754,13 @@ export const zhCN = {
     },
     chat: {
       title: 'AI 聊天',
+      sessionHistory: '会话历史',
       historySessions: '历史会话',
+      messages: '条消息',
+      noSessionHistory: '暂无历史会话',
+      confirmDeleteSession: '确定要删除此会话吗？',
+      sessionDeleted: '会话已删除',
+      failedToDeleteSession: '删除会话失败',
       newSession: '新建会话',
       clearSession: '清空当前会话',
       restore: '还原',
@@ -890,24 +908,63 @@ export const zhCN = {
   // ─── 项目设置向导 ───
   wizard: {
     title: '创建新项目',
-    subtitle: '选择您的研究起点',
-    projectName: '项目名称',
-    projectNamePlaceholder: '我的研究项目',
+    subtitle: '通过几个步骤配置您的项目',
     projectNameRequired: '请输入项目名称',
-    anchored: '理论框架驱动',
-    anchoredDesc: '我已有明确的理论框架，需要系统性地验证和扩展',
-    exploratory: '探索模式',
-    exploratoryDesc: '我还在探索阶段，从文献中发现和构建概念框架',
-    embeddingWarning: '嵌入模型一经选择不可更改，请谨慎选择。',
-    embeddingModel: '嵌入模型',
-    embeddingSmall: 'text-embedding-3-small (推荐)',
-    embeddingLarge: 'text-embedding-3-large',
-    initialConcepts: '初始概念（可选）',
-    addConceptPlaceholder: '输入概念名称',
-    exploratorySkip: '探索模式将跳过概念框架配置。',
-    addConceptsLater: '您可以随时在设置中添加概念框架。',
     creating: '正在创建项目…',
     createProject: '创建项目',
+
+    // 步骤标签
+    step1: '基础',
+    step2: 'LLM',
+    step3: '检索',
+    step4: '网络',
+    step5: '文献源',
+
+    // Step 1: 项目基础
+    projectName: '项目名称',
+    projectNamePlaceholder: '我的研究项目',
+    mode: '项目模式',
+    modeAuto: '自动（推荐）',
+    modeAnchored: '锚定模式 — 理论框架驱动',
+    modeUnanchored: '非锚定模式 — 探索性研究',
+    modeHint: '自动模式会根据您的使用习惯自适应调整。',
+
+    // Step 2: LLM
+    llmProvider: 'LLM 服务商',
+    llmModel: '模型',
+    llmApiKey: 'API 密钥',
+
+    // Step 3: 检索配置
+    embeddingSection: '嵌入模型',
+    embeddingProvider: '嵌入服务商',
+    embeddingModel: '嵌入模型',
+    embeddingApiKey: '嵌入 API 密钥',
+    rerankerSection: '重排序器',
+    rerankerBackend: '重排序后端',
+    rerankerApiKey: '重排序 API 密钥',
+    keyReused: 'API 密钥将复用 {{provider}} 的配置。',
+
+    // Step 4: 语言与网络
+    outputLanguage: '输出语言',
+    proxySection: '代理',
+    enableProxy: '启用 HTTP 代理',
+    proxyHint: '中国大陆用户访问部分 API 和文献源时通常需要开启代理。',
+    proxyUrl: '代理地址',
+    webSearchSection: '网页搜索',
+    enableWebSearch: '启用网页搜索辅助文献发现',
+    webSearchBackend: '搜索后端',
+    webSearchApiKey: '网页搜索 API 密钥',
+    semanticScholarKey: 'API 密钥（可选）',
+    semanticScholarKeyPlaceholder: '输入 Semantic Scholar API 密钥',
+    semanticScholarHint: '未配置 API 密钥时，Semantic Scholar 请求将受到频率限制。',
+
+    // Step 5: 文献源
+    sourcePreset: '文献源预设',
+    preset_overseas: '海外',
+    preset_china: '中国大陆',
+    preset_custom: '自定义',
+    enabledSources: '已启用的文献源（拖拽调整优先级）',
+    sourcesHint: '优先级高的文献源将优先用于下载论文。',
   },
 
   // ─── 设置 ───

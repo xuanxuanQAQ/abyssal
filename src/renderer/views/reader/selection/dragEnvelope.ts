@@ -123,12 +123,30 @@ export function computePageBounds(
 
   // ---- Start page (multi-page) ----
   if (isStartPage) {
-    return [{ col: colFromNx(first.nx), top: first.ny, bottom: 1.0 }];
+    const startCol = colFromNx(first.nx);
+    // Two-column reading order (L -> R): if starting in left column,
+    // the remainder of the start page includes left tail + full right column.
+    if (startCol === 'L') {
+      return [
+        { col: 'L', top: first.ny, bottom: 1.0 },
+        { col: 'R', top: 0.0, bottom: 1.0 },
+      ];
+    }
+    return [{ col: 'R', top: first.ny, bottom: 1.0 }];
   }
 
   // ---- End page (multi-page) ----
   if (isEndPage) {
-    return [{ col: colFromNx(last.nx), top: 0.0, bottom: last.ny }];
+    const endCol = colFromNx(last.nx);
+    // Two-column reading order (L -> R): if ending in right column,
+    // selection includes full left column + right head until end point.
+    if (endCol === 'R') {
+      return [
+        { col: 'L', top: 0.0, bottom: 1.0 },
+        { col: 'R', top: 0.0, bottom: last.ny },
+      ];
+    }
+    return [{ col: 'L', top: 0.0, bottom: last.ny }];
   }
 
   // ---- Middle page ----

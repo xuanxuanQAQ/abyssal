@@ -85,6 +85,11 @@ export interface ProcessServices {
     insertSectionBoundaries: (paperId: string, boundaries: Array<Record<string, unknown>>) => void;
     hasLayoutBlocks: (paperId: string) => boolean;
   } | null;
+  /** Optional OCR lines persistence — write line-level bbox data for scanned pages. */
+  ocrLinesPersist?: {
+    insertOcrLines: (lines: Array<Record<string, unknown>>) => void;
+    deleteOcrLines: (paperId: string) => void;
+  } | null;
 }
 
 // ─── Workflow ───
@@ -302,6 +307,31 @@ export async function processExtractAndHydrate(
     });
 
     const textTooShort = fullText.length < 100;
+
+    // ══ Step 3a: Persist OCR line-level bbox for scanned pages ══
+    if (ctx.ocrLinesPersist && extraction.ocrPageLines && extraction.ocrPageLines.length > 0) {
+      try {
+        ctx.ocrLinesPersist.deleteOcrLines(paperId);
+        const ocrLineRows = extraction.ocrPageLines.flatMap((page) =>
+          page.lines.map((line) => ({
+            paperId,
+            pageIndex: line.pageIndex,
+            lineIndex: line.lineIndex,
+            text: line.text,
+            bbox: { x: line.bbox.x, y: line.bbox.y, w: line.bbox.w, h: line.bbox.h },
+            confidence: line.confidence,
+          })),
+        );
+        ctx.ocrLinesPersist.insertOcrLines(ocrLineRows);
+        logger.info(`[process] Step 3a: Persisted OCR lines for ${paperId}`, {
+          pages: extraction.ocrPageLines.length,
+          totalLines: ocrLineRows.length,
+        });
+      } catch (err) {
+        logger.debug(`Paper ${paperId}: OCR lines persistence failed`, { error: (err as Error).message });
+      }
+    }
+
     if (textTooShort) {
       logger.warn(`Paper ${paperId}: extracted text too short (${fullText.length} chars), skipping chunking/indexing`);
       vectorFailReason = `extracted_text_too_short (${fullText.length} chars)`;

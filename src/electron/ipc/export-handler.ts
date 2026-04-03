@@ -559,12 +559,13 @@ function parseKeywords(raw: unknown): string[] {
 }
 
 function escapeLatex(text: string): string {
+  const BACKSLASH_PLACEHOLDER = '\u0000BACKSLASH\u0000';
   return text
-    .replace(/\\/g, '\x00BACKSLASH\x00')
+    .replace(/\\/g, BACKSLASH_PLACEHOLDER)
     .replace(/[&%$#_{}]/g, (ch) => `\\${ch}`)
     .replace(/~/g, '\\textasciitilde{}')
     .replace(/\^/g, '\\textasciicircum{}')
-    .replace(/\x00BACKSLASH\x00/g, '\\textbackslash{}');
+    .replace(new RegExp(BACKSLASH_PLACEHOLDER, 'g'), '\\textbackslash{}');
 }
 
 function latexHeadingCmd(depth: number): string {

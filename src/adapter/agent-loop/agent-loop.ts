@@ -149,18 +149,13 @@ export class AgentLoop {
     while (round < MAX_ROUNDS) {
       if (signal?.aborted) break;
 
-      let stream: AsyncIterable<any>;
-      try {
-        stream = this.llmClient.completeStream({
-          systemPrompt,
-          messages: conversation.messages,
-          ...(!stripTools && { tools: this.toolRegistry.getToolDefinitions() }),
-          workflowId: 'agent',
-          ...(signal != null && { signal }),
-        });
-      } catch (err) {
-        throw err;
-      }
+      const stream: AsyncIterable<any> = this.llmClient.completeStream({
+        systemPrompt,
+        messages: conversation.messages,
+        ...(!stripTools && { tools: this.toolRegistry.getToolDefinitions() }),
+        workflowId: 'agent',
+        ...(signal != null && { signal }),
+      });
 
       let needsReInvoke = false;
       // Collect all tool calls from a single LLM response for parallel execution

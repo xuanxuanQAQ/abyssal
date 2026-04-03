@@ -12,9 +12,10 @@
 import React, { startTransition, useRef, useCallback, useEffect } from 'react';
 import {
   Panel,
-  PanelGroup,
-  PanelResizeHandle,
-  type ImperativePanelHandle,
+  Group,
+  Separator,
+  usePanelRef,
+  type PanelImperativeHandle,
 } from 'react-resizable-panels';
 import { TitleBar } from './TitleBar';
 import { NavRail } from './NavRail';
@@ -32,6 +33,10 @@ import { useResponsivePanel } from '../../core/hooks/useResponsivePanel';
 
 const resizeHandleVisibleStyle: React.CSSProperties = { visibility: 'visible' };
 const resizeHandleHiddenStyle: React.CSSProperties = { visibility: 'hidden', width: 0 };
+
+function toPercent(value: number): string {
+  return `${Math.max(0, Math.min(100, value))}%`;
+}
 
 const layoutSelector = (s: ReturnType<typeof useAppStore.getState>) => ({
   taskPanelOpen: s.taskPanelOpen,
@@ -51,7 +56,7 @@ export function MainLayout() {
   const switchView = useAppStore((s) => s.switchView);
 
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const contextPanelRef = useRef<ImperativePanelHandle>(null);
+  const contextPanelRef = usePanelRef();
 
   // §2.3 自适应面板折叠
   useResponsivePanel({
@@ -67,18 +72,22 @@ export function MainLayout() {
   });
 
   // §2.3 折叠时从 Panel API 读取当前尺寸并保存
-  const handleContextPanelCollapse = useCallback(() => {
-    const currentSize = contextPanelRef.current?.getSize() ?? 0;
-    if (currentSize > 0) {
-      setContextPanelLastSize(currentSize);
+  const handleContextPanelResize = useCallback((size: { asPercentage: number; inPixels: number }) => {
+    if (size.asPercentage === 0) {
+      // collapsed
+      useAppStore.setState({ contextPanelOpen: false, contextPanelSize: 0 });
+    } else {
+      // expanded or resized
+      const wasCollapsed = !useAppStore.getState().contextPanelOpen;
+      if (wasCollapsed) {
+        const lastSize = useAppStore.getState().contextPanelLastSize || 28;
+        useAppStore.setState({ contextPanelOpen: true, contextPanelSize: lastSize });
+      } else {
+        setContextPanelLastSize(size.asPercentage);
+        useAppStore.setState({ contextPanelSize: size.asPercentage });
+      }
     }
-    useAppStore.setState({ contextPanelOpen: false, contextPanelSize: 0 });
   }, [setContextPanelLastSize]);
-
-  const handleContextPanelExpand = useCallback(() => {
-    const lastSize = useAppStore.getState().contextPanelLastSize || 28;
-    useAppStore.setState({ contextPanelOpen: true, contextPanelSize: lastSize });
-  }, []);
 
   // 同步 store → Panel API（处理来自 ContextHeader "关闭面板"等外部触发）
   useEffect(() => {
@@ -140,33 +149,30 @@ export function MainLayout() {
       {/* §2.2 Workspace */}
       <div className="app-shell__workspace" ref={workspaceRef}>
         <DndProvider>
-          <PanelGroup direction="horizontal" autoSaveId="abyssal-workspace-v2">
+          <Group orientation="horizontal">
             {/* MainStage Panel */}
             <Panel
-              minSize={40}
-              defaultSize={100 - contextPanelSize}
-              order={1}
+              minSize="40%"
+              defaultSize={toPercent(100 - contextPanelSize)}
             >
               <MainStage />
             </Panel>
 
-            {/* ResizeHandle — 始终渲染，折叠时隐藏样式 */}
-            <PanelResizeHandle
+            {/* Separator — 始终渲染，折叠时隐藏样式 */}
+            <Separator
               className="panel-resize-handle"
               style={contextPanelOpen ? resizeHandleVisibleStyle : resizeHandleHiddenStyle}
             />
 
             {/* ContextPanel — keep-alive：折叠时保持挂载(display:none)避免重建开销 */}
             <Panel
-              ref={contextPanelRef}
-              minSize={15}
-              maxSize={40}
-              defaultSize={contextPanelSize}
+              panelRef={contextPanelRef}
+              minSize="15%"
+              maxSize="40%"
+              defaultSize={toPercent(contextPanelSize)}
               collapsible
-              collapsedSize={0}
-              onCollapse={handleContextPanelCollapse}
-              onExpand={handleContextPanelExpand}
-              order={2}
+              collapsedSize="0%"
+              onResize={handleContextPanelResize}
             >
               <ViewActiveContext.Provider value={contextPanelOpen}>
                 <div style={{ display: contextPanelOpen ? 'contents' : 'none' }}>
@@ -174,7 +180,7 @@ export function MainLayout() {
                 </div>
               </ViewActiveContext.Provider>
             </Panel>
-          </PanelGroup>
+          </Group>
         </DndProvider>
       </div>
 

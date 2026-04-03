@@ -7,15 +7,17 @@ import {
   buildSystemPrompt,
   type ActiveConceptContext,
   type ActivePaperContext,
+  type SystemPromptBuildOptions,
   type SystemPromptContext,
 } from '../adapter/agent-loop/system-prompt-builder';
 
 export async function buildChatSystemPrompt(
   appContext: AppContext,
   chatContext?: ChatContext,
+  options?: SystemPromptBuildOptions,
 ): Promise<string> {
   const promptContext = await buildChatSystemPromptContext(appContext, chatContext);
-  return buildSystemPrompt(promptContext);
+  return buildSystemPrompt(promptContext, options);
 }
 
 export async function buildChatSystemPromptContext(

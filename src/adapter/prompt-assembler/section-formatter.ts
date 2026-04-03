@@ -23,13 +23,7 @@ export interface FormattedSection {
 // ─── Section header formatting (§6.4) ───
 
 /**
- * Wrap content with a region header containing metadata comment.
- *
- * Output format:
- *   ## {title}
- *   <!-- source: {sourceType}, tokens: {tokenCount}, priority: {priority} -->
- *
- *   {content}
+ * Wrap content with a Markdown H2 region header.
  */
 export function formatSectionBlock(
   title: string,
@@ -40,12 +34,7 @@ export function formatSectionBlock(
 ): string {
   if (!content || content.trim().length === 0) return '';
 
-  return [
-    `## ${title}`,
-    `<!-- source: ${sourceType}, tokens: ${tokenCount}, priority: ${priority} -->`,
-    '',
-    content,
-  ].join('\n');
+  return [`## ${title}`, '', content].join('\n');
 }
 
 // ─── Annotation formatting (§3.4) ───
@@ -139,9 +128,19 @@ export interface ConceptForFormat {
 
 /**
  * Format concept framework for system prompt injection.
- * Includes maturity-specific special instructions for tentative concepts.
+ *
+ * Maturity-specific instructions are stated ONCE as global rules before the
+ * concept list, not repeated per-concept. This saves ~300-500 tokens when the
+ * framework contains many tentative or established concepts.
+ *
+ * @param excludedConceptNames - names of concepts excluded by subset selection.
+ *   When provided, appended as a compact one-line list so the LLM is aware
+ *   the full framework is larger than what's shown.
  */
-export function formatConceptFramework(concepts: ConceptForFormat[]): string {
+export function formatConceptFramework(
+  concepts: ConceptForFormat[],
+  excludedConceptNames?: string[],
+): string {
   if (concepts.length === 0) return '';
 
   const lines: string[] = [];
@@ -154,23 +153,12 @@ export function formatConceptFramework(concepts: ConceptForFormat[]): string {
     lines.push(`- **Definition**: ${c.definition}`);
     lines.push(`- **Keywords**: ${c.searchKeywords.join(', ')}`);
     lines.push(`- **Maturity**: ${c.maturity}`);
+    lines.push('');
+  }
 
-    if (c.maturity === 'tentative') {
-      lines.push(`- **⚠️ Special Instruction**: This concept is tentative — the researcher`);
-      lines.push(`  is still exploring whether this conceptualization is appropriate.`);
-      lines.push(`  Please critically evaluate whether the paper's evidence supports this`);
-      lines.push(`  way of framing the concept. If you believe a better conceptualization`);
-      lines.push(`  exists, describe it in your analysis and suggest it as a`);
-      lines.push(`  \`suggested_new_concept\`.`);
-      lines.push(`  A low confidence score (< 0.5) is expected and acceptable.`);
-    }
-
-    if (c.maturity === 'established') {
-      lines.push(`- **Note**: This concept's definition is stable and well-supported by`);
-      lines.push(`  existing literature. Focus your assessment on the quality and`);
-      lines.push(`  specificity of the evidence this paper provides, rather than`);
-      lines.push(`  questioning the concept itself.`);
-    }
+  // Compact mention of excluded concepts (if subset selection filtered some out)
+  if (excludedConceptNames && excludedConceptNames.length > 0) {
+    lines.push(`_Other concepts in framework (not shown, lower relevance to this paper): ${excludedConceptNames.join(', ')}_`);
     lines.push('');
   }
 

@@ -2,7 +2,7 @@ export { CapabilityRegistry } from './capability-registry';
 export type {
   Capability, CapabilityDomain, CapabilityOperation,
   CapabilityToolDefinition, OperationContext, OperationResult,
-  OperationParam, PermissionLevel, CapabilityServices,
+  OperationParam, PermissionLevel, CapabilityServices, ToolRouteFamily,
 } from './types';
 export {
   createReaderCapability, createAnalysisCapability, createNotesCapability,

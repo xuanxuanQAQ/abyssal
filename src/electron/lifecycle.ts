@@ -99,7 +99,9 @@ export async function gracefulShutdown(
 
     if (session) {
       // Save working memory entries
-      const memoryEntries = session.memory.getAll().map((e) => ({
+      const memoryEntries = session.memory.getAll()
+        .filter((e) => e.type !== 'observation')
+        .map((e) => ({
         id: e.id,
         type: e.type,
         content: e.content,
@@ -110,10 +112,11 @@ export async function gracefulShutdown(
         last_accessed_at: e.lastAccessedAt,
         tags: e.tags ? JSON.stringify(e.tags) : null,
       }));
-      if (memoryEntries.length > 0) {
-        await ctx.dbProxy.saveSessionMemory(memoryEntries);
-        ctx.logger.info('Session memory persisted', { entries: memoryEntries.length });
-      }
+      await ctx.dbProxy.saveSessionMemory(memoryEntries);
+      ctx.logger.info('Session memory persisted', {
+        entries: memoryEntries.length,
+        observationExcluded: true,
+      });
     }
 
     if (orchestrator) {
@@ -142,6 +145,13 @@ export async function gracefulShutdown(
     ctx.logger.warn('DB close error during shutdown', {
       error: (err as Error).message,
     });
+  }
+
+  // Step 5b: Close RAG read-only DB connection
+  try {
+    ctx.ragDbService?.close();
+  } catch {
+    // Ignore — read-only connection close is non-critical
   }
 
   // Step 6: Release process lock

@@ -95,6 +95,8 @@ export interface ChatImageClip {
 export interface ChatContext {
   activeView: ViewType;
   contextKey: string;
+  /** Chat conversation key used to isolate backend chat context/history */
+  conversationKey?: string;
   selectedPaperId?: string;
   /** 多论文上下文（Library 多选时） */
   selectedPaperIds?: string[];

@@ -144,11 +144,38 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
   const onBlockClickRef = useRef(onBlockClick);
   onBlockClickRef.current = onBlockClick;
 
+  /** Track previous scale for zoom-placeholder CSS trick (matches CanvasLayer §14.3) */
+  const previousScaleRef = useRef(scale);
+
   // ---- Effect 1: Render text layer ----
   useEffect(() => {
     if (!isInRenderWindow) return;
     const container = containerRef.current;
     if (!container) return;
+
+    // -- Zoom placeholder: scale old content to match CanvasLayer's CSS zoom --
+    const prevScale = previousScaleRef.current;
+    if (prevScale !== scale && container.childElementCount > 0) {
+      const ratio = scale / prevScale;
+      // Pin to old dimensions + CSS scale so old spans visually match the new zoom level
+      container.style.inset = 'auto';
+      container.style.top = '0';
+      container.style.left = '0';
+      container.style.width = `${cssWidth / ratio}px`;
+      container.style.height = `${cssHeight / ratio}px`;
+      container.style.transformOrigin = '0 0';
+      container.style.transform = `scale(${ratio})`;
+    }
+
+    const clearZoomPlaceholder = () => {
+      container.style.inset = '';
+      container.style.top = '';
+      container.style.left = '';
+      container.style.width = '';
+      container.style.height = '';
+      container.style.transform = '';
+      container.style.transformOrigin = '';
+    };
 
     let cancelled = false;
 
@@ -173,8 +200,17 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       await textLayer.render();
       if (cancelled) return;
 
+      // Clear zoom placeholder before swapping in new content
+      clearZoomPlaceholder();
+      previousScaleRef.current = scale;
+
       while (container.firstChild) container.removeChild(container.firstChild);
       container.style.setProperty('--scale-factor', String(scale));
+      // Required by pdfjs v5: set --total-scale-factor for font-size and transform calculations.
+      // Also copy --min-font-size which pdfjs sets on tempContainer for minimum font size clamping.
+      container.style.setProperty('--total-scale-factor', String(scale));
+      const minFontSize = tempContainer.style.getPropertyValue('--min-font-size');
+      if (minFontSize) container.style.setProperty('--min-font-size', minFontSize);
       while (tempContainer.firstChild) {
         container.appendChild(tempContainer.firstChild);
       }
@@ -189,7 +225,11 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
     };
 
     renderTextLayer();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      clearZoomPlaceholder();
+      previousScaleRef.current = scale;
+    };
   }, [isInRenderWindow, pageNumber, scale, getPage, cssWidth, cssHeight]);
 
   // ---- Effect 2: Re-apply DLA when blocks arrive after render ----
@@ -273,26 +313,19 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       e.stopPropagation();
       e.preventDefault();
 
-      const wasSelected = target.classList.contains('dla-selected');
-      container.querySelectorAll('.dla-selected').forEach(
-        (el) => el.classList.remove('dla-selected'),
-      );
-
-      if (!wasSelected) {
-        target.classList.add('dla-selected');
-        const blockType = target.getAttribute('data-block-type') ?? 'figure';
-        const bboxStr = target.getAttribute('data-bbox');
-        if (bboxStr && onBlockClickRef.current) {
-          try {
-            const bbox = JSON.parse(bboxStr);
-            onBlockClickRef.current({
-              type: blockType as ContentBlockDTO['type'],
-              bbox,
-              confidence: 1,
-              pageIndex: pageNumber - 1,
-            });
-          } catch { /* ignore */ }
-        }
+      target.classList.toggle('dla-selected');
+      const blockType = target.getAttribute('data-block-type') ?? 'figure';
+      const bboxStr = target.getAttribute('data-bbox');
+      if (bboxStr && onBlockClickRef.current) {
+        try {
+          const bbox = JSON.parse(bboxStr);
+          onBlockClickRef.current({
+            type: blockType as ContentBlockDTO['type'],
+            bbox,
+            confidence: 1,
+            pageIndex: pageNumber - 1,
+          });
+        } catch { /* ignore */ }
       }
     };
 

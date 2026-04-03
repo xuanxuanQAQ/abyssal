@@ -91,7 +91,7 @@ const INVOKE_CHANNELS = [
   'advisory:getRecommendations', 'advisory:execute', 'advisory:getNotifications',
   // settings
   'settings:getAll', 'settings:updateSection', 'settings:updateApiKey',
-  'settings:testApiKey', 'settings:getDbStats', 'settings:getSystemInfo',
+  'settings:testApiKey', 'settings:testApiKeyDirect', 'settings:getDbStats', 'settings:getSystemInfo',
   'settings:openWorkspaceFolder', 'settings:getIndexHealth',
   // app
   'app:getConfig', 'app:updateConfig', 'app:getProjectInfo', 'app:switchProject',
@@ -103,6 +103,7 @@ const INVOKE_CHANNELS = [
   'db:concepts:updateKeywords', 'db:articles:getAllCitedPaperIds',
   // dla (Document Layout Analysis)
   'dla:analyze', 'dla:getBlocks', 'dla:getDocumentBlocks', 'dla:analyzeDocument',
+  'dla:getOcrLines', 'dla:getDocumentOcrLines',
   // workspace
   'workspace:create', 'workspace:openDialog', 'workspace:listRecent',
   'workspace:getCurrent', 'workspace:switch', 'workspace:removeRecent',

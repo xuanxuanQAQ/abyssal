@@ -165,6 +165,8 @@ export interface TextExtractionResult {
   firstPage: FirstPageMetadata;
   /** 每页字符位置数据（供 DLA block-text 融合使用） */
   pageCharData?: import('../dla/types').PageCharData[];
+  /** OCR 行级 bbox 数据（按页分组，供阅读器文本层对齐使用） */
+  ocrPageLines?: import('../dla/types').PageOcrLines[];
 }
 
 /** 提取的参考文献条目 */

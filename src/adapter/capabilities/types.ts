@@ -23,6 +23,15 @@ export type CapabilityDomain =
   | 'ui'
   | 'config';
 
+export type ToolRouteFamily =
+  | 'research_qa'
+  | 'retrieval_search'
+  | 'config_diagnostic'
+  | 'workspace_control'
+  | 'ui_navigation'
+  | 'writing_edit'
+  | 'mixed_fallback';
+
 export type PermissionLevel = 0 | 1 | 2;
 
 export interface OperationParam {
@@ -49,6 +58,9 @@ export interface CapabilityOperation {
   description: string;
   params: OperationParam[];
   permissionLevel: PermissionLevel;
+  routeFamilies?: ToolRouteFamily[];
+  /** Semantic keywords for operation matching and scoring (0-5 priority order) */
+  semanticKeywords?: string[];
   /** Execute the operation */
   execute: (
     params: Record<string, unknown>,
@@ -71,6 +83,7 @@ export interface Capability {
   description: string;
   /** Icon hint for UI display */
   icon?: string;
+  routeFamilies?: ToolRouteFamily[];
   operations: CapabilityOperation[];
 }
 
@@ -125,6 +138,9 @@ export interface CapabilityServices {
     config: Record<string, unknown>;
     update: (section: string, patch: Record<string, unknown>) => Promise<void>;
   } | null;
+  apiDiagnostics?: {
+    testProvider: (provider: string, apiKey?: string) => Promise<{ ok: boolean; message: string }>;
+  } | null;
 }
 
 // ─── Tool bridge type (for converting capabilities to LLM tool definitions) ───
@@ -141,4 +157,7 @@ export interface CapabilityToolDefinition {
   capabilityName: string;
   operationName: string;
   permissionLevel: PermissionLevel;
+  routeFamilies: ToolRouteFamily[];
+  /** Semantic relevance score (0-1) computed during routing. Higher = more relevant to user intent. */
+  semanticRelevance?: number;
 }

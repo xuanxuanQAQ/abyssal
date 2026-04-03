@@ -100,7 +100,7 @@ export function registerPapersHandlers(ctx: AppContext): void {
   // ── db:papers:importBibtex ──
   typedHandler('db:papers:importBibtex', logger, async (_e, content) => {
     if (!ctx.bibliographyModule) throw new Error('Bibliography service not initialized');
-    const entries = ctx.bibliographyModule.importBibtex(content);
+    const entries = await ctx.bibliographyModule.importBibtex(content);
     const result = await insertBibEntries(ctx.dbProxy, entries);
     if (result.imported > 0) {
       ctx.pushManager?.enqueueDbChange(['papers'], 'insert');
@@ -219,7 +219,7 @@ export function registerPapersHandlers(ctx: AppContext): void {
 
     await ctx.dbProxy.updatePaper(asPaperId(paperId), {
       fulltextPath: destPath,
-      fulltextStatus: 'pending',
+      fulltextStatus: 'available',
       fulltextSource: 'manual',
       failureReason: null,
       failureCount: 0,

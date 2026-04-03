@@ -27,6 +27,8 @@ export interface DownloadCandidate {
   complex: boolean;
   /** 跳过 preflight HEAD 检查（已知直出 PDF 的高置信度源） */
   skipPreflight: boolean;
+  /** 是否强制使用代理 HttpClient（Sci-Hub、DOI Redirect 等被墙源） */
+  useProxy: boolean;
   /** 评分明细（调试用） */
   scoreBreakdown: Record<string, number>;
 }
@@ -44,6 +46,8 @@ export interface BuildStrategyParams {
   doi: string | null;
   arxivId: string | null;
   pmcid: string | null;
+  /** 用户手动提供的 PDF URL（来自 AcquireFulltextParams.url） */
+  url: string | null;
   recon: ReconResult | null;
   fastPath: FastPathResult;
   cookieJar: CookieJar | null;
@@ -98,7 +102,7 @@ export function rewriteEzproxyUrl(originalUrl: string, template: string): string
 
 export function buildStrategy(params: BuildStrategyParams): StrategyResult {
   const {
-    doi, arxivId, pmcid, recon, fastPath,
+    doi, arxivId: _arxivId, pmcid, url: userUrl, recon, fastPath,
     cookieJar, failureMemory, config, logger,
   } = params;
 
@@ -113,6 +117,7 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
     opts: {
       complex?: boolean;
       skipPreflight?: boolean;
+      useProxy?: boolean;
       headers?: Record<string, string>;
       extraBreakdown?: Record<string, number>;
     } = {},
@@ -178,6 +183,7 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
       headers,
       complex: opts.complex ?? false,
       skipPreflight: opts.skipPreflight ?? false,
+      useProxy: opts.useProxy ?? false,
       scoreBreakdown: breakdown,
     });
   };
@@ -206,6 +212,11 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
     for (const url of recon.crossRefData.pdfLinks) {
       addCandidate('crossref-pdf', url, SCORES.CROSSREF_PDF, { skipPreflight: true });
     }
+  }
+
+  // ── 3b. 用户手动提供的 PDF URL ──
+  if (userUrl) {
+    addCandidate('user-url', userUrl, 72); // 介于 OPENALEX_REPO(75) 和 INSTITUTIONAL_COOKIE(65) 之间
   }
 
   // ── 4. Unpaywall（通过 Recon OpenAlex 已覆盖，此处作为独立候选备份） ──
@@ -322,7 +333,7 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
   // 至少用 DOI redirect 作为最低优先级候选（preflight 可能从 HTML 中提取到 PDF URL）
   if (doi && !candidates.some((c) => !c.complex)) {
     const doiUrl = `https://doi.org/${encodeURIComponent(doi)}`;
-    addCandidate('doi-redirect', doiUrl, 35); // 比 PMC(40) 低，但比 SCIHUB(30) 高
+    addCandidate('doi-redirect', doiUrl, 35, { useProxy: true }); // 比 PMC(40) 低，但比 SCIHUB(30) 高
     logger.debug('[Strategy] No simple candidates yet, added doi-redirect as fallback');
   }
 
@@ -348,7 +359,7 @@ export function buildStrategy(params: BuildStrategyParams): StrategyResult {
   // ── 10. 复杂源：Sci-Hub ──
   if (doi && config.enableScihub) {
     const domain = config.scihubDomain ?? 'sci-hub.se';
-    addCandidate('scihub', `https://${domain}/${doi}`, SCORES.SCIHUB, { complex: true });
+    addCandidate('scihub', `https://${domain}/${doi}`, SCORES.SCIHUB, { complex: true, useProxy: true });
   }
 
   // ── 分离 simple / complex 并排序 ──

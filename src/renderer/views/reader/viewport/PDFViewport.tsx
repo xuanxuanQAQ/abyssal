@@ -13,6 +13,7 @@ import React, {
   useMemo,
 } from 'react';
 import { useReaderStore } from '../../../core/store/useReaderStore';
+import type { ImageClip, SelectionPayload } from '../../../core/store/useReaderStore';
 import { useAnnotations } from '../../../core/ipc/hooks/useAnnotations';
 import { useRenderWindow } from '../hooks/useRenderWindow';
 import { useZoom } from '../hooks/useZoom';
@@ -38,6 +39,7 @@ import type { HighlightColor } from '../../../../shared-types/enums';
 import { useConceptList as useConcepts } from '../../../core/ipc/hooks/useConcepts';
 import type { Concept } from '../../../../shared-types/models';
 import { useLayoutBlocks } from '../hooks/useLayoutBlocks';
+import { useOcrLines } from '../hooks/useOcrLines';
 import { captureBlockRegion } from './layers/captureBlockRegion';
 import {
   buildDocumentSelectionSnapshot,
@@ -60,6 +62,29 @@ interface SelectionAnnotationEntry {
 interface PendingStructuredSelection {
   entries: SelectionAnnotationEntry[];
   selectedText: string;
+}
+
+function selectionClipKey(
+  pageNumber: number,
+  type: string,
+  bbox: { x: number; y: number; w: number; h: number },
+): string {
+  return [
+    pageNumber,
+    type,
+    bbox.x.toFixed(4),
+    bbox.y.toFixed(4),
+    bbox.w.toFixed(4),
+    bbox.h.toFixed(4),
+  ].join(':');
+}
+
+function selectionClipFromBlock(block: ContentBlockDTO): string {
+  return selectionClipKey(block.pageIndex + 1, block.type, block.bbox);
+}
+
+function selectionClipFromImage(clip: ImageClip): string {
+  return selectionClipKey(clip.pageNumber, clip.type, clip.bbox);
 }
 
 function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: PDFViewportProps) {
@@ -149,41 +174,82 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
     currentPage,
   });
 
-  // Block select handler — capture canvas region → write SelectionPayload to store
+  // OCR line-level bbox data for scanned pages
+  const ocrLineMap = useOcrLines({
+    paperId,
+    totalPages,
+  });
+
+  const [selectedBlockClips, setSelectedBlockClips] = useState<Map<string, ImageClip>>(new Map());
+  const [selectionSyncTick, setSelectionSyncTick] = useState(0);
+
+  // Ensure payload/quotedSelection follows native Selection lifecycle,
+  // including cases where useSelectionMachine state doesn't change.
+  useEffect(() => {
+    const onSelectionChange = () => {
+      setSelectionSyncTick((tick) => tick + 1);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
+  // Block select handler — toggle block capture clips into a local selection set.
   const handleBlockSelect = useCallback(
     (block: ContentBlockDTO) => {
-      console.log(`[DLA-Select] Block clicked: type=${block.type} page=${block.pageIndex} conf=${block.confidence.toFixed(2)}`);
-      const container = containerRef.current;
-      if (!container) return;
+      const clipKey = selectionClipFromBlock(block);
+      setSelectedBlockClips((prev) => {
+        if (prev.has(clipKey)) {
+          const next = new Map(prev);
+          next.delete(clipKey);
+          return next;
+        }
 
-      const pageSlotEl = container.querySelector<HTMLElement>(
-        `[data-page="${block.pageIndex + 1}"]`,
-      );
-      if (!pageSlotEl) return;
+        console.log(`[DLA-Select] Block clicked: type=${block.type} page=${block.pageIndex} conf=${block.confidence.toFixed(2)}`);
+        const container = containerRef.current;
+        if (!container) return prev;
 
-      const clip = captureBlockRegion(
-        pageSlotEl,
-        block.bbox,
-        block.pageIndex + 1,
-        block.type,
-      );
+        const pageSlotEl = container.querySelector<HTMLElement>(
+          `[data-page="${block.pageIndex + 1}"]`,
+        );
+        if (!pageSlotEl) return prev;
 
-      if (clip) {
-        console.log(`[DLA-Select] Captured ${block.type} region (${clip.bbox.w.toFixed(3)}×${clip.bbox.h.toFixed(3)}) → dataUrl ${(clip.dataUrl.length / 1024).toFixed(1)}KB`);
-      } else {
-        console.warn('[DLA-Select] Canvas capture failed — canvas not available or region too small');
-      }
+        const clip = captureBlockRegion(
+          pageSlotEl,
+          block.bbox,
+          block.pageIndex + 1,
+          block.type,
+        );
 
-      useReaderStore.getState().setSelectionPayload({
-        images: clip ? [clip] : [],
-        sourcePages: [block.pageIndex + 1],
+        if (clip) {
+          console.log(`[DLA-Select] Captured ${block.type} region (${clip.bbox.w.toFixed(3)}×${clip.bbox.h.toFixed(3)}) → dataUrl ${(clip.dataUrl.length / 1024).toFixed(1)}KB`);
+        } else {
+          console.warn('[DLA-Select] Canvas capture failed — canvas not available or region too small');
+        }
+
+        if (!clip) return prev;
+
+        const next = new Map(prev);
+        next.set(clipKey, clip);
+        return next;
       });
     },
     [],
   );
 
+  const getPageForSelection = useCallback(
+    async (pageNumber: number) => {
+      const doc = manager.getDocument();
+      if (!doc) throw new Error('PDF document not loaded');
+      return doc.getPage(pageNumber);
+    },
+    [manager],
+  );
+
   // Text selection (unified state machine: mouse coords for DLA, Selection API for text)
-  const textSelection = useSelectionMachine(blockMap);
+  const textSelection = useSelectionMachine(blockMap, {
+    getPage: getPageForSelection,
+    scale: zoomLevel,
+  });
 
   // Emit selectText event when user selects text
   useEffect(() => {
@@ -199,25 +265,99 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
 
   // Auto-inject / clear current text selection into chat context.
   useEffect(() => {
-    if (!textSelection.selectedText || !textSelection.primaryPageNumber) {
-      // Selection dismissed → clear store
+    const manualImages = Array.from(selectedBlockClips.values());
+    const liveSnapshot = buildDocumentSelectionSnapshot(window.getSelection());
+    const debugEnabled = Boolean((window as any).__SELECTION_DEBUG__);
+
+    const effectiveText =
+      textSelection.selectedText
+      ?? liveSnapshot?.selectedText
+      ?? null;
+    const effectivePrimaryPage =
+      textSelection.primaryPageNumber
+      ?? liveSnapshot?.segments[0]?.pageNumber
+      ?? null;
+
+    if (!effectiveText || !effectivePrimaryPage) {
+      // Text selection dismissed: keep manually toggled image selection.
+      if (debugEnabled) {
+        console.log('[SelectionSync] clear text injection', {
+          machineText: textSelection.selectedText,
+          machinePage: textSelection.primaryPageNumber,
+          liveText: liveSnapshot?.selectedText ?? null,
+          livePage: liveSnapshot?.segments[0]?.pageNumber ?? null,
+          manualImageCount: manualImages.length,
+        });
+      }
       useReaderStore.getState().setQuotedSelection(null);
-      useReaderStore.getState().setSelectionPayload(null);
+      if (manualImages.length === 0) {
+        useReaderStore.getState().setSelectionPayload(null);
+        return;
+      }
+
+      const manualPages = Array.from(new Set(manualImages.map((clip) => clip.pageNumber))).sort((a, b) => a - b);
+      useReaderStore.getState().setSelectionPayload({
+        images: manualImages,
+        sourcePages: manualPages,
+      });
       return;
     }
 
-    if (textSelection.payload) {
-      useReaderStore.getState().setSelectionPayload(textSelection.payload);
+    const mergedImages = new Map<string, ImageClip>();
+    for (const clip of textSelection.payload?.images ?? []) {
+      mergedImages.set(selectionClipFromImage(clip), clip);
+    }
+    for (const clip of manualImages) {
+      mergedImages.set(selectionClipFromImage(clip), clip);
     }
 
+    const mergedSourcePages = new Set<number>(textSelection.payload?.sourcePages ?? []);
+    mergedSourcePages.add(effectivePrimaryPage);
+    for (const clip of mergedImages.values()) {
+      mergedSourcePages.add(clip.pageNumber);
+    }
+
+    const mergedPayload: SelectionPayload = {
+      sourcePages: Array.from(mergedSourcePages).sort((a, b) => a - b),
+    };
+
+    const payloadText = textSelection.payload?.text ?? effectiveText;
+    if (payloadText) {
+      mergedPayload.text = payloadText;
+    }
+
+    const mergedImageList = Array.from(mergedImages.values());
+    if (mergedImageList.length > 0) {
+      mergedPayload.images = mergedImageList;
+    }
+
+    if (debugEnabled) {
+      console.log('[SelectionSync] set merged payload', {
+        text: payloadText,
+        effectivePrimaryPage,
+        machineText: textSelection.selectedText,
+        machinePage: textSelection.primaryPageNumber,
+        liveText: liveSnapshot?.selectedText ?? null,
+        livePage: liveSnapshot?.segments[0]?.pageNumber ?? null,
+        textPayloadImageCount: textSelection.payload?.images?.length ?? 0,
+        manualImageCount: manualImages.length,
+        mergedImageCount: mergedImageList.length,
+        sourcePages: mergedPayload.sourcePages,
+      });
+    }
+
+    useReaderStore.getState().setSelectionPayload(mergedPayload);
+
     useReaderStore.getState().setQuotedSelection({
-      text: textSelection.selectedText,
-      page: textSelection.primaryPageNumber,
+      text: effectiveText,
+      page: effectivePrimaryPage,
     });
   }, [
     textSelection.payload,
     textSelection.primaryPageNumber,
     textSelection.selectedText,
+    selectedBlockClips,
+    selectionSyncTick,
   ]);
 
   // Text annotation pen mode
@@ -326,6 +466,7 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
 
         // §5.4: Track render task for cancellation on document switch/destroy
         const renderTask = page.render({
+          canvas,
           canvasContext: context,
           viewport,
         });
@@ -551,6 +692,7 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
         onAnnotationHover={handleAnnotationHover}
         onAnnotationClick={handleAnnotationClick}
         blockMap={blockMap}
+        ocrLineMap={ocrLineMap}
         onBlockSelect={handleBlockSelect}
         dragBoundsMap={textSelection.dragBoundsMap}
       />

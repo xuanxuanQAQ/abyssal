@@ -23,6 +23,14 @@ import type { LlmClient, Message, ContentBlock } from '../llm-client/llm-client'
 import type { PushManager } from '../../electron/ipc/push';
 import type { AgentStreamEvent, ChatContext } from '../../shared-types/ipc';
 import { countTokens } from '../llm-client/token-counter';
+import type { SystemPromptBuildOptions, SystemPromptBundle } from '../agent-loop/system-prompt-builder';
+import {
+  classifyPromptGate,
+  bundleIncludes,
+  type InjectionBundle,
+} from './prompt-injection-gating';
+import { buildToolRouteInstruction, routeToolFamilies } from './tool-routing';
+import { ToolCallingGovernor } from './tool-calling-governor';
 
 // ─── Types ───
 
@@ -33,7 +41,7 @@ export interface SessionOrchestratorOptions {
   llmClient: LlmClient;
   pushManager: PushManager | null;
   /** System prompt builder for the current context */
-  buildSystemPrompt: (chatContext?: ChatContext) => Promise<string>;
+  buildSystemPrompt: (chatContext?: ChatContext, options?: SystemPromptBuildOptions) => Promise<string>;
   /** Maximum tool-use rounds per user message (default 15) */
   maxRounds?: number;
   /** Enable proactive mode (default true) */
@@ -44,6 +52,10 @@ export interface SessionOrchestratorOptions {
 interface ConversationState {
   messages: Message[];
   conversationId: string;
+}
+
+interface ConversationShortTermState {
+  lastSelectionAt: number | null;
 }
 
 interface ProactiveRule {
@@ -74,15 +86,20 @@ export class SessionOrchestrator {
   private readonly capabilities: CapabilityRegistry;
   private readonly llmClient: LlmClient;
   private readonly pushManager: PushManager | null;
-  private readonly buildSystemPrompt: (chatContext?: ChatContext) => Promise<string>;
+  private readonly buildSystemPrompt: (chatContext?: ChatContext, options?: SystemPromptBuildOptions) => Promise<string>;
   private readonly maxRounds: number;
   private proactiveEnabled: boolean;
   private readonly logger: (msg: string, data?: unknown) => void;
   private readonly proactiveRules: ProactiveRule[] = [];
   private eventSubscription: { unsubscribe: () => void } | null = null;
+  /** Tool calling governor to prevent excessive tool invocation */
+  private readonly toolGovernor: ToolCallingGovernor;
 
-  // Single unified conversation per workspace (context switching does NOT split conversations)
-  private conversation: ConversationState | null = null;
+  // Conversation histories keyed by conversationId.
+  // 'workspace' keeps legacy behavior; UI-created chat sessions use isolated keys.
+  private readonly conversations = new Map<string, ConversationState>();
+  // Per-conversation short-term state used for gated prompt injection decisions.
+  private readonly conversationShortTerm = new Map<string, ConversationShortTermState>();
 
   constructor(opts: SessionOrchestratorOptions) {
     this.eventBus = opts.eventBus;
@@ -94,6 +111,12 @@ export class SessionOrchestrator {
     this.maxRounds = opts.maxRounds ?? 15;
     this.proactiveEnabled = opts.proactiveEnabled ?? false;
     this.logger = opts.logger ?? (() => {});
+    this.toolGovernor = new ToolCallingGovernor({
+      maxConsecutiveFailures: 3,
+      maxTotalCalls: 20,
+      maxCallsPerTool: 5,
+      repetitionThreshold: 2,
+    });
 
     this.registerDefaultProactiveRules();
   }
@@ -132,9 +155,9 @@ export class SessionOrchestrator {
     userMessage: string,
     chatContext?: ChatContext,
     signal?: AbortSignal,
+    conversationId = 'workspace',
   ): Promise<void> {
     const contextHint = chatContext?.contextKey ?? 'global';
-    const conversationId = 'workspace';
     const startMs = Date.now();
     this.logger('[Orchestrator:chat] Start', {
       contextHint,
@@ -143,20 +166,93 @@ export class SessionOrchestrator {
       view: this.session.focus.currentView,
     });
 
-    // Single unified conversation — context switches don't split history
-    if (!this.conversation) {
-      this.conversation = { messages: [], conversationId };
+    let conversation = this.conversations.get(conversationId);
+    const isNewConversation = !conversation;
+    if (!conversation) {
+      conversation = { messages: [], conversationId };
+      this.conversations.set(conversationId, conversation);
       this.logger('[Orchestrator:chat] New conversation created');
     }
-    const conversation = this.conversation;
 
-    // Build system prompt with session context
-    let systemPrompt = await this.buildSystemPrompt(chatContext);
-    const sessionContext = this.session.buildContextForPrompt();
-    systemPrompt += '\n\n' + sessionContext;
+    const now = Date.now();
+    const shortTermState = this.conversationShortTerm.get(conversationId) ?? { lastSelectionAt: null };
+    const messageMentionsSelection = /这段|选中|高亮|划线|selected|selection|highlight|quoted|引用的段落/i.test(userMessage);
+    const contextHasSelection = Boolean(chatContext?.selectedQuote || (chatContext?.imageClips && chatContext.imageClips.length > 0));
+    if (messageMentionsSelection || contextHasSelection) {
+      shortTermState.lastSelectionAt = now;
+    }
+    this.conversationShortTerm.set(conversationId, shortTermState);
+
+    // Proactively purge stale observations (TTL: 30 min) before any gate decision.
+    this.session.memory.purgeStaleObservations(30 * 60 * 1000);
+
+    const hasRecentSelection = shortTermState.lastSelectionAt !== null
+      && (now - shortTermState.lastSelectionAt) <= 20 * 60 * 1000;
+    const gate = classifyPromptGate({
+      userMessage,
+      ...(chatContext ? { chatContext } : {}),
+      hasRecentSelection,
+    });
+
+    const systemBundles = gate.bundles.filter((b): b is SystemPromptBundle =>
+      b === 'project_meta' || b === 'active_focus' || b === 'capability_hints',
+    );
+
+    // Build system prompt with gated bundle context
+    let systemPrompt = await this.buildSystemPrompt(chatContext, { bundles: systemBundles });
+    const toolRoute = routeToolFamilies({
+      userMessage,
+      ...(chatContext ? { chatContext } : {}),
+      gateType: gate.type,
+    });
+    systemPrompt += `\n\n${buildToolRouteInstruction(toolRoute)}`;
+
+    const selectedIds = [
+      this.session.focus.selected.paperId,
+      this.session.focus.selected.conceptId,
+      this.session.focus.readerState?.paperId,
+      ...this.session.focus.activePapers.slice(0, 2),
+      ...this.session.focus.activeConcepts.slice(0, 2),
+    ].filter((id): id is string => Boolean(id));
+
+    const includeSelectionContext = bundleIncludes(gate.bundles, 'selection_context');
+    const allowObservation = gate.type === 'focused-analysis' && includeSelectionContext;
+    const sessionContext = this.session.buildContextForPrompt({
+      includeFocus: bundleIncludes(gate.bundles, 'active_focus'),
+      includeSelectionContext,
+      includeRecentActivity: bundleIncludes(gate.bundles, 'recent_activity'),
+      maxRecentActivity: gate.type === 'cross-paper-synthesis' ? 8 : 3,
+      includeGoals: gate.type === 'focused-analysis' || gate.type === 'cross-paper-synthesis' || gate.type === 'task-execution',
+      includeWorkingMemory:
+        bundleIncludes(gate.bundles, 'working_memory_light')
+        || bundleIncludes(gate.bundles, 'working_memory_full'),
+      workingMemoryTopK: bundleIncludes(gate.bundles, 'working_memory_full') ? 8 : 4,
+      workingMemoryAllowedTypes: bundleIncludes(gate.bundles, 'working_memory_full')
+        ? (allowObservation
+          ? ['finding', 'decision', 'artifact', 'comparison', 'observation']
+          : ['finding', 'decision', 'artifact', 'comparison'])
+        : (allowObservation
+          ? ['finding', 'decision', 'observation']
+          : ['finding', 'decision']),
+      ...(allowObservation ? { workingMemoryMaxAgeMs: 30 * 60 * 1000 } : {}),
+      linkedEntitiesAny: selectedIds,
+    });
+    if (sessionContext.trim()) {
+      systemPrompt += '\n\n' + sessionContext;
+    }
     this.logger('[Orchestrator:chat] Prompt built', {
       systemPromptLen: systemPrompt.length,
       sessionContextLen: sessionContext.length,
+      gateType: gate.type,
+      toolRoute: toolRoute.primaryFamily,
+      toolRouteAllow: toolRoute.allowedFamilies,
+      gateConfidence: Number(gate.confidence.toFixed(2)),
+      gateRule: gate.usedRule,
+      bundles: gate.bundles,
+      hasRecentSelection,
+      isNewConversation,
+      conversationId,
+      promptTokens: countTokens(systemPrompt),
       historyLen: conversation.messages.length,
     });
 
@@ -178,7 +274,10 @@ export class SessionOrchestrator {
 
       // Get tool definitions from capabilities
       const tools = round < this.maxRounds - 1
-        ? this.capabilities.toToolDefinitions()
+        ? this.capabilities.toToolDefinitions({
+            allowedFamilies: toolRoute.allowedFamilies,
+            userMessage, // Pass user message for semantic relevance scoring
+          })
         : undefined; // Last round: no tools, force text reply
 
       this.logger('[Orchestrator:chat] Round start', {
@@ -231,6 +330,16 @@ export class SessionOrchestrator {
       // Execute capability operations
       const toolResults = await Promise.all(
         pendingToolCalls.map(async (tc) => {
+          // Check if tool call is allowed by governor
+          const allowed = this.toolGovernor.canCallTool(tc.name);
+          if (!allowed.allowed) {
+            this.logger('[Orchestrator:chat] Tool blocked by governor', {
+              tool: tc.name,
+              reason: allowed.reason,
+            });
+            return `System: ${allowed.reason}`;
+          }
+
           // Dedup check
           const hash = simpleHash(tc.name + JSON.stringify(tc.input));
           const isDupe = recentCalls.slice(-3).some((r) => r.name === tc.name && r.hash === hash);
@@ -239,6 +348,7 @@ export class SessionOrchestrator {
           if (isDupe) {
             consecutiveDupes++;
             this.logger('[Orchestrator:chat] Tool dedup blocked', { tool: tc.name });
+            this.toolGovernor.recordCall(tc.name, false, 0, 'Duplicate call (dedup)');
             return `System: Tool "${tc.name}" was already called with these arguments. Use the previous result.`;
           }
           consecutiveDupes = 0;
@@ -246,12 +356,19 @@ export class SessionOrchestrator {
           // Execute via CapabilityRegistry
           const execStart = Date.now();
           const result = await this.capabilities.execute(tc.name, tc.input, signal);
+          const duration = Date.now() - execStart;
+          const resultLength = JSON.stringify(result).length;
+
+          // Record result in governor
+          this.toolGovernor.recordCall(tc.name, result.success, resultLength, result.success ? undefined : result.summary);
+
           this.logger('[Orchestrator:chat] Tool executed', {
             tool: tc.name,
             success: result.success,
-            durationMs: Date.now() - execStart,
+            durationMs: duration,
             summaryLen: result.summary?.length ?? 0,
           });
+
           let resultStr = JSON.stringify(result, null, 2);
           if (resultStr.length > 50000) resultStr = resultStr.slice(0, 50000) + '\n[truncated]';
           return resultStr;
@@ -718,8 +835,23 @@ Choose the best option based on the current research context. Reply with ONLY th
   /**
    * Clear the unified conversation history.
    */
-  clearConversation(): void {
-    this.conversation = null;
+  clearConversation(conversationId?: string): void {
+    if (conversationId) {
+      this.conversations.delete(conversationId);
+      this.conversationShortTerm.delete(conversationId);
+      return;
+    }
+    this.conversations.clear();
+    this.conversationShortTerm.clear();
+    // Also reset tool governor when clearing all conversations
+    this.toolGovernor.reset();
+  }
+
+  /**
+   * Get tool calling statistics for debugging/monitoring.
+   */
+  getToolCallingStats() {
+    return this.toolGovernor.getStats();
   }
 
   /**
@@ -728,9 +860,10 @@ Choose the best option based on the current research context. Reply with ONLY th
    * since they reference ephemeral tool call IDs).
    */
   serializeConversation(): string | null {
-    if (!this.conversation || this.conversation.messages.length === 0) return null;
+    const workspaceConversation = this.conversations.get('workspace');
+    if (!workspaceConversation || workspaceConversation.messages.length === 0) return null;
     // Keep only simple text messages for restoration
-    const simplified = this.conversation.messages
+    const simplified = workspaceConversation.messages
       .filter((m) => typeof m.content === 'string')
       .slice(-20); // Keep last 20 text messages
     return JSON.stringify(simplified);
@@ -743,7 +876,7 @@ Choose the best option based on the current research context. Reply with ONLY th
     try {
       const messages = JSON.parse(json) as Message[];
       if (Array.isArray(messages) && messages.length > 0) {
-        this.conversation = { messages, conversationId: 'workspace' };
+        this.conversations.set('workspace', { messages, conversationId: 'workspace' });
         this.logger('[Orchestrator] Conversation restored', { messageCount: messages.length });
       }
     } catch {
@@ -756,7 +889,8 @@ Choose the best option based on the current research context. Reply with ONLY th
    */
   destroy(): void {
     this.stop();
-    this.conversation = null;
+    this.conversations.clear();
+    this.conversationShortTerm.clear();
     this.proactiveRules.length = 0;
   }
 }

@@ -10,7 +10,7 @@
 
 import React, { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, Group, Separator } from 'react-resizable-panels';
 import { ContextHeader } from './ContextHeader';
 import { ChatDock } from './chat/ChatDock';
 import { CrossfadeTransition } from './transitions/CrossfadeTransition';
@@ -138,10 +138,9 @@ export function ContextPanel() {
       {isEmpty && !isFullscreen && <EmptyContextHint />}
 
       {/* §1.2 ContextBody + ChatDock 空间竞争 */}
-      <PanelGroup
+      <Group
         className="context-panel-group"
-        direction="vertical"
-        autoSaveId="abyssal-context-body-chat"
+        orientation="vertical"
         style={{ flex: 1 }}
       >
         {/* ContextBody — 有实体时显示，入场淡入 */}
@@ -149,9 +148,8 @@ export function ContextPanel() {
           <>
             <Panel
               id="context-body"
-              minSize={15}
-              defaultSize={35}
-              order={1}
+              minSize="15%"
+              defaultSize="35%"
             >
               <div className="ctx-body-enter context-body-stage" style={{ height: '100%' }}>
                 <ContextPanelErrorBoundary>
@@ -162,23 +160,22 @@ export function ContextPanel() {
               </div>
             </Panel>
 
-            <PanelResizeHandle className="panel-resize-handle" />
+            <Separator className="panel-resize-handle" />
           </>
         )}
 
         {/* ChatDock */}
         <Panel
           id="chat-dock"
-          minSize={isFullscreen || isEmpty ? 100 : 20}
-          defaultSize={isFullscreen || isEmpty ? 100 : 65}
+          minSize={isFullscreen || isEmpty ? '100%' : '20%'}
+          defaultSize={isFullscreen || isEmpty ? '100%' : '65%'}
           collapsible={!isFullscreen && !isEmpty}
-          order={2}
         >
           <ContextPanelErrorBoundary>
             <ChatDock />
           </ContextPanelErrorBoundary>
         </Panel>
-      </PanelGroup>
+      </Group>
     </div>
   );
 }

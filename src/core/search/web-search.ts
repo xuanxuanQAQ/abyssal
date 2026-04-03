@@ -81,12 +81,12 @@ export class WebSearchService {
       this.logger.warn('[WebSearch] search failed', { backend: this.backend, error: message });
 
       if (/401|403|unauthorized|forbidden/i.test(message)) {
-        throw new Error(`Web search API key invalid or expired (${this.backend})`);
+        throw new Error(`Web search API key invalid or expired (${this.backend})`, { cause: err });
       }
       if (/timeout|timed out|abort/i.test(message)) {
-        throw new Error(`Web search request timed out (${this.backend})`);
+        throw new Error(`Web search request timed out (${this.backend})`, { cause: err });
       }
-      throw new Error(`Web search failed (${this.backend}): ${message}`);
+      throw new Error(`Web search failed (${this.backend}): ${message}`, { cause: err });
     }
   }
 

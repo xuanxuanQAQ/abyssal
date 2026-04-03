@@ -26,6 +26,8 @@ export interface SpeculativeExecuteParams {
   candidates: DownloadCandidate[];
   baseTempPath: string;
   http: HttpClient;
+  /** 代理 HttpClient（用于 candidate.useProxy=true 的源） */
+  proxyHttp: HttpClient;
   maxParallel: number;
   perCandidateTimeoutMs: number;
   totalTimeoutMs: number;
@@ -119,7 +121,7 @@ export async function speculativeExecute(
   params: SpeculativeExecuteParams,
 ): Promise<SpeculativeResult> {
   const {
-    candidates, baseTempPath, http,
+    candidates, baseTempPath, http, proxyHttp,
     maxParallel, perCandidateTimeoutMs, totalTimeoutMs,
     enablePreflight, preflightTimeoutMs, logger,
   } = params;
@@ -152,16 +154,17 @@ export async function speculativeExecute(
       const tempPath = tempPaths[index]!;
       try {
         const result = await executeCandidate(
-          candidate, tempPath, http,
+          candidate, tempPath, candidate.useProxy ? proxyHttp : http,
           perCandidateTimeoutMs, enablePreflight, preflightTimeoutMs,
           sharedController.signal, logger,
         );
         return { ...result, candidate, index };
       } catch (err) {
         // 记录失败但不阻止 Promise.any 继续等待其他候选
+        const candidateStart = Date.now();
         const attempt = sharedController.signal.aborted && (err as Error).message.includes('Aborted')
-          ? makeAttempt(candidate.source, 'skipped', Date.now(), { failureReason: 'Aborted by winner' })
-          : makeFailedAttempt(candidate.source, Date.now(), err);
+          ? makeAttempt(candidate.source, 'skipped', 0, { failureReason: 'Aborted by winner' })
+          : makeFailedAttempt(candidate.source, candidateStart, err);
         attempts.push(attempt);
         throw err;
       }

@@ -125,7 +125,7 @@ function parseYear(yearStr: string | null): number | null {
 
 // ─── §1.1 importBibtex ───
 
-export function importBibtex(input: string): ImportedEntry[] {
+export async function importBibtex(input: string): Promise<ImportedEntry[]> {
   // Fix #1: 使用 errorHandler 回调跳过坏条目，而非整体 throw
   const parseErrors: Array<{ message: string }> = [];
 
@@ -142,15 +142,13 @@ export function importBibtex(input: string): ImportedEntry[] {
   };
 
   try {
-    // @retorquere/bibtex-parser
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const bibtexParser = require('@retorquere/bibtex-parser');
+    const bibtexParser = await import('@retorquere/bibtex-parser');
     parsed = bibtexParser.parse(input, {
       sentenceCase: false,
       errorHandler: (err: { message: string }) => {
         parseErrors.push(err);
       },
-    });
+    } as any);
   } catch (err) {
     throw new BibtexParseError({
       message: `BibTeX parse failed (structural): ${(err as Error).message}`,

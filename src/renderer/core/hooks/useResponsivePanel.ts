@@ -11,13 +11,13 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react';
-import type { ImperativePanelHandle } from 'react-resizable-panels';
+import type { PanelImperativeHandle } from 'react-resizable-panels';
 
 export interface UseResponsivePanelOptions {
   /** workspace 容器的 ref */
   workspaceRef: React.RefObject<HTMLDivElement | null>;
   /** ContextPanel 的 imperative handle */
-  contextPanelRef: React.RefObject<ImperativePanelHandle | null>;
+  contextPanelRef: React.RefObject<PanelImperativeHandle | null>;
   /** 当前 ContextPanel 百分比尺寸 */
   contextPanelSize: number;
   /** ContextPanel 是否打开 */

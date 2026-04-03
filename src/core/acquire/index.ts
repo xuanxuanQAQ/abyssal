@@ -1,4 +1,5 @@
 // ═══ Acquire Module v2 — 4 层智能全文获取引擎 ═══
+// Layer -1: Identifier Resolution（标题 → DOI/arXiv/PMCID 模糊匹配）
 // Layer 0: Fast Path（零 HTTP 确定性 OA）
 // Layer 1: Recon（并行侦察：DOI HEAD + OpenAlex + CrossRef）
 // Layer 2: Strategy（评分排序 + EZProxy 变异 + Cookie 注入）
@@ -15,8 +16,10 @@ import { validatePdf } from './pdf-validator';
 import { downloadPdf, deleteFileIfExists } from './downloader';
 import { makeAttempt, withRetry, type RetryConfig } from './attempt-utils';
 import { ContentSanityChecker, type LlmCallFn, type SanityCheckInput } from './content-sanity-checker';
+import { IdentifierResolver } from './identifier-resolver';
 import type { CookieJar } from '../infra/cookie-jar';
-import type { FailureMemory } from './failure-memory';
+import type { FailureMemory, AcquireFailureType } from './failure-memory';
+import { extractDoiPrefix } from './failure-memory';
 import { ReconCache } from './recon-cache';
 
 // Pipeline v2 imports
@@ -90,6 +93,7 @@ export class AcquireService {
   private readonly openAlexLimiter: RateLimiter;
   private readonly crossRefLimiter: RateLimiter;
   private readonly sanityChecker: ContentSanityChecker | null;
+  private readonly identifierResolver: IdentifierResolver | null;
   private cookieJar: CookieJar | null = null;
   private failureMemory: FailureMemory | null = null;
   private reconCache: ReconCache | null = null;
@@ -141,9 +145,21 @@ export class AcquireService {
     this.pmcLimiter = new RateLimiter(3, 3 / 1000);
     this.openAlexLimiter = new RateLimiter(10, 10 / 1000); // OpenAlex polite pool: 10 req/s
     this.crossRefLimiter = createRateLimiter('crossRef');
+    const s2Limiter = new RateLimiter(5, 5 / 1000);
 
     this.sanityChecker = config.acquire.enableContentSanityCheck
       ? new ContentSanityChecker(llmCallFn ?? null, logger)
+      : null;
+
+    this.identifierResolver = config.acquire.enableFuzzyResolve
+      ? new IdentifierResolver(
+          this.http,
+          this.crossRefLimiter,
+          s2Limiter,
+          config.apiKeys.semanticScholarApiKey ?? null,
+          llmCallFn ?? null,
+          logger,
+        )
       : null;
   }
 
@@ -154,8 +170,11 @@ export class AcquireService {
    * 当 enableRecon=false && enableSpeculativeExecution=false 时退化为传统瀑布流。
    */
   async acquireFulltext(params: AcquireFulltextParams): Promise<AcquireResult> {
+    let {
+      doi, arxivId, pmcid,
+    } = params;
     const {
-      doi, arxivId, pmcid, savePath,
+      savePath,
       perSourceTimeoutMs = this.config.acquire.perSourceTimeoutMs,
     } = params;
     const acqConfig = this.config.acquire;
@@ -204,6 +223,55 @@ export class AcquireService {
       });
     }
 
+    // ═══ Layer -1: Identifier Resolution ═══
+    // 当只有标题没有 DOI/arXiv/PMCID 时，尝试通过 CrossRef + Semantic Scholar 模糊匹配恢复标识符
+    if (this.identifierResolver && !doi && !arxivId && !pmcid && params.paperTitle) {
+      const resolveStart = Date.now();
+      notify?.('identifier-resolve', 'start');
+      try {
+        const resolved = await this.identifierResolver.resolve(
+          {
+            title: params.paperTitle,
+            authors: params.paperAuthors ?? [],
+            year: params.paperYear ?? null,
+          },
+          acqConfig.fuzzyResolveConfidenceThreshold,
+        );
+        if (resolved.doi || resolved.arxivId || resolved.pmcid) {
+          doi = resolved.doi ?? doi;
+          arxivId = resolved.arxivId ?? arxivId;
+          pmcid = resolved.pmcid ?? pmcid;
+          this.logger.info('[Acquire] Layer -1 resolved identifiers from title', {
+            resolvedDoi: resolved.doi,
+            resolvedArxivId: resolved.arxivId,
+            resolvedPmcid: resolved.pmcid,
+            confidence: resolved.confidence,
+            via: resolved.resolvedVia,
+            candidates: resolved.candidatesFound,
+            durationMs: Date.now() - resolveStart,
+          });
+          attempts.push(makeAttempt('identifier-resolve', 'success', Date.now() - resolveStart));
+        } else {
+          this.logger.debug('[Acquire] Layer -1 found no matching identifiers', {
+            candidates: resolved.candidatesFound,
+            confidence: resolved.confidence,
+            durationMs: Date.now() - resolveStart,
+          });
+          attempts.push(makeAttempt('identifier-resolve', 'skipped', Date.now() - resolveStart, {
+            failureReason: 'No identifiers resolved above confidence threshold',
+          }));
+        }
+        notify?.('identifier-resolve', 'end', { status: resolved.doi ? 'success' : 'skipped' });
+      } catch (err) {
+        this.logger.warn('[Acquire] Layer -1 identifier resolution failed', { error: String(err) });
+        attempts.push(makeAttempt('identifier-resolve', 'failed', Date.now() - resolveStart, {
+          failureReason: String(err),
+          failureCategory: 'unknown',
+        }));
+        notify?.('identifier-resolve', 'end', { status: 'failed' });
+      }
+    }
+
     // ═══ 幂等检查 ═══
     if (fs.existsSync(savePath)) {
       try {
@@ -228,18 +296,20 @@ export class AcquireService {
 
         // Zenodo 需要 API 查询拿真实 PDF URL
         let downloadUrl = fp.pdfUrl;
+        let zenodoResolveFailed = false;
         if (fp.source === 'zenodo') {
           const realUrl = await resolveZenodoPdfUrl(fp.pdfUrl, this.http, perSourceTimeoutMs);
           if (!realUrl) {
             attempts.push(makeAttempt('zenodo', 'failed', 0, { failureReason: 'No PDF file in Zenodo record' }));
             notify?.('zenodo', 'end', { status: 'failed', failureReason: 'No PDF in record' });
+            zenodoResolveFailed = true;
             // 继续到 Layer 1
           } else {
             downloadUrl = realUrl;
           }
         }
 
-        if (downloadUrl !== fp.pdfUrl || fp.source !== 'zenodo') {
+        if (!zenodoResolveFailed) {
           try {
             const start = Date.now();
             await downloadPdf(this.http, downloadUrl, tempPath, perSourceTimeoutMs);
@@ -315,6 +385,7 @@ export class AcquireService {
       && attempts.some((a) => a.source === (fastPath.source ?? 'fast-path') && a.status === 'success');
     const strategy = buildStrategy({
       doi, arxivId, pmcid,
+      url: params.url,
       recon,
       fastPath: fastPathAlreadySucceeded ? { ...fastPath, matched: false } : fastPath,
       cookieJar: this.cookieJar,
@@ -336,7 +407,8 @@ export class AcquireService {
       const specResult = await speculativeExecute({
         candidates: strategy.simpleCandidates,
         baseTempPath: tempPath,
-        http: this.proxyHttp, // 出版商 PDF 下载可能需要代理
+        http: this.http,
+        proxyHttp: this.proxyHttp,
         maxParallel: acqConfig.maxSpeculativeParallel,
         perCandidateTimeoutMs: perSourceTimeoutMs,
         totalTimeoutMs: acqConfig.speculativeTotalTimeoutMs,
@@ -366,7 +438,7 @@ export class AcquireService {
         notify?.(candidate.source, 'start');
         try {
           const start = Date.now();
-          await downloadPdf(this.proxyHttp, candidate.url, tempPath, perSourceTimeoutMs, candidate.headers);
+          await downloadPdf(candidate.useProxy ? this.proxyHttp : this.http, candidate.url, tempPath, perSourceTimeoutMs, candidate.headers);
           const validation = await validatePdf(tempPath);
           if (validation.valid) {
             const attempt = makeAttempt(candidate.source, 'success', Date.now() - start, { httpStatus: 200 });
@@ -511,6 +583,30 @@ export class AcquireService {
 
     // ═══ 全部耗尽 ═══
     deleteFileIfExists(tempPath);
+
+    // ── FailureMemory: 记录失败 ──
+    if (this.failureMemory) {
+      const paperId = doi ?? arxivId ?? pmcid ?? params.paperTitle ?? 'unknown';
+      const doiPfx = extractDoiPrefix(doi);
+      for (const a of attempts) {
+        if (a.status === 'failed') {
+          const ftMap: Record<string, AcquireFailureType> = {
+            timeout: 'timeout', http_4xx: 'http_error', http_5xx: 'http_error',
+            rate_limited: 'http_error', invalid_pdf: 'validation_failed',
+            no_pdf_url: 'no_pdf_url', parse_error: 'unknown',
+          };
+          this.failureMemory.recordFailure({
+            paperId,
+            source: a.source,
+            failureType: ftMap[a.failureCategory ?? ''] ?? 'unknown',
+            doiPrefix: doiPfx,
+            httpStatus: a.httpStatus,
+            detail: a.failureReason,
+          });
+        }
+      }
+    }
+
     const summary = attempts.map((a) => `${a.source}:${a.failureReason ?? a.status}`).join('; ');
     this.logger.error('[Acquire] ALL SOURCES EXHAUSTED', undefined, {
       doi, arxivId, pmcid, attemptCount: attempts.length, summary,
@@ -534,7 +630,17 @@ export class AcquireService {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    fs.renameSync(tempPath, savePath);
+    // rename 在 Windows 跨卷时会抛 EXDEV，降级为 copy + unlink
+    try {
+      fs.renameSync(tempPath, savePath);
+    } catch (renameErr) {
+      if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+        fs.copyFileSync(tempPath, savePath);
+        fs.unlinkSync(tempPath);
+      } else {
+        throw renameErr;
+      }
+    }
     const sha256 = await computeSha256(savePath);
     const fileSize = fs.statSync(savePath).size;
 
@@ -573,6 +679,11 @@ export class AcquireService {
       }
     }
 
+    // ── FailureMemory: 记录成功 ──
+    if (this.failureMemory && source !== 'cached') {
+      this.failureMemory.recordSuccess(source, params.doi, null);
+    }
+
     this.logger.info('[Acquire] PDF acquired', { source, fileSize, sha256: sha256.slice(0, 8), savePath, attemptCount: attempts.length });
     return { status: 'success', pdfPath: savePath, source, sha256, fileSize, attempts };
   }
@@ -592,30 +703,33 @@ export class AcquireService {
 
       const buffer = await fs.promises.readFile(pdfPath);
       const doc = mupdf.Document.openDocument(buffer, 'application/pdf');
-      const pageCount = doc.countPages();
-      const pages = Math.min(pageCount, 3);
-      const texts: string[] = [];
+      try {
+        const pageCount = doc.countPages();
+        const pages = Math.min(pageCount, 3);
+        const texts: string[] = [];
 
-      for (let i = 0; i < pages; i++) {
-        const page = doc.loadPage(i);
-        try {
-          const stext = page.toStructuredText();
+        for (let i = 0; i < pages; i++) {
+          const page = doc.loadPage(i);
           try {
-            texts.push(stext.asText());
+            const stext = page.toStructuredText();
+            try {
+              texts.push(stext.asText());
+            } finally {
+              stext.destroy?.();
+            }
           } finally {
-            stext.destroy?.();
+            page.destroy?.();
           }
-        } finally {
-          page.destroy?.();
         }
-      }
 
-      (doc as { destroy?(): void }).destroy?.();
-      const result = texts.join('\n');
-      this.logger.debug('[Acquire] quickExtractText complete', {
-        pdfPath, pagesExtracted: pages, totalPages: pageCount, charCount: result.length,
-      });
-      return result;
+        const result = texts.join('\n');
+        this.logger.debug('[Acquire] quickExtractText complete', {
+          pdfPath, pagesExtracted: pages, totalPages: pageCount, charCount: result.length,
+        });
+        return result;
+      } finally {
+        (doc as { destroy?(): void }).destroy?.();
+      }
     } catch {
       return null;
     }

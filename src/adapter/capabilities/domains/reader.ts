@@ -16,6 +16,7 @@ export function createReaderCapability(): Capability {
       {
         name: 'open_paper',
         description: 'Open a paper in the PDF reader and navigate to it. If a page is specified, scrolls to that page.',
+        routeFamilies: ['ui_navigation', 'workspace_control'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID to open', required: true },
           { name: 'page', type: 'number', description: 'Page number to scroll to (1-based)' },
@@ -48,6 +49,7 @@ export function createReaderCapability(): Capability {
       {
         name: 'get_page_content',
         description: 'Get the extracted text content of a specific page in a paper.',
+        routeFamilies: ['research_qa', 'retrieval_search'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID', required: true },
           { name: 'page', type: 'number', description: 'Page number (1-based)', required: true },
@@ -61,11 +63,13 @@ export function createReaderCapability(): Capability {
             return { success: false, summary: 'Chunk retrieval not available' };
           }
           const allChunks = await ctx.services.dbProxy.getChunksByPaper(paperId) as Array<Record<string, unknown>>;
+          // pageStart/pageEnd are 0-based in storage; page param is 1-based from API
+          const page0 = page - 1;
           const pageChunks = allChunks.filter((c) => {
             const start = c['pageStart'] as number | null;
             const end = c['pageEnd'] as number | null;
             if (start == null) return false;
-            return page >= start && page <= (end ?? start);
+            return page0 >= start && page0 <= (end ?? start);
           });
 
           return {
@@ -80,6 +84,7 @@ export function createReaderCapability(): Capability {
       {
         name: 'find_passages',
         description: 'Search for passages in a paper related to a query or concept. Uses RAG to find semantically relevant text.',
+        routeFamilies: ['retrieval_search', 'research_qa'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID to search within', required: true },
           { name: 'query', type: 'string', description: 'Search query or concept description', required: true },
@@ -100,6 +105,14 @@ export function createReaderCapability(): Capability {
             paperIds: [paperId],
             topK,
             taskType: 'ad_hoc',
+            conceptIds: [],
+            sectionTypeFilter: null,
+            sourceFilter: null,
+            budgetMode: 'focused',
+            maxTokens: 50_000,
+            modelContextWindow: 200_000,
+            enableCorrectiveRag: false,
+            relatedMemoIds: [],
           });
 
           const chunks = (result as Record<string, unknown>)['chunks'] as unknown[] ?? [];
@@ -125,6 +138,7 @@ export function createReaderCapability(): Capability {
       {
         name: 'annotate',
         description: 'Create a highlight annotation on a paper. Links the annotation to the current research context.',
+        routeFamilies: ['workspace_control'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID', required: true },
           { name: 'text', type: 'string', description: 'Text content of the annotation', required: true },
@@ -159,6 +173,7 @@ export function createReaderCapability(): Capability {
       {
         name: 'highlight_passage',
         description: 'Temporarily highlight a passage in the PDF viewer (ephemeral, not saved as annotation).',
+        routeFamilies: ['ui_navigation', 'workspace_control'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID', required: true },
           { name: 'page', type: 'number', description: 'Page number', required: true },
@@ -184,6 +199,7 @@ export function createReaderCapability(): Capability {
       {
         name: 'get_annotations',
         description: 'Get all annotations for a paper.',
+        routeFamilies: ['research_qa'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID', required: true },
         ],

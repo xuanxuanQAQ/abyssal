@@ -63,6 +63,7 @@ import * as reconCacheDao from './dao/recon-cache';
 import * as auditLogDao from './dao/audit-log';
 import * as sessionStateDao from './dao/session-state';
 import * as layoutBlocksDao from './dao/layout-blocks';
+import * as ocrLinesDao from './dao/ocr-lines';
 
 // ─── 快照 ───
 import * as snapshotMod from './snapshot';
@@ -1000,6 +1001,30 @@ export class DatabaseService implements IDbService {
 
   deleteSectionBoundaries(paperId: PaperId): number {
     return this.withOp(() => layoutBlocksDao.deleteSectionBoundaries(this.db, paperId));
+  }
+
+  // ════════════════════════════════════════
+  // §11.6 OCR 行级 bbox（文本层对齐）
+  // ════════════════════════════════════════
+
+  insertOcrLines(lines: ocrLinesDao.OcrLineRow[]): void {
+    this.withOp(() => ocrLinesDao.insertOcrLines(this.db, lines));
+  }
+
+  getOcrLines(paperId: PaperId): ocrLinesDao.OcrLineRow[] {
+    return this.withOp(() => ocrLinesDao.getOcrLines(this.db, paperId));
+  }
+
+  getOcrLinesByPage(paperId: PaperId, pageIndex: number): ocrLinesDao.OcrLineRow[] {
+    return this.withOp(() => ocrLinesDao.getOcrLinesByPage(this.db, paperId, pageIndex));
+  }
+
+  hasOcrLines(paperId: PaperId): boolean {
+    return this.withOp(() => ocrLinesDao.hasOcrLines(this.db, paperId));
+  }
+
+  deleteOcrLines(paperId: PaperId): number {
+    return this.withOp(() => ocrLinesDao.deleteOcrLines(this.db, paperId));
   }
 
   // ════════════════════════════════════════

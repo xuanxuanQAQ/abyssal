@@ -17,7 +17,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
 import { useCreateArticle } from '../../core/ipc/hooks/useArticles';
 import { useHotkey } from '../../core/hooks/useHotkey';
@@ -181,18 +181,16 @@ export function WritingView(): React.JSX.Element {
   // ── Main layout ──
   return (
     <div style={rootStyle}>
-      <PanelGroup
-        direction="horizontal"
-        autoSaveId="abyssal-writing"
+      <Group
+        orientation="horizontal"
       >
         {/* ── Left panel: Outline ── */}
         <Panel
           id="writing-outline"
-          defaultSize={20}
-          minSize={10}
-          maxSize={30}
+          defaultSize="20%"
+          minSize="10%"
+          maxSize="30%"
           collapsible
-          order={1}
         >
           <div style={outlinePanelStyle}>
             {article !== null ? (
@@ -206,13 +204,12 @@ export function WritingView(): React.JSX.Element {
         </Panel>
 
         {/* ── Resize handle ── */}
-        <PanelResizeHandle style={resizeHandleStyle} />
+        <Separator style={resizeHandleStyle} />
 
         {/* ── Right panel: Section editor ── */}
         <Panel
           id="writing-editor"
-          order={2}
-          minSize={50}
+          minSize="50%"
         >
           <div style={editorPanelStyle}>
             {article !== null && resolvedArticleId !== null ? (
@@ -224,7 +221,7 @@ export function WritingView(): React.JSX.Element {
             )}
           </div>
         </Panel>
-      </PanelGroup>
+      </Group>
 
       {/* ── Dialogs ── */}
       {activeArticleId !== null && (

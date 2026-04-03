@@ -16,6 +16,7 @@ function copyPdfjsAssets(): Plugin {
   const assetMappings = [
     { from: 'node_modules/pdfjs-dist/cmaps', to: 'pdfjs/cmaps' },
     { from: 'node_modules/pdfjs-dist/standard_fonts', to: 'pdfjs/standard_fonts' },
+    { from: 'node_modules/pdfjs-dist/wasm', to: 'pdfjs/wasm' },
   ];
 
   return {
@@ -76,6 +77,7 @@ export default defineConfig({
   },
 
   build: {
+    target: 'es2024',
     outDir: path.resolve(__dirname, 'dist/renderer'),
     emptyDir: true,
     sourcemap: true,

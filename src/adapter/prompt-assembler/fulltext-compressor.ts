@@ -105,7 +105,7 @@ export function compressFulltext(
       compressedSections.push(sectionText);
     } else {
       compressedSections.push(
-        compressSection(sectionText, allocated, section.title, tokenCounter),
+        compressSection(sectionText, allocated, section.title, tokenCounter, section.sectionType),
       );
     }
   }
@@ -121,19 +121,42 @@ export function compressFulltext(
 
 // ─── Section-level compression ───
 
+/** Pattern matching paragraphs containing statistical/quantitative content */
+const STAT_PATTERN = /(?:p\s*[<>=]|d\s*=|r\s*=|[βBb]\s*=|η[²2]|F\s*\(|t\s*\(|χ[²2]|N\s*=|n\s*=|OR\s*=|HR\s*=|CI\s*[=:]|R[²2]\s*=|%|significant|p\s*<\s*[.0])/i;
+
 /**
- * Compress a single section: first paragraph + last sentence + omission marker.
+ * Check whether a paragraph contains statistical/quantitative content.
+ */
+function containsStatisticalContent(paragraph: string): boolean {
+  return STAT_PATTERN.test(paragraph);
+}
+
+/**
+ * Compress a single section using an evidence-aware strategy.
+ *
+ * For 'results' and 'discussion' sections: preserves first paragraph +
+ * all paragraphs containing statistical/quantitative content + last paragraph.
+ * This prevents loss of key empirical findings that often appear mid-section.
+ *
+ * For other sections: first paragraph + last sentence + omission marker.
  */
 function compressSection(
   sectionText: string,
   targetTokens: number,
   sectionTitle: string,
   tokenCounter: TokenCounter,
+  sectionType?: string,
 ): string {
   const paragraphs = sectionText.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
 
   if (paragraphs.length <= 2) {
     return truncateToTokens(sectionText, targetTokens, tokenCounter);
+  }
+
+  // For results/discussion: use evidence-aware compression
+  const isEvidenceSection = sectionType === 'results' || sectionType === 'discussion';
+  if (isEvidenceSection) {
+    return compressSectionWithStatRetention(paragraphs, targetTokens, sectionTitle, tokenCounter);
   }
 
   const firstParagraph = paragraphs[0]!;
@@ -158,6 +181,70 @@ function compressSection(
   }
 
   return compressed;
+}
+
+/**
+ * Evidence-aware compression: keep first + statistical paragraphs + last.
+ * Falls back to standard compression if stat paragraphs exceed budget.
+ */
+function compressSectionWithStatRetention(
+  paragraphs: string[],
+  targetTokens: number,
+  sectionTitle: string,
+  tokenCounter: TokenCounter,
+): string {
+  const first = paragraphs[0]!;
+  const last = paragraphs[paragraphs.length - 1]!;
+  const middle = paragraphs.slice(1, -1);
+
+  // Identify statistical paragraphs in the middle
+  const statParagraphs = middle.filter(containsStatisticalContent);
+  const nonStatCount = middle.length - statParagraphs.length;
+
+  // Build candidate: first + stat paragraphs + last
+  const candidate = [first, ...statParagraphs, last].join('\n\n');
+  const candidateTokens = tokenCounter.count(candidate);
+
+  if (candidateTokens <= targetTokens) {
+    // Fits — add omission marker for non-stat paragraphs
+    if (nonStatCount > 0) {
+      const parts = [first];
+      let insertedOmission = false;
+      for (const p of middle) {
+        if (containsStatisticalContent(p)) {
+          if (!insertedOmission && nonStatCount > 0) {
+            parts.push(`<abyssal:omitted paragraphs="${nonStatCount}" section="${sectionTitle}" reason="non-quantitative" />`);
+            insertedOmission = true;
+          }
+          parts.push(p);
+        }
+      }
+      if (!insertedOmission) {
+        parts.push(`<abyssal:omitted paragraphs="${nonStatCount}" section="${sectionTitle}" reason="non-quantitative" />`);
+      }
+      parts.push(last);
+      return parts.join('\n\n');
+    }
+    return candidate;
+  }
+
+  // Stat paragraphs exceed budget — fall back to first + last + truncated stats
+  const firstLast = first + '\n\n' + extractFirstSentence(last);
+  const remaining = targetTokens - tokenCounter.count(firstLast) - 20;
+  if (remaining > 0 && statParagraphs.length > 0) {
+    const truncatedStats = truncateToTokens(
+      statParagraphs.join('\n\n'),
+      remaining,
+      tokenCounter,
+    );
+    return first +
+      '\n\n' + truncatedStats +
+      `\n\n<abyssal:omitted section="${sectionTitle}" reason="budget" />\n\n` +
+      extractFirstSentence(last);
+  }
+
+  return truncateToTokens(first, targetTokens - 50, tokenCounter) +
+    `\n<abyssal:omitted section="${sectionTitle}" reason="budget" />`;
 }
 
 // ─── Helpers ───

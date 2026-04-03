@@ -91,7 +91,7 @@ export interface RagConfig {
   embeddingDimension: number; // 默认 1536
   defaultTopK: number; // 默认 10
   expandFactor: number; // 默认 3
-  embeddingProvider: 'openai' | 'siliconflow'; // 默认 "openai"
+  embeddingProvider: 'siliconflow' | 'jina' | 'openai'; // 默认 "openai"
   rerankerBackend: 'cohere' | 'jina' | 'siliconflow';
   rerankerModel: string | null;
   tentativeExpandFactorMultiplier: number; // 默认 2.0

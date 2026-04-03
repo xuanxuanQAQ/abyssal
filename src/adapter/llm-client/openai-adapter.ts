@@ -249,11 +249,13 @@ export class OpenAIAdapter implements LlmAdapter {
       reasoning = (msg['reasoning_content'] as string) ?? null;
     }
 
-    const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map((tc) => ({
-      id: tc.id,
-      name: tc.function.name,
-      arguments: safeParseJson(tc.function.arguments),
-    }));
+    const toolCalls: ToolCall[] = (choice.message.tool_calls ?? [])
+      .filter((tc): tc is Extract<typeof tc, { type: 'function' }> => tc.type === 'function')
+      .map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: safeParseJson(tc.function.arguments),
+      }));
 
     return {
       text,

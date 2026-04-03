@@ -195,7 +195,7 @@ export interface IpcContract {
   'pipeline:cancel':                  { args: [taskId: string];                          result: void };
 
   // ── chat ──
-  'chat:send':                        { args: [message: string, context?: ChatContext];  result: string };
+  'chat:send':                        { args: [message: string, context?: ChatContext, conversationKey?: string];  result: string };
   'chat:abort':                       { args: [conversationId?: string];                 result: void };
 
   // ── fs ──
@@ -221,6 +221,7 @@ export interface IpcContract {
   'settings:updateSection':           { args: [section: string, patch: Record<string, unknown>]; result: void };
   'settings:updateApiKey':            { args: [keyName: string, value: string];          result: void };
   'settings:testApiKey':              { args: [provider: string];                        result: ApiKeyTestResult };
+  'settings:testApiKeyDirect':        { args: [provider: string, apiKey: string];        result: ApiKeyTestResult };
   'settings:getDbStats':              { args: [];                                        result: DbStatsInfo };
   'settings:getSystemInfo':           { args: [];                                        result: SystemInfo };
   'settings:openWorkspaceFolder':     { args: [];                                        result: void };
@@ -247,6 +248,8 @@ export interface IpcContract {
   'dla:getBlocks':                     { args: [paperId: string, pageIndex: number]; result: import('../models').ContentBlockDTO[] | null };
   'dla:getDocumentBlocks':             { args: [paperId: string]; result: Array<{ pageIndex: number; blocks: import('../models').ContentBlockDTO[] }> };
   'dla:analyzeDocument':               { args: [paperId: string, pdfPath: string, totalPages: number]; result: void };
+  'dla:getOcrLines':                   { args: [paperId: string, pageIndex: number]; result: import('../models').OcrLineDTO[] | null };
+  'dla:getDocumentOcrLines':           { args: [paperId: string]; result: Array<{ pageIndex: number; lines: import('../models').OcrLineDTO[] }> };
 
   // ── workspace ──
   'workspace:create':                 { args: [opts: { rootDir: string; name?: string; description?: string }]; result: WorkspaceInfo };

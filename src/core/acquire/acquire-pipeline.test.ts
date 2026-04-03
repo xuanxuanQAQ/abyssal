@@ -22,6 +22,7 @@ function makeStrategyParams(overrides: Partial<BuildStrategyParams> = {}): Build
     doi: '10.48550/arXiv.1706.03762',
     arxivId: '1706.03762',
     pmcid: null,
+    url: null,
     recon: null,
     fastPath: tryFastPath('10.48550/arXiv.1706.03762', '1706.03762'),
     cookieJar: null,

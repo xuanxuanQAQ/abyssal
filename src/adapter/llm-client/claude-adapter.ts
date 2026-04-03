@@ -237,10 +237,33 @@ export class ClaudeAdapter implements LlmAdapter {
 // ─── Helpers ───
 
 /**
- * Wrap system prompt in a cacheable content block (Anthropic prompt caching).
+ * Wrap system prompt in cacheable content blocks (Anthropic prompt caching).
  * Saves ~90% input tokens on repeated calls with the same system prompt.
+ *
+ * If the system prompt contains the marker `<!-- cache-boundary -->`, it is
+ * split into two blocks: the stable prefix (role + project context) gets its
+ * own cache_control so it survives across calls even when the variable suffix
+ * (paper-specific context, RAG passages) changes. This enables cross-call
+ * prefix caching for the chat and workflow paths that share the same project
+ * context.
  */
 function buildCacheableSystem(systemPrompt: string): Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> {
+  const BOUNDARY = '<!-- cache-boundary -->';
+  const idx = systemPrompt.indexOf(BOUNDARY);
+
+  if (idx !== -1) {
+    const prefix = systemPrompt.slice(0, idx).trimEnd();
+    const suffix = systemPrompt.slice(idx + BOUNDARY.length).trimStart();
+    const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
+    if (prefix) {
+      blocks.push({ type: 'text', text: prefix, cache_control: { type: 'ephemeral' } });
+    }
+    if (suffix) {
+      blocks.push({ type: 'text', text: suffix, cache_control: { type: 'ephemeral' } });
+    }
+    return blocks.length > 0 ? blocks : [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
+  }
+
   return [{
     type: 'text',
     text: systemPrompt,

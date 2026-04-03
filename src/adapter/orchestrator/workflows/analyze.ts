@@ -815,7 +815,13 @@ async function analyzeSinglePaper(
   // ── Step 6: CBM decision ──
   runner.reportProgress({ currentStage: 'budgeting' });
 
-  const conceptFrameworkText = formatConceptFramework(conceptSubset);
+  // Compute excluded concept names for compact display in the prompt
+  const selectedIds = new Set(conceptSubset.map((c) => c.id));
+  const excludedNames = ctx.conceptsForSubset
+    .filter((c) => !selectedIds.has(c.id))
+    .map((c) => c.nameEn);
+
+  const conceptFrameworkText = formatConceptFramework(conceptSubset, excludedNames.length > 0 ? excludedNames : undefined);
   const memoText = memosForPrompt.map((m) => m.text).join('\n');
   const conceptMaturities = conceptSubset.map((c) => c.maturity);
   const ragText = ragPassages.map((p) => p.text).join('\n');

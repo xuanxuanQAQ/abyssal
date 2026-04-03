@@ -1,10 +1,10 @@
-import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
   ensureWorkerInitialized,
   CMAP_URL,
   CMAP_PACKED,
   STANDARD_FONT_URL,
+  WASM_URL,
 } from './pdfWorkerManager';
 
 export type PDFDocumentSource =
@@ -24,7 +24,7 @@ export function filePathToPdfJsUrl(filePath: string): string {
 
 export class PDFDocumentManager {
   private document: PDFDocumentProxy | null = null;
-  private loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null;
+  private loadingTask: { promise: Promise<PDFDocumentProxy>; destroy(): Promise<void> } | null = null;
   /** §5.4: Track in-flight page render tasks for cancellation on destroy. */
   private activeRenderTasks: Set<{ cancel(): void }> = new Set();
 
@@ -34,7 +34,8 @@ export class PDFDocumentManager {
       await this.destroy();
     }
 
-    ensureWorkerInitialized();
+    const pdfjsLib = await import('pdfjs-dist');
+    ensureWorkerInitialized(pdfjsLib);
 
     this.loadingTask = pdfjsLib.getDocument({
       ...(source.kind === 'data'
@@ -43,6 +44,7 @@ export class PDFDocumentManager {
       cMapUrl: CMAP_URL,
       cMapPacked: CMAP_PACKED,
       standardFontDataUrl: STANDARD_FONT_URL,
+      wasmUrl: WASM_URL,
     });
 
     const doc = await this.loadingTask.promise;

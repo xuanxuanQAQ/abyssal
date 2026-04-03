@@ -34,6 +34,7 @@ import { isWorkspace, scaffoldWorkspace, getWorkspacePaths, WorkspaceManager } f
 import { createDbProxy, type DbProxyInstance } from '../db-process/db-proxy';
 import { createBibliographyService } from '../core/bibliography';
 import { createRagService, type RagService } from '../core/rag';
+import { createDatabaseService, type DatabaseService } from '../core/database';
 import type { AbyssalConfig, GlobalConfig } from '../core/types/config';
 import { ConfigProvider } from '../core/infra/config-provider';
 import { createLlmClient, type LlmClient } from '../adapter/llm-client/llm-client';
@@ -65,6 +66,7 @@ import { ResearchSession } from '../core/session';
 import { createCapabilityRegistry, type CapabilityServices } from '../adapter/capabilities';
 import { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
 import { buildChatSystemPrompt } from './chat-system-prompt';
+import { testApiKeyDirect, testConfiguredApiKey } from '../core/infra/api-key-diagnostics';
 
 // ─── ParsedArgs ───
 
@@ -376,13 +378,29 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   }
 
   // ── Layer 3.5: RagService (depends on EmbedFunction + DB) ──
+  // RagService requires synchronous DB access (direct SQL via better-sqlite3).
+  // dbProxy is async (IPC to child process), so we open a separate read-only
+  // connection. WAL mode supports concurrent readers safely.
   let ragService: RagService | null = null;
+  let ragDbService: DatabaseService | null = null;
   if (embedFn.isAvailable) {
     try {
-      ragService = createRagService(embedFn, dbProxy as any, config, logger);
-      logger.info('RagService initialized');
+      const wsPaths = getWorkspacePaths(ctx.args.workspace);
+      ragDbService = createDatabaseService({
+        dbPath: wsPaths.db,
+        config,
+        logger,
+        readOnly: true,
+      });
+      ragService = createRagService(embedFn, ragDbService, config, logger);
+      logger.info('RagService initialized (read-only direct DB connection)');
     } catch (err) {
       logger.warn('RagService initialization failed', { error: (err as Error).message });
+      // Clean up partial DB connection
+      if (ragDbService) {
+        try { ragDbService.close(); } catch { /* ignore */ }
+        ragDbService = null;
+      }
     }
   } else {
     logger.warn('RagService skipped — no embedding API key configured. Vector indexing will be unavailable.', {
@@ -411,6 +429,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   // Inject adapter-layer modules
   ctx.appContext.llmClient = llmClient;
   ctx.appContext.contextBudgetManager = contextBudgetManager;
+  ctx.appContext.ragDbService = ragDbService;
 
   // Wire cost tracking to llm_audit_log table
   if (llmClient) {
@@ -551,6 +570,14 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
         (dbProxy as any).insertHydrateLogs(paperId, logs);
       },
     },
+    ocrLinesPersist: {
+      insertOcrLines: (lines) => {
+        (dbProxy as any).insertOcrLines(lines);
+      },
+      deleteOcrLines: (paperId) => {
+        (dbProxy as any).deleteOcrLines(paperId);
+      },
+    },
   }));
   if (llmClient) {
     workflowRunner.registerWorkflow('analyze', createAnalyzeWorkflow({
@@ -660,6 +687,14 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
         configProvider.update(current);
       },
     },
+    apiDiagnostics: {
+      testProvider: async (provider, apiKey) => {
+        if (typeof apiKey === 'string' && apiKey.trim().length > 0) {
+          return testApiKeyDirect(provider, apiKey);
+        }
+        return testConfiguredApiKey(provider, configProvider.config.apiKeys);
+      },
+    },
   };
 
   const capabilityRegistry = createCapabilityRegistry(
@@ -694,7 +729,9 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
     // Restore working memory
     const savedMemory = await dbProxy.loadSessionMemory();
     if (savedMemory.length > 0) {
-      const entries = savedMemory.map((row) => ({
+      const entries = savedMemory
+        .filter((row) => row.type !== 'observation')
+        .map((row) => ({
         id: row.id,
         type: row.type as import('../core/session/working-memory').MemoryEntryType,
         content: row.content,
@@ -706,7 +743,10 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
         ...(row.tags ? { tags: JSON.parse(row.tags) as string[] } : {}),
       }));
       researchSession.memory.loadEntries(entries);
-      logger.info('Working memory restored', { entries: entries.length });
+      logger.info('Working memory restored', {
+        entries: entries.length,
+        droppedObservation: savedMemory.length - entries.length,
+      });
     }
 
     // Restore conversation
@@ -985,6 +1025,7 @@ async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
     pushManager,
     staleDrafts: new Set(),
     cookieJar: null,
+    ragDbService: null,
     dlaProxy: null,
     dlaScheduler: null,
     eventBus: null,

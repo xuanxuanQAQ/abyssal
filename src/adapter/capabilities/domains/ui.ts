@@ -19,6 +19,7 @@ export function createUICapability(): Capability {
       {
         name: 'navigate',
         description: 'Navigate to a specific view in the application. Optionally focus on a specific entity.',
+        routeFamilies: ['ui_navigation', 'workspace_control', 'config_diagnostic'],
         params: [
           { name: 'view', type: 'string', description: 'Target view', required: true, enumValues: VALID_VIEWS as string[] },
           { name: 'paperId', type: 'string', description: 'Paper ID to select after navigation' },
@@ -60,6 +61,7 @@ export function createUICapability(): Capability {
       {
         name: 'focus_entity',
         description: 'Focus on a specific entity in the current view (scroll to, highlight, select).',
+        routeFamilies: ['ui_navigation', 'workspace_control'],
         params: [
           { name: 'entityType', type: 'string', description: 'Entity type', required: true, enumValues: ['paper', 'concept', 'note', 'article'] },
           { name: 'entityId', type: 'string', description: 'Entity ID', required: true },
@@ -85,6 +87,7 @@ export function createUICapability(): Capability {
       {
         name: 'notify',
         description: 'Show a notification to the user with an optional action button.',
+        routeFamilies: ['workspace_control', 'config_diagnostic', 'mixed_fallback'],
         params: [
           { name: 'title', type: 'string', description: 'Notification title', required: true },
           { name: 'message', type: 'string', description: 'Notification message', required: true },
@@ -109,6 +112,7 @@ export function createUICapability(): Capability {
       {
         name: 'suggest',
         description: 'Show a proactive suggestion to the user with action buttons they can click.',
+        routeFamilies: ['workspace_control', 'mixed_fallback'],
         params: [
           { name: 'title', type: 'string', description: 'Suggestion title', required: true },
           { name: 'description', type: 'string', description: 'Suggestion description', required: true },

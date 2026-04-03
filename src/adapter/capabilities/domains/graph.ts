@@ -11,10 +11,12 @@ export function createGraphCapability(): Capability {
     name: 'graph',
     domain: 'graph',
     description: 'Knowledge graph exploration — navigate relationships between papers and concepts',
+    routeFamilies: ['research_qa', 'ui_navigation'],
     operations: [
       {
         name: 'get_relations',
         description: 'Get the full relation graph or filter by node types, edge types, and similarity threshold.',
+        routeFamilies: ['research_qa'],
         params: [
           { name: 'focusNodeId', type: 'string', description: 'Center node ID' },
           { name: 'depth', type: 'number', description: 'Hop depth (1 or 2)' },
@@ -28,6 +30,7 @@ export function createGraphCapability(): Capability {
       {
         name: 'focus_node',
         description: 'Navigate the graph view to center on a specific paper or concept node.',
+        routeFamilies: ['ui_navigation'],
         params: [
           { name: 'nodeId', type: 'string', description: 'Node ID to focus on', required: true },
           { name: 'entityType', type: 'string', description: 'Entity type', required: true, enumValues: ['paper', 'concept'] },
@@ -61,6 +64,7 @@ export function createGraphCapability(): Capability {
       {
         name: 'find_path',
         description: 'Find connection paths between two entities in the knowledge graph.',
+        routeFamilies: ['research_qa'],
         params: [
           { name: 'fromId', type: 'string', description: 'Starting entity ID', required: true },
           { name: 'toId', type: 'string', description: 'Target entity ID', required: true },
@@ -99,6 +103,7 @@ export function createGraphCapability(): Capability {
       {
         name: 'compare_entities',
         description: 'Show a side-by-side comparison of two or more papers or concepts in the UI.',
+        routeFamilies: ['research_qa', 'ui_navigation'],
         params: [
           { name: 'items', type: 'array', description: 'Entities to compare (array of {entityType, entityId, label})', required: true, itemType: 'object' },
           { name: 'aspect', type: 'string', description: 'What aspect to compare (e.g., "methodology", "findings", "definitions")' },

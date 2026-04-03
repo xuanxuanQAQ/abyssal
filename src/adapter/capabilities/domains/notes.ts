@@ -11,10 +11,12 @@ export function createNotesCapability(): Capability {
     name: 'notes',
     domain: 'notes',
     description: 'Research note and memo management — create, query, link to papers and concepts',
+    routeFamilies: ['writing_edit', 'research_qa', 'workspace_control'],
     operations: [
       {
         name: 'create',
         description: 'Create a new research note. Automatically links to currently active papers/concepts from the session if not specified.',
+        routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
           { name: 'title', type: 'string', description: 'Note title', required: true },
           { name: 'content', type: 'string', description: 'Note content (markdown)' },
@@ -73,6 +75,7 @@ export function createNotesCapability(): Capability {
       {
         name: 'create_from_findings',
         description: 'Create a note from the current working memory findings. Automatically compiles relevant findings into a structured note.',
+        routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
           { name: 'title', type: 'string', description: 'Note title', required: true },
           { name: 'findingTypes', type: 'array', description: 'Types of memory entries to include', itemType: 'string' },
@@ -148,6 +151,7 @@ export function createNotesCapability(): Capability {
       {
         name: 'query',
         description: 'Search and filter research notes by text, tags, linked papers, or linked concepts.',
+        routeFamilies: ['writing_edit', 'research_qa', 'retrieval_search'],
         params: [
           { name: 'searchText', type: 'string', description: 'Full-text search' },
           { name: 'tags', type: 'array', description: 'Filter by tags', itemType: 'string' },
@@ -171,6 +175,7 @@ export function createNotesCapability(): Capability {
       {
         name: 'get',
         description: 'Get a specific note by ID with full metadata.',
+        routeFamilies: ['writing_edit', 'research_qa'],
         params: [
           { name: 'noteId', type: 'string', description: 'Note ID', required: true },
         ],
@@ -184,6 +189,7 @@ export function createNotesCapability(): Capability {
       {
         name: 'update',
         description: 'Update a note\'s metadata (title, tags, linked entities).',
+        routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
           { name: 'noteId', type: 'string', description: 'Note ID', required: true },
           { name: 'title', type: 'string', description: 'New title' },
@@ -212,6 +218,7 @@ export function createNotesCapability(): Capability {
       {
         name: 'add_memo',
         description: 'Create a quick research memo linked to a paper, concept, or annotation.',
+        routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
           { name: 'text', type: 'string', description: 'Memo content', required: true },
           { name: 'entityType', type: 'string', description: 'Entity type', required: true, enumValues: ['paper', 'concept', 'annotation'] },
@@ -236,6 +243,7 @@ export function createNotesCapability(): Capability {
       {
         name: 'query_memos',
         description: 'Query memos by entity (paper, concept, or annotation).',
+        routeFamilies: ['writing_edit', 'research_qa'],
         params: [
           { name: 'entityType', type: 'string', description: 'Entity type', required: true, enumValues: ['paper', 'concept', 'annotation', 'outline'] },
           { name: 'entityId', type: 'string', description: 'Entity ID', required: true },

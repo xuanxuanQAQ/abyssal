@@ -678,9 +678,38 @@ export interface CleanupPolicy {
 // ═══ v1.2 项目初始化 ═══
 
 export interface ProjectSetupConfig {
+  // Step 1: 项目基础
   name: string;
-  startMode: ProjectStartMode;
-  embeddingModel?: string | undefined;
+  mode: 'anchored' | 'unanchored' | 'auto';
+  workspacePath?: string | undefined;
+
+  // Step 2: LLM 配置
+  llmProvider: string;
+  llmModel: string;
+  llmApiKey?: string | undefined;
+
+  // Step 3: 检索配置
+  embeddingProvider: 'siliconflow' | 'jina' | 'openai';
+  embeddingModel: string;
+  embeddingApiKey?: string | undefined;
+  rerankerBackend: 'cohere' | 'jina' | 'siliconflow';
+  rerankerApiKey?: string | undefined;
+
+  // Step 4: 语言与网络
+  outputLanguage: string;
+  proxyEnabled?: boolean | undefined;
+  proxyUrl?: string | undefined;
+  webSearchEnabled?: boolean | undefined;
+  webSearchBackend?: 'tavily' | 'serpapi' | 'bing' | undefined;
+  webSearchApiKey?: string | undefined;
+  semanticScholarApiKey?: string | undefined;
+
+  // Step 5: 文献源（可选）
+  sourcePreset?: 'china' | 'overseas' | 'custom' | undefined;
+  enabledSources?: string[] | undefined;
+
+  /** @deprecated use mode instead */
+  startMode?: ProjectStartMode | undefined;
   initialConcepts?: string[] | undefined;
 }
 
@@ -996,6 +1025,23 @@ export interface ContentBlockDTO {
   bbox: { x: number; y: number; w: number; h: number };
   confidence: number;
   pageIndex: number;
+}
+
+/** OCR word-level DTO for precise text alignment */
+export interface OcrWordDTO {
+  text: string;
+  bbox: { x: number; y: number; w: number; h: number };
+  confidence: number;
+}
+
+/** OCR line-level DTO for renderer consumption (scanned page text positioning) */
+export interface OcrLineDTO {
+  text: string;
+  bbox: { x: number; y: number; w: number; h: number };
+  confidence: number;
+  pageIndex: number;
+  lineIndex: number;
+  words?: OcrWordDTO[];
 }
 
 // ═══ Workspace ═══

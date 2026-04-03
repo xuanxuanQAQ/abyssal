@@ -13,6 +13,7 @@ import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
 import { loadGlobalConfig, saveGlobalConfig } from '../../core/infra/global-config';
 import { ConfigLoader } from '../../core/infra/config';
+import { testApiKeyDirect, testConfiguredApiKey } from '../../core/infra/api-key-diagnostics';
 import type { SettingsData, DbStatsInfo } from '../../shared-types/models';
 
 // ─── Helpers ───
@@ -238,101 +239,13 @@ export function registerSettingsHandlers(ctx: AppContext): void {
 
   // ── settings:testApiKey ──
   typedHandler('settings:testApiKey', logger, async (_e, provider) => {
-    const keys = ctx.config.apiKeys;
+    return testConfiguredApiKey(provider, ctx.config.apiKeys);
+  });
 
-    try {
-      switch (provider) {
-        case 'anthropic': {
-          if (!keys.anthropicApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'x-api-key': keys.anthropicApiKey,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 1,
-              messages: [{ role: 'user', content: 'hi' }],
-            }),
-          });
-          if (res.ok || res.status === 200) return { ok: true, message: 'Connected' };
-          if (res.status === 401) return { ok: false, message: 'Invalid API key' };
-          return { ok: true, message: `Status ${res.status} — key likely valid` };
-        }
-        case 'openai': {
-          if (!keys.openaiApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://api.openai.com/v1/models', {
-            headers: { Authorization: `Bearer ${keys.openaiApiKey}` },
-          });
-          return res.ok
-            ? { ok: true, message: 'Connected' }
-            : { ok: false, message: `HTTP ${res.status}` };
-        }
-        case 'gemini': {
-          if (!keys.geminiApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/models', {
-            headers: { Authorization: `Bearer ${keys.geminiApiKey}` },
-          });
-          return res.ok
-            ? { ok: true, message: 'Connected' }
-            : { ok: false, message: `HTTP ${res.status}` };
-        }
-        case 'deepseek': {
-          if (!keys.deepseekApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://api.deepseek.com/v1/models', {
-            headers: { Authorization: `Bearer ${keys.deepseekApiKey}` },
-          });
-          return res.ok
-            ? { ok: true, message: 'Connected' }
-            : { ok: false, message: `HTTP ${res.status}` };
-        }
-        case 'cohere': {
-          if (!keys.cohereApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://api.cohere.ai/v1/check-api-key', {
-            headers: { Authorization: `Bearer ${keys.cohereApiKey}` },
-          });
-          return res.ok
-            ? { ok: true, message: 'Connected' }
-            : { ok: false, message: `HTTP ${res.status}` };
-        }
-        case 'jina': {
-          if (!keys.jinaApiKey) return { ok: false, message: 'Key not configured' };
-          // Jina has no dedicated check endpoint; a 200 from reranker list works
-          return { ok: true, message: 'Key configured (no test endpoint)' };
-        }
-        case 'siliconflow': {
-          if (!keys.siliconflowApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://api.siliconflow.cn/v1/models', {
-            headers: { Authorization: `Bearer ${keys.siliconflowApiKey}` },
-          });
-          return res.ok
-            ? { ok: true, message: 'Connected' }
-            : { ok: false, message: `HTTP ${res.status}` };
-        }
-        case 'tavily': {
-          if (!keys.webSearchApiKey) return { ok: false, message: 'Key not configured' };
-          const res = await fetch('https://api.tavily.com/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              api_key: keys.webSearchApiKey,
-              query: 'test',
-              max_results: 1,
-              search_depth: 'basic',
-            }),
-          });
-          return res.ok
-            ? { ok: true, message: 'Connected' }
-            : { ok: false, message: `HTTP ${res.status}` };
-        }
-        default:
-          return { ok: false, message: `Unknown provider: ${provider}` };
-      }
-    } catch (err) {
-      return { ok: false, message: (err as Error).message };
-    }
+  // ── settings:testApiKeyDirect ──
+  // Like testApiKey but accepts the key value directly (used by project wizard before workspace exists)
+  typedHandler('settings:testApiKeyDirect', logger, async (_e, provider, apiKey) => {
+    return testApiKeyDirect(provider, apiKey);
   });
 
   // ── settings:getDbStats ──

@@ -96,7 +96,7 @@ describe('papersDao', () => {
     expect(stored!.doi).toBe('10.5555/3295222.3295349');
     expect(stored!.paperType).toBe('conference');
     expect(stored!.source).toBe('semantic_scholar');
-    expect(stored!.fulltextStatus).toBe('pending');
+    expect(stored!.fulltextStatus).toBe('not_attempted');
     expect(stored!.relevance).toBe('medium');
   });
 
@@ -276,7 +276,7 @@ describe('papersDao', () => {
         year: 2020,
         paperType: 'journal',
         source: 'semantic_scholar',
-      }), { relevance: 'high', fulltextStatus: 'acquired' });
+      }), { relevance: 'high', fulltextStatus: 'available' });
       papersDao.addPaper(db, makePaper({
         id: asPaperId('bbbbbbbbbbbb'),
         title: 'Reinforcement Learning Survey',
@@ -294,7 +294,7 @@ describe('papersDao', () => {
         source: 'crossref',
         doi: null,
         arxivId: null,
-      }), { relevance: 'low', fulltextStatus: 'acquired' });
+      }), { relevance: 'low', fulltextStatus: 'available' });
     });
 
     it('returns all papers with default filter', () => {
@@ -322,7 +322,7 @@ describe('papersDao', () => {
     });
 
     it('filters by fulltextStatus', () => {
-      const result = papersDao.queryPapers(db, { fulltextStatus: ['acquired'] });
+      const result = papersDao.queryPapers(db, { fulltextStatus: ['available'] });
       expect(result.totalCount).toBe(2);
     });
 
@@ -370,7 +370,7 @@ describe('papersDao', () => {
 
     it('combines multiple filters', () => {
       const result = papersDao.queryPapers(db, {
-        fulltextStatus: ['acquired'],
+        fulltextStatus: ['available'],
         yearRange: { min: 2022 },
       });
       expect(result.totalCount).toBe(1);

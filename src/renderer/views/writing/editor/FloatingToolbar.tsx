@@ -11,7 +11,7 @@
 
 import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BubbleMenu } from '@tiptap/react';
+import { BubbleMenu } from '@tiptap/react/menus';
 import type { Editor } from '@tiptap/react';
 import { Bold, Italic, Strikethrough, Sparkles } from 'lucide-react';
 import { Z_INDEX } from '../../../styles/zIndex';
@@ -97,8 +97,7 @@ export function FloatingToolbar({
   return (
     <BubbleMenu
       editor={editor}
-      tippyOptions={{
-        duration: 150,
+      options={{
         placement: 'top',
       }}
     >

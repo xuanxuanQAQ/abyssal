@@ -117,7 +117,7 @@ export function registerSystemHandlers(ctx: AppContext): void {
         if (ext === '.bib') {
           if (!ctx.bibliographyModule) { errors.push(`${filePath}: Bibliography service not initialized`); continue; }
           const content = await fs.readFile(filePath, 'utf-8');
-          const entries = ctx.bibliographyModule.importBibtex(content);
+          const entries = await ctx.bibliographyModule.importBibtex(content);
           const result = await insertBibEntries(ctx.dbProxy, entries);
           imported += result.imported;
           skipped += result.skipped;

@@ -38,8 +38,6 @@ In addition to concept mappings, extract:
 
 3. **Limitations**: At least 2 substantive limitations YOU identify — not the authors' self-reported caveats. These should be genuine methodological or theoretical weaknesses.
 
-{maturity_instructions}
-
 {suggested_concepts_instruction}
 
 {output_format}

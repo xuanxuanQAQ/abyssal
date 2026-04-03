@@ -672,8 +672,9 @@ function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; onUpdate
           <SegmentedControl
             value={rag.embeddingProvider ?? 'openai'}
             options={[
-              { value: 'openai', label: 'OpenAI' },
               { value: 'siliconflow', label: 'SiliconFlow' },
+              { value: 'jina', label: 'Jina' },
+              { value: 'openai', label: 'OpenAI' },
             ]}
             onChange={(v) => {
               const provider = v as EmbeddingProvider;

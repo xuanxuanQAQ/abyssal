@@ -20,10 +20,13 @@ import type { SectionMapEntry } from './fulltext-compressor';
 
 // ─── Threshold ───
 
-export const COMPACT_MODE_THRESHOLD = 3000;
+export const COMPACT_MODE_THRESHOLD = 2000;
 
 /**
  * Check whether compact mode should be activated.
+ * Lowered from 3000 to 2000 — only trigger for truly tiny context windows
+ * (e.g. local 7B models with 4K windows). At 2000-3000 tokens, normal
+ * truncation already handles budget adequately.
  */
 export function shouldUseCompactMode(availableBudget: number): boolean {
   return availableBudget < COMPACT_MODE_THRESHOLD;
@@ -44,10 +47,11 @@ export function compactConceptFormat(concepts: ConceptForSubset[]): string {
 // ─── Memo compaction ───
 
 const MAX_COMPACT_MEMOS = 3;
-const MAX_COMPACT_MEMO_CHARS = 50;
+const MAX_COMPACT_MEMO_CHARS = 120;
 
 /**
- * §8.2: Truncate memos to max 3, each to 50 chars.
+ * §8.2: Truncate memos to max 3, each to 120 chars.
+ * Raised from 50 to preserve one-sentence semantic content.
  */
 export function compactMemos(memos: MemoForInjection[]): MemoForInjection[] {
   return memos.slice(0, MAX_COMPACT_MEMOS).map((m) => ({

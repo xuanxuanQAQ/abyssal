@@ -82,8 +82,9 @@ export class BibliographyService {
     this.crossRefLimiter = createRateLimiter('crossRef');
 
     // 从 config 自动初始化 CSL Engine（需要 cslStylesDir + defaultCslStyleId）
-    const { cslStylesDir, cslLocalesDir, defaultCslStyleId } = config.writing;
-    if (cslStylesDir && cslLocalesDir) {
+    const writingConfig = config.writing;
+    if (writingConfig?.cslStylesDir && writingConfig?.cslLocalesDir) {
+      const { cslStylesDir, cslLocalesDir, defaultCslStyleId } = writingConfig;
       const stylePath = path.join(cslStylesDir, `${defaultCslStyleId}.csl`);
       if (fs.existsSync(stylePath) && fs.existsSync(cslLocalesDir)) {
         this.cslEngine = new CslEngine(stylePath, cslLocalesDir);
@@ -105,7 +106,11 @@ export class BibliographyService {
 
   /** 切换 CSL 样式（格式变更时调用） */
   switchCslStyle(styleId: string): void {
-    const { cslStylesDir, cslLocalesDir } = this.config.writing;
+    const writingConfig = this.config.writing;
+    if (!writingConfig?.cslStylesDir || !writingConfig?.cslLocalesDir) {
+      throw new Error('Writing config is missing cslStylesDir/cslLocalesDir');
+    }
+    const { cslStylesDir, cslLocalesDir } = writingConfig;
     const stylePath = path.join(cslStylesDir, `${styleId}.csl`);
     this.cslEngine = new CslEngine(stylePath, cslLocalesDir);
   }
@@ -116,8 +121,8 @@ export class BibliographyService {
 
   // ─── §1 BibTeX ───
 
-  importBibtex(input: string): ImportedEntry[] {
-    return importBibtex(input);
+  async importBibtex(input: string): Promise<ImportedEntry[]> {
+    return await importBibtex(input);
   }
 
   exportBibtex(papers: PaperMetadata[]): string {
@@ -207,7 +212,9 @@ export class BibliographyService {
   // ─── §1.6 可用格式列表 ───
 
   listAvailableStyles(): AvailableCslStyle[] {
-    return listAvailableStyles(this.config.writing.cslStylesDir);
+    const stylesDir = this.config.writing?.cslStylesDir;
+    if (!stylesDir) return [];
+    return listAvailableStyles(stylesDir);
   }
 
   // ─── §1.5 CSL 文件校验 + 添加 ───
@@ -220,7 +227,10 @@ export class BibliographyService {
       return { success: false, error: result.error };
     }
 
-    const stylesDir = this.config.writing.cslStylesDir;
+    const stylesDir = this.config.writing?.cslStylesDir;
+    if (!stylesDir) {
+      return { success: false, error: 'Writing config is missing cslStylesDir' };
+    }
     const fileName = path.basename(filePath);
     const destPath = path.join(stylesDir, fileName);
     try {

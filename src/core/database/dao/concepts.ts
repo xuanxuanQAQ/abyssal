@@ -103,6 +103,16 @@ export function addConcept(
     detectParentCycle(db, concept.id, concept.parentId);
   }
 
+  const existing = db
+    .prepare('SELECT 1 FROM concepts WHERE id = ?')
+    .get(concept.id) as { 1: number } | undefined;
+  if (existing) {
+    throw new IntegrityError({
+      message: `Concept already exists: ${concept.id}`,
+      context: { dbPath: db.name, conceptId: concept.id },
+    });
+  }
+
   const timestamp = now();
   const initialHistory: ConceptHistoryEntry = {
     timestamp,
@@ -121,15 +131,6 @@ export function addConcept(
       maturity, parent_id, history, deprecated, deprecated_at,
       deprecated_reason, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      name_zh = excluded.name_zh,
-      name_en = excluded.name_en,
-      layer = excluded.layer,
-      definition = excluded.definition,
-      search_keywords = excluded.search_keywords,
-      maturity = excluded.maturity,
-      parent_id = excluded.parent_id,
-      updated_at = excluded.updated_at
   `).run(
     concept.id,
     concept.nameZh,
@@ -776,7 +777,11 @@ export function gcConceptChange(
   let requiresRelationRecompute = false;
   let requiresSynthesizeRefresh = false;
   const affectedPaperIds: PaperId[] = [];
-  let deletedRelations = 0;
+
+  const existingRows = db.prepare(
+    'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
+  ).all(conceptId) as { paper_id: string }[];
+  affectedPaperIds.push(...existingRows.map((r) => r.paper_id as PaperId));
 
   // ═══ 阶段 1：映射标记 ═══
   if (changeType === 'definition_refined' && !isBreaking) {
@@ -821,7 +826,7 @@ export function gcConceptChange(
     "edge_type IN ('concept_agree', 'concept_conflict', 'concept_extend') AND " +
     "json_extract(metadata, '$.conceptId') = ?",
   ).run(conceptId);
-  deletedRelations = relResult.changes;
+  const deletedRelations = relResult.changes;
   if (deletedRelations > 0) {
     requiresRelationRecompute = true;
   }
@@ -834,11 +839,6 @@ export function gcConceptChange(
   }
 
   // ═══ 阶段 4：收集受影响论文 ═══
-  const rows = db.prepare(
-    'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
-  ).all(conceptId) as { paper_id: string }[];
-  affectedPaperIds.push(...rows.map((r) => r.paper_id as PaperId));
-
   // deleted 分支的额外清理
   if (changeType === 'deleted') {
     // annotations.concept_id → NULL 由 ON DELETE SET NULL 处理

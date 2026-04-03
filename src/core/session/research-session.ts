@@ -13,7 +13,11 @@
 
 import type { ViewType } from '../../shared-types/enums';
 import type { EventBus, AppEvent } from '../event-bus';
-import { WorkingMemory, type WorkingMemoryEntry } from './working-memory';
+import {
+  WorkingMemory,
+  type WorkingMemoryEntry,
+  type MemoryEntryType,
+} from './working-memory';
 
 // ─── Types ───
 
@@ -62,6 +66,19 @@ export interface SessionSnapshot {
   trajectory: TrajectoryStep[];
   memory: WorkingMemoryEntry[];
   startedAt: number;
+}
+
+export interface SessionPromptBuildOptions {
+  includeFocus?: boolean;
+  includeSelectionContext?: boolean;
+  includeRecentActivity?: boolean;
+  includeWorkingMemory?: boolean;
+  includeGoals?: boolean;
+  maxRecentActivity?: number;
+  workingMemoryTopK?: number;
+  workingMemoryAllowedTypes?: MemoryEntryType[];
+  workingMemoryMaxAgeMs?: number;
+  linkedEntitiesAny?: string[];
 }
 
 // ─── Research Session ───
@@ -325,12 +342,23 @@ export class ResearchSession {
    * Generate a compact context string for injection into the AI system prompt.
    * Includes focus, recent trajectory, active goals, and working memory.
    */
-  buildContextForPrompt(): string {
+  buildContextForPrompt(opts: SessionPromptBuildOptions = {}): string {
+    const includeFocus = opts.includeFocus ?? true;
+    const includeSelectionContext = opts.includeSelectionContext ?? true;
+    const includeRecentActivity = opts.includeRecentActivity ?? true;
+    const includeWorkingMemory = opts.includeWorkingMemory ?? true;
+    const includeGoals = opts.includeGoals ?? false;
+    const maxRecentActivity = opts.maxRecentActivity ?? 10;
+    const workingMemoryTopK = opts.workingMemoryTopK ?? 8;
+
     this.log('[Session] buildContextForPrompt', {
       view: this.focus.currentView,
       activePapers: this.focus.activePapers.length,
       activeConcepts: this.focus.activeConcepts.length,
       readerOpen: !!this.focus.readerState,
+      includeFocus,
+      includeRecentActivity,
+      includeWorkingMemory,
       activeGoals: this.getActiveGoals().length,
       trajectorySteps: this.trajectory.length,
       memoryEntries: this.memory.getAll().length,
@@ -338,48 +366,52 @@ export class ResearchSession {
 
     const parts: string[] = [];
 
-    // Focus
-    parts.push('<session_focus>');
-    parts.push(`View: ${this.focus.currentView}`);
-    if (this.focus.activePapers.length > 0) {
-      parts.push(`Active papers: ${this.focus.activePapers.slice(0, 5).join(', ')}`);
-    }
-    if (this.focus.activeConcepts.length > 0) {
-      parts.push(`Active concepts: ${this.focus.activeConcepts.slice(0, 5).join(', ')}`);
-    }
-    if (this.focus.readerState) {
-      const r = this.focus.readerState;
-      parts.push(`Reader: paper=${r.paperId} page=${r.page}${r.totalPages ? '/' + r.totalPages : ''}`);
-      if (r.selection) {
-        parts.push(`Selected text: "${truncate(r.selection.text, 150)}"`);
+    if (includeFocus) {
+      // Focus
+      parts.push('<session_focus>');
+      parts.push(`View: ${this.focus.currentView}`);
+      if (this.focus.activePapers.length > 0) {
+        parts.push(`Active papers: ${this.focus.activePapers.slice(0, 5).join(', ')}`);
       }
+      if (this.focus.activeConcepts.length > 0) {
+        parts.push(`Active concepts: ${this.focus.activeConcepts.slice(0, 5).join(', ')}`);
+      }
+      if (this.focus.readerState) {
+        const r = this.focus.readerState;
+        parts.push(`Reader: paper=${r.paperId} page=${r.page}${r.totalPages ? '/' + r.totalPages : ''}`);
+        if (includeSelectionContext && r.selection) {
+          parts.push(`Selected text: "${truncate(r.selection.text, 150)}"`);
+        }
+      }
+      const sel = this.focus.selected;
+      const selParts = [
+        sel.paperId && `paper=${sel.paperId}`,
+        sel.conceptId && `concept=${sel.conceptId}`,
+        sel.noteId && `note=${sel.noteId}`,
+        sel.articleId && `article=${sel.articleId}`,
+      ].filter(Boolean);
+      if (selParts.length > 0) {
+        parts.push(`Selected: ${selParts.join(', ')}`);
+      }
+      parts.push('</session_focus>');
     }
-    const sel = this.focus.selected;
-    const selParts = [
-      sel.paperId && `paper=${sel.paperId}`,
-      sel.conceptId && `concept=${sel.conceptId}`,
-      sel.noteId && `note=${sel.noteId}`,
-      sel.articleId && `article=${sel.articleId}`,
-    ].filter(Boolean);
-    if (selParts.length > 0) {
-      parts.push(`Selected: ${selParts.join(', ')}`);
-    }
-    parts.push('</session_focus>');
 
-    // Active goals
-    const activeGoals = this.getActiveGoals();
-    if (activeGoals.length > 0) {
-      parts.push('<research_goals>');
-      for (const g of activeGoals) {
-        parts.push(`- ${g.description}`);
+    // Active goals (only for task-oriented gate types)
+    if (includeGoals) {
+      const activeGoals = this.getActiveGoals();
+      if (activeGoals.length > 0) {
+        parts.push('<research_goals>');
+        for (const g of activeGoals) {
+          parts.push(`- ${g.description}`);
+        }
+        parts.push('</research_goals>');
       }
-      parts.push('</research_goals>');
     }
 
     // Recent trajectory (last 10 steps)
-    if (this.trajectory.length > 0) {
+    if (includeRecentActivity && this.trajectory.length > 0) {
       parts.push('<recent_activity>');
-      const recent = this.trajectory.slice(-10);
+      const recent = this.trajectory.slice(-maxRecentActivity);
       for (const step of recent) {
         const age = formatAge(Date.now() - step.timestamp);
         parts.push(`- ${step.action}${step.result ? ' → ' + step.result : ''} (${age} ago)`);
@@ -388,9 +420,19 @@ export class ResearchSession {
     }
 
     // Working memory
-    const memoryStr = this.memory.formatForPrompt(8);
-    if (memoryStr) {
-      parts.push(memoryStr);
+    if (includeWorkingMemory) {
+      const memoryStr = this.memory.formatForPrompt(workingMemoryTopK, {
+        ...(opts.workingMemoryAllowedTypes
+          ? { allowedTypes: opts.workingMemoryAllowedTypes }
+          : {}),
+        ...(opts.workingMemoryMaxAgeMs !== undefined
+          ? { maxAgeMs: opts.workingMemoryMaxAgeMs }
+          : {}),
+        ...(opts.linkedEntitiesAny ? { linkedEntitiesAny: opts.linkedEntitiesAny } : {}),
+      });
+      if (memoryStr) {
+        parts.push(memoryStr);
+      }
     }
 
     return parts.join('\n');

@@ -15,6 +15,8 @@ export const en = {
     open: 'Open',
     back: 'Back',
     next: 'Next',
+    add: 'Add',
+    remove: 'Remove',
     loading: 'Loading...',
     retry: 'Retry',
     search: 'Search',
@@ -41,6 +43,12 @@ export const en = {
     reject: 'Reject',
     expand: 'Expand',
     collapse: 'Collapse',
+    time: {
+      justNow: 'just now',
+      minutesAgo: '{{count}} min ago',
+      hoursAgo: '{{count}}h ago',
+      daysAgo: '{{count}}d ago',
+    },
   },
 
   // ─── Nav rail ───
@@ -541,6 +549,10 @@ export const en = {
 
   // ─── Notes view ───
   notes: {
+    tabs: {
+      memos: 'Memos',
+      researchNotes: 'Research Notes',
+    },
     memo: {
       title: 'Memo',
       quickNote: 'Quick Note',
@@ -740,7 +752,13 @@ export const en = {
     },
     chat: {
       title: 'AI Chat',
+      sessionHistory: 'Session history',
       historySessions: 'History sessions',
+      messages: 'messages',
+      noSessionHistory: 'No session history',
+      confirmDeleteSession: 'Are you sure you want to delete this session?',
+      sessionDeleted: 'Session deleted',
+      failedToDeleteSession: 'Failed to delete session',
       newSession: 'New session',
       clearSession: 'Clear current session',
       restore: 'Restore',
@@ -888,24 +906,63 @@ export const en = {
   // ─── Project setup wizard ───
   wizard: {
     title: 'Create New Project',
-    subtitle: 'Choose your research starting point',
-    projectName: 'Project Name',
-    projectNamePlaceholder: 'My Research Project',
+    subtitle: 'Configure your project in a few steps',
     projectNameRequired: 'Please enter a project name',
-    anchored: 'Theory-driven',
-    anchoredDesc: 'I have a clear theoretical framework and need to systematically verify and extend it',
-    exploratory: 'Exploratory mode',
-    exploratoryDesc: 'I am still exploring, discovering and building a concept framework from literature',
-    embeddingWarning: 'Embedding model cannot be changed once selected. Choose carefully.',
-    embeddingModel: 'Embedding Model',
-    embeddingSmall: 'text-embedding-3-small (Recommended)',
-    embeddingLarge: 'text-embedding-3-large',
-    initialConcepts: 'Initial Concepts (optional)',
-    addConceptPlaceholder: 'Enter concept name',
-    exploratorySkip: 'Exploratory mode will skip concept framework configuration.',
-    addConceptsLater: 'You can add a concept framework anytime in Settings.',
     creating: 'Creating project...',
     createProject: 'Create Project',
+
+    // Step labels
+    step1: 'Basics',
+    step2: 'LLM',
+    step3: 'Retrieval',
+    step4: 'Network',
+    step5: 'Sources',
+
+    // Step 1: Project basics
+    projectName: 'Project Name',
+    projectNamePlaceholder: 'My Research Project',
+    mode: 'Project Mode',
+    modeAuto: 'Auto (recommended)',
+    modeAnchored: 'Anchored — theory-driven',
+    modeUnanchored: 'Unanchored — exploratory',
+    modeHint: 'Auto mode adjusts behavior based on your usage patterns.',
+
+    // Step 2: LLM
+    llmProvider: 'LLM Provider',
+    llmModel: 'Model',
+    llmApiKey: 'API Key',
+
+    // Step 3: Retrieval
+    embeddingSection: 'Embedding',
+    embeddingProvider: 'Embedding Provider',
+    embeddingModel: 'Embedding Model',
+    embeddingApiKey: 'Embedding API Key',
+    rerankerSection: 'Reranker',
+    rerankerBackend: 'Reranker Backend',
+    rerankerApiKey: 'Reranker API Key',
+    keyReused: 'API key will be reused from {{provider}}.',
+
+    // Step 4: Language & Network
+    outputLanguage: 'Output Language',
+    proxySection: 'Proxy',
+    enableProxy: 'Enable HTTP proxy',
+    proxyHint: 'Required for users in mainland China to access certain APIs and paper sources.',
+    proxyUrl: 'Proxy URL',
+    webSearchSection: 'Web Search',
+    enableWebSearch: 'Enable web search for literature discovery',
+    webSearchBackend: 'Search Backend',
+    webSearchApiKey: 'Web Search API Key',
+    semanticScholarKey: 'API Key (optional)',
+    semanticScholarKeyPlaceholder: 'Enter Semantic Scholar API key',
+    semanticScholarHint: 'Without an API key, requests to Semantic Scholar will be rate-limited.',
+
+    // Step 5: Sources
+    sourcePreset: 'Source Preset',
+    preset_overseas: 'International',
+    preset_china: 'China Mainland',
+    preset_custom: 'Custom',
+    enabledSources: 'Enabled Sources (drag to reorder priority)',
+    sourcesHint: 'Higher-priority sources are tried first when downloading papers.',
   },
 
   // ─── Settings ───

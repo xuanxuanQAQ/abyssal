@@ -72,7 +72,7 @@ describe('annotations DAO', () => {
     expect(() =>
       addAnnotation(
         db,
-        makeAnnotation({ type: 'concept_tag', conceptId: null }),
+        makeAnnotation({ type: 'conceptTag', conceptId: null }),
       ),
     ).toThrow(IntegrityError);
   });
@@ -91,13 +91,13 @@ describe('annotations DAO', () => {
 
     const id = addAnnotation(
       db,
-      makeAnnotation({ type: 'concept_tag', conceptId }),
+      makeAnnotation({ type: 'conceptTag', conceptId }),
     );
     expect(id).toBeGreaterThan(0);
 
     const ann = getAnnotation(db, id);
     expect(ann).not.toBeNull();
-    expect(ann!.type).toBe('concept_tag');
+    expect(ann!.type).toBe('conceptTag');
     expect(ann!.conceptId).toBe(conceptId);
   });
 
@@ -137,9 +137,9 @@ describe('annotations DAO', () => {
     insertConcept(db, c1);
     insertConcept(db, c2);
 
-    addAnnotation(db, makeAnnotation({ type: 'concept_tag', conceptId: c1 }));
-    addAnnotation(db, makeAnnotation({ type: 'concept_tag', conceptId: c1 }));
-    addAnnotation(db, makeAnnotation({ type: 'concept_tag', conceptId: c2 }));
+    addAnnotation(db, makeAnnotation({ type: 'conceptTag', conceptId: c1 }));
+    addAnnotation(db, makeAnnotation({ type: 'conceptTag', conceptId: c1 }));
+    addAnnotation(db, makeAnnotation({ type: 'conceptTag', conceptId: c2 }));
     addAnnotation(db, makeAnnotation({ type: 'highlight' }));
 
     const byC1 = getAnnotationsByConcept(db, c1);

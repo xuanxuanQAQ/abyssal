@@ -10,6 +10,7 @@
 import React, { useState, useMemo } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { StickyNote, FileText } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { MemoStream } from './memo/MemoStream';
 import { NoteCardGrid } from './note/NoteCardGrid';
 import { NoteEditor } from './note/NoteEditor';
@@ -20,6 +21,7 @@ import { usePaperList } from '../../core/ipc/hooks/usePapers';
 import { useMemoList } from '../../core/ipc/hooks/useMemos';
 
 export function NotesView() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'memos' | 'notes'>('memos');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [filter, setFilter] = useState<MemoFilter>({});
@@ -86,10 +88,10 @@ export function NotesView() {
             borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
           }}>
             <Tabs.Trigger value="memos" style={tabTriggerStyle(activeTab === 'memos')}>
-              <StickyNote size={14} style={{ marginRight: 4 }} /> Memos
+              <StickyNote size={14} style={{ marginRight: 4 }} /> {t('notes.tabs.memos')}
             </Tabs.Trigger>
             <Tabs.Trigger value="notes" style={tabTriggerStyle(activeTab === 'notes')}>
-              <FileText size={14} style={{ marginRight: 4 }} /> Research Notes
+              <FileText size={14} style={{ marginRight: 4 }} /> {t('notes.tabs.researchNotes')}
             </Tabs.Trigger>
           </Tabs.List>
 

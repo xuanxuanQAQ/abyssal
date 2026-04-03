@@ -82,7 +82,7 @@ describe('error paths', () => {
       }).not.toThrow();
     });
 
-    it('dimension mismatch throws DimensionMismatchError', async () => {
+    it('dimension mismatch triggers automatic metadata migration', async () => {
       const { runMigrations } = await import('../../../src/core/database/migration');
 
       // 设置一个与配置不同的合法维度
@@ -92,7 +92,12 @@ describe('error paths', () => {
 
       expect(() => {
         runMigrations(db, MIGRATIONS_DIR, config, silentLogger, true);
-      }).toThrow(/dimension mismatch/i);
+      }).not.toThrow();
+
+      const row = db
+        .prepare("SELECT value FROM _meta WHERE key = 'embedding_dimension'")
+        .get() as { value: string };
+      expect(row.value).toBe(String(config.rag.embeddingDimension));
     });
   });
 

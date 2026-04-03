@@ -35,6 +35,22 @@ export interface WorkingMemoryEntry {
   tags?: string[];
 }
 
+export interface MemoryRecallOptions {
+  topK?: number;
+  type?: MemoryEntryType;
+  linkedEntity?: string;
+  linkedEntitiesAny?: string[];
+  minImportance?: number;
+  allowedTypes?: MemoryEntryType[];
+  maxAgeMs?: number;
+}
+
+export interface MemoryPromptFormatOptions {
+  allowedTypes?: MemoryEntryType[];
+  maxAgeMs?: number;
+  linkedEntitiesAny?: string[];
+}
+
 // ─── Working Memory ───
 
 export class WorkingMemory {
@@ -75,13 +91,16 @@ export class WorkingMemory {
    * Retrieve top-K entries, scored by importance with time decay.
    * Optionally filter by type or linked entity.
    */
-  recall(opts: {
-    topK?: number;
-    type?: MemoryEntryType;
-    linkedEntity?: string;
-    minImportance?: number;
-  } = {}): WorkingMemoryEntry[] {
-    const { topK = 10, type, linkedEntity, minImportance = 0 } = opts;
+  recall(opts: MemoryRecallOptions = {}): WorkingMemoryEntry[] {
+    const {
+      topK = 10,
+      type,
+      linkedEntity,
+      linkedEntitiesAny,
+      minImportance = 0,
+      allowedTypes,
+      maxAgeMs,
+    } = opts;
 
     this.applyDecay();
 
@@ -90,11 +109,23 @@ export class WorkingMemory {
     if (type) {
       filtered = filtered.filter((e) => e.type === type);
     }
+    if (allowedTypes && allowedTypes.length > 0) {
+      const allowed = new Set<MemoryEntryType>(allowedTypes);
+      filtered = filtered.filter((e) => allowed.has(e.type));
+    }
     if (linkedEntity) {
       filtered = filtered.filter((e) => e.linkedEntities.includes(linkedEntity));
     }
+    if (linkedEntitiesAny && linkedEntitiesAny.length > 0) {
+      const linkedSet = new Set(linkedEntitiesAny);
+      filtered = filtered.filter((e) => e.linkedEntities.some((id) => linkedSet.has(id)));
+    }
     if (minImportance > 0) {
       filtered = filtered.filter((e) => e.importance >= minImportance);
+    }
+    if (maxAgeMs !== undefined) {
+      const now = Date.now();
+      filtered = filtered.filter((e) => now - e.createdAt <= maxAgeMs);
     }
 
     return filtered
@@ -139,8 +170,17 @@ export class WorkingMemory {
   /**
    * Format top entries for injection into system prompt.
    */
-  formatForPrompt(topK = 8): string {
-    const top = this.recall({ topK, minImportance: WorkingMemory.MIN_IMPORTANCE });
+  formatForPrompt(
+    topK = 8,
+    opts: MemoryPromptFormatOptions = {},
+  ): string {
+    const top = this.recall({
+      topK,
+      minImportance: WorkingMemory.MIN_IMPORTANCE,
+      ...(opts.allowedTypes ? { allowedTypes: opts.allowedTypes } : {}),
+      ...(opts.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
+      ...(opts.linkedEntitiesAny ? { linkedEntitiesAny: opts.linkedEntitiesAny } : {}),
+    });
     if (top.length === 0) return '';
 
     const lines = top.map((e) => {
@@ -183,6 +223,21 @@ export class WorkingMemory {
   /** Clear all entries */
   clear(): void {
     this.entries = [];
+  }
+
+  /**
+   * Remove observation entries older than maxAgeMs.
+   * Returns the number of entries removed.
+   * Call this proactively (e.g., on each user message) to ensure stale
+   * observations never surface in prompts or affect gate decisions.
+   */
+  purgeStaleObservations(maxAgeMs: number): number {
+    const cutoff = Date.now() - maxAgeMs;
+    const before = this.entries.length;
+    this.entries = this.entries.filter(
+      (e) => e.type !== 'observation' || e.createdAt > cutoff,
+    );
+    return before - this.entries.length;
   }
 
   /** Restore entries from persistence (e.g., on startup). Applies decay to imported entries. */

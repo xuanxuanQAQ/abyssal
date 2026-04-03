@@ -659,7 +659,7 @@ describe('conceptsDao', () => {
       );
 
       expect(result.requiresRelationRecompute).toBe(false);
-      expect(result.requiresSynthesizeRefresh).toBe(false);
+      expect(result.requiresSynthesizeRefresh).toBe(true);
     });
 
     it('definition_refined breaking marks all mappings and flags recompute', () => {

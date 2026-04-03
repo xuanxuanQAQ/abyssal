@@ -10,7 +10,7 @@ import React, {
 import { PageSlot } from './PageSlot';
 import type { PageMetadataMap } from '../core/pageMetadataPreloader';
 import type { RenderWindowResult } from '../core/renderWindow';
-import type { Annotation, ContentBlockDTO } from '../../../../shared-types/models';
+import type { Annotation, ContentBlockDTO, OcrLineDTO } from '../../../../shared-types/models';
 import type { Transform6 } from '../math/coordinateTransform';
 import type { ColumnBounds } from '../selection/dragEnvelope';
 import { useCurrentPage } from '../hooks/useCurrentPage';
@@ -46,6 +46,8 @@ export interface ScrollContainerProps {
   onAnnotationClick: (id: string) => void;
   /** DLA block map: pageIndex (0-based) → blocks */
   blockMap?: Map<number, ContentBlockDTO[]>;
+  /** OCR line map: pageIndex (0-based) → OCR lines for scanned pages */
+  ocrLineMap?: Map<number, OcrLineDTO[]>;
   onBlockSelect?: (block: ContentBlockDTO) => void;
   /** Per-page DLA highlight bounds from DragEnvelope */
   dragBoundsMap?: Map<number, ColumnBounds[]>;
@@ -67,6 +69,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       onAnnotationHover,
       onAnnotationClick,
       blockMap,
+      ocrLineMap,
       onBlockSelect,
       dragBoundsMap,
     } = props;
@@ -171,6 +174,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
         const transform = getPageTransform(i);
         // DLA blocks use 0-based pageIndex
         const pageBlocks = blockMap?.get(i - 1) ?? [];
+        const pageOcrLines = ocrLineMap?.get(i - 1);
 
         slots.push(
           <PageSlot
@@ -189,6 +193,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
             onAnnotationHover={onAnnotationHover}
             onAnnotationClick={onAnnotationClick}
             blocks={pageBlocks}
+            {...(pageOcrLines ? { ocrLines: pageOcrLines } : {})}
             {...(onBlockSelect ? { onBlockSelect } : {})}
             dragBounds={dragBoundsMap?.get(i)}
           />,
@@ -209,6 +214,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       onAnnotationHover,
       onAnnotationClick,
       blockMap,
+      ocrLineMap,
       onBlockSelect,
       dragBoundsMap,
     ]);

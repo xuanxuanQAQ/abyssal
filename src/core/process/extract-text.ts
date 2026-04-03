@@ -7,7 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata } from '../types';
-import type { PageCharData, CharWithPosition } from '../dla/types';
+import type { PageCharData, CharWithPosition, OcrLine, OcrWord, PageOcrLines, NormalizedBBox } from '../dla/types';
 import { PdfCorruptedError, ProcessError, OcrFailedError } from '../types/errors';
 import { countTokens, estimateTokens } from '../infra/token-counter';
 import { deriveExtractionMethod } from './extraction-method';
@@ -61,7 +61,7 @@ function mode(arr: number[]): number {
 
 let ocrScheduler: {
   addWorker(worker: unknown): void;
-  addJob(method: string, ...args: unknown[]): Promise<{ data: { text: string; confidence: number } }>;
+  addJob(method: string, ...args: unknown[]): Promise<{ data: { text: string; confidence: number; blocks: unknown[] | null } }>;
   terminate(): Promise<void>;
 } | null = null;
 
@@ -208,6 +208,7 @@ export async function extractText(
 
   const pageTexts: string[] = [];
   const pageBoundsArea: number[] = []; // 每页面积（平方英寸）
+  const pageBoundsRaw: Array<[number, number, number, number]> = []; // 原始页面边界 [x0,y0,x1,y1]
   const scannedPageIndices: number[] = [];
   const allStyledLines: StyledLine[] = [];
   const allPageCharData: PageCharData[] = [];
@@ -228,6 +229,7 @@ export async function extractText(
         const areaPoints = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]);
         const areaSqIn = areaPoints / (72 * 72);
         pageBoundsArea.push(areaSqIn);
+        pageBoundsRaw.push(bounds);
 
         // 结构化文本提取（保留字体元数据 + 字符坐标）
         let pageText = '';
@@ -335,6 +337,7 @@ export async function extractText(
     // §1.4: OCR 降级（并发 Worker Pool）
     let ocrConfidences: number[] = [];
     const ocrAppliedPages = new Set<number>();
+    const ocrPageLinesMap = new Map<number, OcrLine[]>();
     if (ocrEnabled && scannedPageIndices.length > 0) {
       let scheduler: typeof ocrScheduler;
       try {
@@ -347,8 +350,8 @@ export async function extractText(
       if (scheduler) {
         const processOcrResult = (
           result:
-            | PromiseSettledResult<{ pageIdx: number; text: string; confidence: number }>
-            | { status: 'fulfilled'; value: { pageIdx: number; text: string; confidence: number } },
+            | PromiseSettledResult<{ pageIdx: number; text: string; confidence: number; blocks: unknown[] | null }>
+            | { status: 'fulfilled'; value: { pageIdx: number; text: string; confidence: number; blocks: unknown[] | null } },
         ) => {
           if (result.status !== 'fulfilled') {
             return;
@@ -357,11 +360,75 @@ export async function extractText(
           if (result.value.confidence >= 60) {
             pageTexts[result.value.pageIdx] = result.value.text;
             ocrAppliedPages.add(result.value.pageIdx);
+
+            // Extract line-level bbox from Tesseract blocks hierarchy
+            const pageIdx = result.value.pageIdx;
+            const blocks = result.value.blocks;
+            if (blocks && Array.isArray(blocks)) {
+              const pageArea = pageBoundsArea[pageIdx] ?? 0;
+              // Image dimensions at 300 DPI
+              const imgScale = 300 / 72;
+              const bounds = pageBoundsRaw[pageIdx];
+              const imgW = bounds ? (bounds[2] - bounds[0]) * imgScale : 1;
+              const imgH = bounds ? (bounds[3] - bounds[1]) * imgScale : 1;
+              const lines: OcrLine[] = [];
+              let lineIndex = 0;
+
+              for (const block of blocks as Array<{ paragraphs?: Array<{ lines?: Array<{ text?: string; confidence?: number; bbox?: { x0: number; y0: number; x1: number; y1: number }; words?: Array<{ text?: string; confidence?: number; bbox?: { x0: number; y0: number; x1: number; y1: number } }> }> }> }>) {
+                for (const paragraph of block.paragraphs ?? []) {
+                  for (const line of paragraph.lines ?? []) {
+                    const text = line.text?.trim();
+                    const bbox = line.bbox;
+                    if (!text || !bbox) continue;
+
+                    const normalizedBBox: NormalizedBBox = {
+                      x: bbox.x0 / imgW,
+                      y: bbox.y0 / imgH,
+                      w: (bbox.x1 - bbox.x0) / imgW,
+                      h: (bbox.y1 - bbox.y0) / imgH,
+                    };
+
+                    // Extract word-level bboxes for precise alignment
+                    const words: OcrWord[] = [];
+                    if (line.words && Array.isArray(line.words)) {
+                      for (const word of line.words) {
+                        const wText = word.text?.trim();
+                        const wBbox = word.bbox;
+                        if (!wText || !wBbox) continue;
+                        words.push({
+                          text: wText,
+                          bbox: {
+                            x: wBbox.x0 / imgW,
+                            y: wBbox.y0 / imgH,
+                            w: (wBbox.x1 - wBbox.x0) / imgW,
+                            h: (wBbox.y1 - wBbox.y0) / imgH,
+                          },
+                          confidence: word.confidence ?? 0,
+                        });
+                      }
+                    }
+
+                    lines.push({
+                      text,
+                      bbox: normalizedBBox,
+                      confidence: line.confidence ?? 0,
+                      pageIndex: pageIdx,
+                      lineIndex: lineIndex++,
+                      ...(words.length > 0 ? { words } : {}),
+                    });
+                  }
+                }
+              }
+
+              if (lines.length > 0) {
+                ocrPageLinesMap.set(pageIdx, lines);
+              }
+            }
           }
           ocrConfidences.push(result.value.confidence);
         };
 
-        const inFlight: Array<Promise<{ pageIdx: number; text: string; confidence: number }>> = [];
+        const inFlight: Array<Promise<{ pageIdx: number; text: string; confidence: number; blocks: unknown[] | null }>> = [];
 
         for (const pageIdx of scannedPageIndices) {
           const page = doc.loadPage(pageIdx) as {
@@ -386,11 +453,11 @@ export async function extractText(
           }
 
           const job = Promise.race([
-            scheduler.addJob('recognize', png),
+            scheduler.addJob('recognize', png, {}, { blocks: true }),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error(`OCR timeout for page ${pageIdx}`)), ocrJobTimeout),
             ),
-          ]).then((result) => ({ pageIdx, text: result.data.text, confidence: result.data.confidence }));
+          ]).then((result) => ({ pageIdx, text: result.data.text, confidence: result.data.confidence, blocks: result.data.blocks }));
 
           inFlight.push(job);
 
@@ -499,7 +566,14 @@ export async function extractText(
         ? ocrConfidences.reduce((a, b) => a + b, 0) / ocrConfidences.length
         : null;
 
-    return {
+    // Build ocrPageLines from collected map
+    const ocrPageLines: import('../dla/types').PageOcrLines[] = [];
+    for (const [pageIdx, lines] of ocrPageLinesMap) {
+      ocrPageLines.push({ pageIndex: pageIdx, lines });
+    }
+    ocrPageLines.sort((a, b) => a.pageIndex - b.pageIndex);
+
+    const result: TextExtractionResult = {
       fullText,
       pageCount,
       method,
@@ -513,6 +587,12 @@ export async function extractText(
       firstPage,
       pageCharData: allPageCharData,
     };
+
+    if (ocrPageLines.length > 0) {
+      result.ocrPageLines = ocrPageLines;
+    }
+
+    return result;
   } finally {
     // §1.6: 资源释放
     doc.destroy();

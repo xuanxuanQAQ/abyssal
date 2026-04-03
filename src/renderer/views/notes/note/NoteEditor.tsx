@@ -128,14 +128,14 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
       frontmatterRef.current = frontmatter;
 
       if (!body.trim()) {
-        editor.commands.setContent('<p></p>', false);
+        editor.commands.setContent('<p></p>', { emitUpdate: false });
       } else if (/<(p|h[1-6]|div|ul|ol|li|blockquote|pre)\b/i.test(body)) {
         // Legacy HTML content (from previous saves) — load as HTML
-        editor.commands.setContent(body, false);
+        editor.commands.setContent(body, { emitUpdate: false });
       } else {
         // Markdown content (from AI or new format) — parse to ProseMirror
         const doc = parseFromMarkdown(body, editor.state.schema);
-        editor.commands.setContent(doc.toJSON(), false);
+        editor.commands.setContent(doc.toJSON(), { emitUpdate: false });
       }
 
       // Focus at end after content is set

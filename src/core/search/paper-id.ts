@@ -16,7 +16,7 @@ const STOP_WORDS = new Set([
 
 // ─── 零宽字符清理 ───
 
-const ZERO_WIDTH_RE = /[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad\u2060]/g;
+const ZERO_WIDTH_RE = /[\u200b\u200c\u200e\u200f\ufeff\u00ad\u2060]|\u200d/g;
 
 /**
  * 标题归一化算法（与 PaperId 生成和去重共用）：

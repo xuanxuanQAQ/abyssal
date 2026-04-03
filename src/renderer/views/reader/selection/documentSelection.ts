@@ -243,7 +243,6 @@ export function buildTextSnapshot(
     .map(([pageNumber, pageRects]) => ({ pageNumber, rects: pageRects }));
 
   const sourcePages = segments.map((s) => s.pageNumber);
-
   return { text, sourcePages, segments };
 }
 

@@ -66,18 +66,32 @@ export function StatusBar() {
   const [dbStatus, setDbStatus] = useState<'connected' | 'degraded' | 'disconnected'>('connected');
   // 追踪用户已查看的历史条数，用于计算未读失败数
   const seenHistoryCountRef = useRef(0);
+  const llmRefreshSeqRef = useRef(0);
 
   useEffect(() => {
     const api = getAPI();
-    api.settings.getAll().then((data) => {
-      if (!data) return;
-      const provider = data.llm.defaultProvider;
-      setLlmProvider(provider);
-      // 用 testApiKey 验证 default provider 是否真正可用
-      api.settings.testApiKey(provider).then((result) => {
+    const refreshLlmIndicator = async () => {
+      const seq = ++llmRefreshSeqRef.current;
+      setLlmStatus('checking');
+      try {
+        const data = await api.settings.getAll();
+        if (!data) return;
+        const provider = data.llm.defaultProvider;
+        if (seq !== llmRefreshSeqRef.current) return;
+        setLlmProvider(provider);
+
+        // 用 testApiKey 验证 default provider 是否真正可用
+        const result = await api.settings.testApiKey(provider);
+        if (seq !== llmRefreshSeqRef.current) return;
         setLlmStatus(result.ok ? 'ok' : 'error');
-      }).catch((err) => { console.warn('[StatusBar] API key test failed:', err); setLlmStatus('error'); });
-    }).catch((err) => { console.warn('[StatusBar] Failed to load settings:', err); });
+      } catch (err) {
+        if (seq !== llmRefreshSeqRef.current) return;
+        console.warn('[StatusBar] Failed to refresh LLM indicator:', err);
+        setLlmStatus('error');
+      }
+    };
+
+    void refreshLlmIndicator();
 
     // 初始探测：尝试调用 getDbStats 确认 DB 是否可用
     api.settings.getDbStats()
@@ -88,7 +102,16 @@ export function StatusBar() {
     const unsub = api.on.dbHealth((event: { status: 'connected' | 'degraded' | 'disconnected' }) => {
       setDbStatus(event.status);
     });
-    return () => { unsub(); };
+
+    // 订阅设置变更，实时刷新右下角 LLM 显示
+    const unsubSettings = api.on.settingsChanged(() => {
+      void refreshLlmIndicator();
+    });
+
+    return () => {
+      unsub();
+      unsubSettings();
+    };
   }, []);
 
   const { hasRunning, firstRunning, runningCount } = useMemo(() => {

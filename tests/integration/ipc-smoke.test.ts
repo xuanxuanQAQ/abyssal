@@ -68,15 +68,15 @@ afterAll(() => {
 });
 
 describe('IPC smoke: BibTeX import → query pipeline', () => {
-  it('importBibtex parses entries from raw BibTeX string', () => {
-    const entries = biblioService.importBibtex(SAMPLE_BIB);
+  it('importBibtex parses entries from raw BibTeX string', async () => {
+    const entries = await biblioService.importBibtex(SAMPLE_BIB);
     expect(entries.length).toBe(2);
     expect(entries[0]!.metadata.title).toContain('Attention');
     expect(entries[1]!.metadata.title).toContain('BERT');
   });
 
-  it('addPaper writes to database', () => {
-    const entries = biblioService.importBibtex(SAMPLE_BIB);
+  it('addPaper writes to database', async () => {
+    const entries = await biblioService.importBibtex(SAMPLE_BIB);
     let imported = 0;
     for (const entry of entries) {
       try {

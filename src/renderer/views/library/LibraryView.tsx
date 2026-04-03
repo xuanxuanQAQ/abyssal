@@ -5,8 +5,8 @@
  * 视图级快捷键：Ctrl+Shift+B 折叠 Sidebar。
  */
 
-import React, { useCallback, useEffect, useMemo } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import React, { useEffect, useMemo } from 'react';
+import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
 import { LibrarySidebar } from './sidebar/LibrarySidebar';
 import { PaperTable } from './table/PaperTable';
@@ -81,43 +81,30 @@ export function LibraryView() {
     return () => window.removeEventListener('keydown', handler);
   }, [toggleLibrarySidebar]);
 
-  const handleSidebarResize = useCallback(
-    (size: number) => {
-      // PanelGroup 使用百分比，转换为像素由内部处理
-      // 这里仅用于检测折叠
-      if (size === 0 && librarySidebarOpen) {
-        toggleLibrarySidebar();
-      }
-    },
-    [librarySidebarOpen, toggleLibrarySidebar]
-  );
-
   return (
     <div className="workspace-view workspace-view--library" style={{ height: '100%', position: 'relative' }}>
       <ExternalFileDrop>
-        <PanelGroup
+        <Group
           className="workspace-panel-group"
-          direction="horizontal"
-          autoSaveId="abyssal-library"
+          orientation="horizontal"
         >
           {librarySidebarOpen && (
             <>
               <Panel
                 id="library-sidebar"
-                order={1}
-                defaultSize={20}
-                minSize={10}
-                maxSize={25}
+                defaultSize="20%"
+                minSize="10%"
+                maxSize="25%"
                 collapsible
-                onCollapse={() => {
-                  if (librarySidebarOpen) toggleLibrarySidebar();
+                onResize={(size) => {
+                  if (size.asPercentage === 0 && librarySidebarOpen) toggleLibrarySidebar();
                 }}
               >
                 <div className="workspace-side-stage library-sidebar-stage">
                   <LibrarySidebar counts={counts ?? null} />
                 </div>
               </Panel>
-              <PanelResizeHandle
+              <Separator
                 style={{
                   width: 4,
                   backgroundColor: 'transparent',
@@ -128,7 +115,7 @@ export function LibraryView() {
               />
             </>
           )}
-          <Panel id="library-table" order={2} minSize={50}>
+          <Panel id="library-table" minSize="50%">
             <div className="workspace-main-stage library-table-stage">
               <PaperTable
                 papers={papers ?? []}
@@ -137,7 +124,7 @@ export function LibraryView() {
               />
             </div>
           </Panel>
-        </PanelGroup>
+        </Group>
       </ExternalFileDrop>
     </div>
   );

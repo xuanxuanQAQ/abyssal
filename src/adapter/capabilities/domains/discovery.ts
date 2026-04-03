@@ -16,6 +16,7 @@ export function createDiscoveryCapability(): Capability {
       {
         name: 'search',
         description: 'Search academic databases (Semantic Scholar) for papers. Returns titles, authors, year, DOI, abstract.',
+        routeFamilies: ['retrieval_search', 'research_qa'],
         params: [
           { name: 'query', type: 'string', description: 'Search query', required: true },
           { name: 'limit', type: 'number', description: 'Max results (default 10, max 20)' },
@@ -51,6 +52,7 @@ export function createDiscoveryCapability(): Capability {
       {
         name: 'search_knowledge',
         description: 'Semantic vector search across all indexed content (papers, notes, memos).',
+        routeFamilies: ['retrieval_search', 'research_qa'],
         params: [
           { name: 'query', type: 'string', description: 'Search query', required: true },
           { name: 'topK', type: 'number', description: 'Max results (default 10)' },
@@ -74,6 +76,7 @@ export function createDiscoveryCapability(): Capability {
       {
         name: 'retrieve',
         description: 'Full three-phase RAG pipeline: vector recall → rerank → assembly. Best for detailed, evidence-backed answers.',
+        routeFamilies: ['retrieval_search', 'research_qa'],
         params: [
           { name: 'query', type: 'string', description: 'Search query', required: true },
           { name: 'conceptIds', type: 'array', description: 'Focus on specific concepts', itemType: 'string' },
@@ -89,6 +92,14 @@ export function createDiscoveryCapability(): Capability {
             conceptIds: params['conceptIds'] ?? [],
             topK: Math.min((params['topK'] as number) ?? 10, 20),
             taskType: 'ad_hoc',
+            paperIds: [],
+            sectionTypeFilter: null,
+            sourceFilter: null,
+            budgetMode: 'broad',
+            maxTokens: 50_000,
+            modelContextWindow: 200_000,
+            enableCorrectiveRag: false,
+            relatedMemoIds: [],
           });
           const chunks = (result as Record<string, unknown>)['chunks'];
           return {
@@ -101,6 +112,7 @@ export function createDiscoveryCapability(): Capability {
       {
         name: 'import_paper',
         description: 'Import a paper into the library from search results. Optionally triggers fulltext acquisition.',
+        routeFamilies: ['workspace_control'],
         params: [
           { name: 'title', type: 'string', description: 'Paper title', required: true },
           { name: 'authors', type: 'array', description: 'Author names', itemType: 'string' },
@@ -165,6 +177,7 @@ export function createDiscoveryCapability(): Capability {
       {
         name: 'acquire_fulltext',
         description: 'Trigger fulltext acquisition (PDF download + text extraction + indexing) for a paper in the library.',
+        routeFamilies: ['workspace_control'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID', required: true },
         ],

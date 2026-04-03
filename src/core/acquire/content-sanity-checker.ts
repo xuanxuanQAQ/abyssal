@@ -60,8 +60,8 @@ function heuristicCheck(text: string): SanityCheckResult | null {
   }
 
   // 高比例乱码字符 → corrupted
-  // 包含: ASCII可打印, Latin扩展, CJK, 日文假名, 韩文, 阿拉伯, 泰文, 天城文, 常用标点
-  const printableRatio = text.replace(/[^\x20-\x7E\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u0600-\u06ff\u0900-\u097f\u0e00-\u0e7f\u1100-\u11ff\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\uac00-\ud7af\uff00-\uffef]/g, '').length / text.length;
+  // 匹配所有可辨识的 Unicode 字符（字母/数字/标点/符号/空白/组合标记）及 ASCII 可打印区间
+  const printableRatio = text.replace(/[^\x20-\x7E\p{L}\p{M}\p{N}\p{P}\p{S}\p{Z}]/gu, '').length / text.length;
   if (printableRatio < 0.5) {
     return { verdict: 'corrupted', confidence: 0.9, explanation: `Low printable char ratio: ${(printableRatio * 100).toFixed(0)}%` };
   }

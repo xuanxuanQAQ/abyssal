@@ -12,10 +12,12 @@ export function createWritingCapability(): Capability {
     name: 'writing',
     domain: 'writing',
     description: 'Academic writing — trigger synthesis, manage articles, generate drafts',
+    routeFamilies: ['writing_edit', 'workspace_control', 'ui_navigation'],
     operations: [
       {
         name: 'run_synthesis',
         description: 'Trigger the synthesis pipeline to generate concept summaries across analyzed papers.',
+        routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
           { name: 'conceptIds', type: 'array', description: 'Concept IDs to synthesize (empty = all)', itemType: 'string' },
           { name: 'concurrency', type: 'number', description: 'Parallel threads (default 2)' },
@@ -48,6 +50,7 @@ export function createWritingCapability(): Capability {
       {
         name: 'run_article',
         description: 'Trigger the article generation pipeline to draft sections based on synthesis results.',
+        routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
           { name: 'articleId', type: 'string', description: 'Article ID to generate for' },
         ],
@@ -77,6 +80,7 @@ export function createWritingCapability(): Capability {
       {
         name: 'open_article',
         description: 'Navigate to the writing view and open a specific article.',
+        routeFamilies: ['writing_edit', 'ui_navigation'],
         params: [
           { name: 'articleId', type: 'string', description: 'Article ID to open', required: true },
         ],

@@ -165,6 +165,40 @@ export interface PageCharData {
   pageHeight: number;
 }
 
+// ─── OCR Line Types (for OCR text alignment in reader) ───
+
+/** A single OCR-recognized word with normalized bounding box */
+export interface OcrWord {
+  /** Word text content */
+  text: string;
+  /** Normalized bounding box [0,1] relative to page dimensions */
+  bbox: NormalizedBBox;
+  /** Tesseract OCR confidence for this word (0-100) */
+  confidence: number;
+}
+
+/** A single OCR-recognized text line with normalized bounding box */
+export interface OcrLine {
+  /** Line text content */
+  text: string;
+  /** Normalized bounding box [0,1] relative to page dimensions */
+  bbox: NormalizedBBox;
+  /** Tesseract OCR confidence for this line (0-100) */
+  confidence: number;
+  /** 0-based page index */
+  pageIndex: number;
+  /** 0-based line index within the page (reading order) */
+  lineIndex: number;
+  /** Word-level bboxes for precise text alignment */
+  words?: OcrWord[];
+}
+
+/** Per-page OCR line data */
+export interface PageOcrLines {
+  pageIndex: number;
+  lines: OcrLine[];
+}
+
 export type DlaProcessMessage = DlaDetectRequest | DlaLifecycleMessage;
 export type DlaProcessResponse = DlaDetectResult | DlaDetectProgress | DlaDetectError | DlaLifecycleResponse;
 

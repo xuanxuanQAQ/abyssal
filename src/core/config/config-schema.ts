@@ -35,21 +35,33 @@ export interface EmbeddingModelDef {
   dimension: number;
   maxTokens: number;
   label: string;
+  /** If true, include `dimensions` in the API request (variable-dimension models like Qwen3). */
+  requestDimensions?: boolean;
 }
 
-export type EmbeddingProvider = 'openai' | 'siliconflow';
+export type EmbeddingProvider = 'siliconflow' | 'jina' | 'openai';
 
 export const EMBEDDING_MODEL_REGISTRY: Record<EmbeddingProvider, EmbeddingModelDef[]> = {
-  openai: [
-    { model: 'text-embedding-3-small', dimension: 1536, maxTokens: 8191, label: 'text-embedding-3-small (1536d)' },
-    { model: 'text-embedding-3-large', dimension: 3072, maxTokens: 8191, label: 'text-embedding-3-large (3072d)' },
-    { model: 'text-embedding-ada-002', dimension: 1536, maxTokens: 8191, label: 'text-embedding-ada-002 (1536d)' },
-  ],
   siliconflow: [
     { model: 'BAAI/bge-m3', dimension: 1024, maxTokens: 8192, label: 'BAAI/bge-m3 (1024d)' },
     { model: 'BAAI/bge-large-zh-v1.5', dimension: 1024, maxTokens: 512, label: 'BAAI/bge-large-zh-v1.5 (1024d)' },
     { model: 'BAAI/bge-large-en-v1.5', dimension: 1024, maxTokens: 512, label: 'BAAI/bge-large-en-v1.5 (1024d)' },
     { model: 'Pro/BAAI/bge-m3', dimension: 1024, maxTokens: 8192, label: 'Pro/BAAI/bge-m3 (1024d)' },
+    { model: 'netease-youdao/bce-embedding-base_v1', dimension: 768, maxTokens: 512, label: 'netease-youdao/bce-embedding-base_v1 (768d)' },
+    { model: 'Qwen/Qwen3-Embedding-8B', dimension: 1024, maxTokens: 32768, label: 'Qwen/Qwen3-Embedding-8B (1024d)', requestDimensions: true },
+    { model: 'Qwen/Qwen3-Embedding-4B', dimension: 1024, maxTokens: 32768, label: 'Qwen/Qwen3-Embedding-4B (1024d)', requestDimensions: true },
+    { model: 'Qwen/Qwen3-Embedding-0.6B', dimension: 1024, maxTokens: 32768, label: 'Qwen/Qwen3-Embedding-0.6B (1024d)', requestDimensions: true },
+  ],
+  jina: [
+    { model: 'jina-embeddings-v3', dimension: 1024, maxTokens: 8192, label: 'jina-embeddings-v3 (1024d)' },
+    { model: 'jina-embeddings-v5-text-small', dimension: 1024, maxTokens: 32768, label: 'jina-embeddings-v5-text-small (1024d)' },
+    { model: 'jina-embeddings-v5-text-nano', dimension: 768, maxTokens: 8192, label: 'jina-embeddings-v5-text-nano (768d)' },
+    { model: 'jina-clip-v2', dimension: 768, maxTokens: 8192, label: 'jina-clip-v2 (768d)' },
+  ],
+  openai: [
+    { model: 'text-embedding-3-small', dimension: 1536, maxTokens: 8191, label: 'text-embedding-3-small (1536d)' },
+    { model: 'text-embedding-3-large', dimension: 3072, maxTokens: 8191, label: 'text-embedding-3-large (3072d)' },
+    { model: 'text-embedding-ada-002', dimension: 1536, maxTokens: 8191, label: 'text-embedding-ada-002 (1536d)' },
   ],
 };
 
@@ -343,7 +355,7 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     type: 'enum',
     default: 'openai',
     required: false,
-    constraints: { enum: ['openai', 'siliconflow'] },
+    constraints: { enum: ['siliconflow', 'jina', 'openai'] },
   },
   'rag.correctiveRagEnabled': {
     type: 'boolean',
@@ -576,7 +588,9 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     required: false,
     sensitive: true,
     envVar: 'ABYSSAL_JINA_API_KEY',
-    requiredWhen: (c) => getNestedValue(c, 'rag.rerankerBackend') === 'jina',
+    requiredWhen: (c) =>
+      getNestedValue(c, 'rag.rerankerBackend') === 'jina' ||
+      getNestedValue(c, 'rag.embeddingProvider') === 'jina',
   },
   'apiKeys.siliconflowApiKey': {
     type: 'string',

@@ -35,14 +35,14 @@ describe('database schema', () => {
     expect(tables).toContain('chunks');
     expect(tables).toContain('articles');
     expect(tables).toContain('outlines');
-    expect(tables).toContain('sections');
+    expect(tables).toContain('section_drafts');
     expect(tables).toContain('paper_relations');
   });
 
   it('should insert and query a paper', () => {
     db.prepare(`
-      INSERT INTO papers (id, title, authors, year, paper_type, source)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO papers (id, title, authors, year, paper_type, source, discovered_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `).run('p1', 'Test Paper', JSON.stringify(['Alice']), 2024, 'journal', 'manual');
 
     const row: any = db.prepare('SELECT * FROM papers WHERE id = ?').get('p1');
@@ -51,7 +51,7 @@ describe('database schema', () => {
   });
 
   it('should enforce foreign key on citations', () => {
-    db.prepare("INSERT INTO papers (id, title) VALUES ('p1', 'Paper 1')").run();
+    db.prepare("INSERT INTO papers (id, title, authors, year, paper_type, source, discovered_at, updated_at) VALUES ('p1', 'Paper 1', '[]', 2024, 'journal', 'manual', datetime('now'), datetime('now'))").run();
 
     expect(() => {
       db.prepare("INSERT INTO citations (citing_id, cited_id) VALUES ('p1', 'nonexistent')").run();
@@ -59,16 +59,16 @@ describe('database schema', () => {
   });
 
   it('should cascade annotation → concept link', () => {
-    db.prepare("INSERT INTO papers (id, title) VALUES ('p1', 'Paper')").run();
-    db.prepare("INSERT INTO concepts (id, name_en) VALUES ('c1', 'Concept')").run();
+    db.prepare("INSERT INTO papers (id, title, authors, year, paper_type, source, discovered_at, updated_at) VALUES ('p1', 'Paper', '[]', 2024, 'journal', 'manual', datetime('now'), datetime('now'))").run();
+    db.prepare("INSERT INTO concepts (id, name_zh, name_en, layer, definition, search_keywords, maturity, history, created_at, updated_at) VALUES ('c1', '概念', 'Concept', 'core', 'def', '[]', 'tentative', '[]', datetime('now'), datetime('now'))").run();
 
     db.prepare(`
-      INSERT INTO annotations (paper_id, page, text, type, concept_id)
-      VALUES ('p1', 1, 'some text', 'concept_tag', 'c1')
+      INSERT INTO annotations (paper_id, page, rect_x0, rect_y0, rect_x1, rect_y1, selected_text, type, concept_id, created_at)
+      VALUES ('p1', 1, 0, 0, 10, 10, 'some text', 'conceptTag', 'c1', datetime('now'))
     `).run();
 
     const ann: any = db.prepare("SELECT * FROM annotations WHERE paper_id = 'p1'").get();
     expect(ann.concept_id).toBe('c1');
-    expect(ann.type).toBe('concept_tag');
+    expect(ann.type).toBe('conceptTag');
   });
 });

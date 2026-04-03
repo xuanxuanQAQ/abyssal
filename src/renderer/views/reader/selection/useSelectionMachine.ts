@@ -55,6 +55,11 @@ export interface SelectionMachineState {
   dragBoundsMap: Map<number, ColumnBounds[]>;
 }
 
+interface SelectionMachineOptions {
+  getPage?: (pageNumber: number) => Promise<any>;
+  scale?: number;
+}
+
 const IDLE_STATE: SelectionMachineState = {
   phase: 'IDLE',
   selectedText: null,
@@ -96,42 +101,163 @@ function findPageContainer(pageNumber: number): HTMLElement | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Selection highlight overlay (persistent after browser Selection collapses)
-// ---------------------------------------------------------------------------
+function boundsFromSelectionRects(
+  rects: DOMRect[],
+  pageContainer: HTMLElement,
+): ColumnBounds[] {
+  const pageRect = pageContainer.getBoundingClientRect();
+  if (pageRect.width <= 0 || pageRect.height <= 0 || rects.length === 0) {
+    return [];
+  }
 
-const OVERLAY_ATTR = 'data-selection-overlay';
+  let lTop = 1;
+  let lBottom = 0;
+  let rTop = 1;
+  let rBottom = 0;
+  let hasL = false;
+  let hasR = false;
 
-function renderSelectionOverlay(snapshot: TextSnapshot): void {
-  clearSelectionOverlay();
-  for (const segment of snapshot.segments) {
-    const pageEl = findPageContainer(segment.pageNumber);
-    if (!pageEl) continue;
-    const textLayerEl = pageEl.querySelector('.textLayer');
-    if (!textLayerEl) continue;
-    const containerRect = pageEl.getBoundingClientRect();
-    if (containerRect.width === 0 || containerRect.height === 0) continue;
+  for (const rect of rects) {
+    const top = Math.max(0, Math.min(1, (rect.top - pageRect.top) / pageRect.height));
+    const bottom = Math.max(0, Math.min(1, (rect.bottom - pageRect.top) / pageRect.height));
+    const centerX = (rect.left + rect.right) * 0.5;
+    const nx = (centerX - pageRect.left) / pageRect.width;
 
-    for (const rect of segment.rects) {
-      if (rect.width <= 0 || rect.height <= 0) continue;
-      const div = document.createElement('div');
-      div.setAttribute(OVERLAY_ATTR, '1');
-      div.style.position = 'absolute';
-      div.style.left = `${((rect.left - containerRect.left) / containerRect.width) * 100}%`;
-      div.style.top = `${((rect.top - containerRect.top) / containerRect.height) * 100}%`;
-      div.style.width = `${(rect.width / containerRect.width) * 100}%`;
-      div.style.height = `${(rect.height / containerRect.height) * 100}%`;
-      div.style.backgroundColor = 'rgba(59, 130, 246, 0.25)';
-      div.style.borderRadius = '1px';
-      div.style.pointerEvents = 'none';
-      div.style.zIndex = '5';
-      textLayerEl.appendChild(div);
+    if (nx < 0.5) {
+      hasL = true;
+      lTop = Math.min(lTop, top);
+      lBottom = Math.max(lBottom, bottom);
+    } else {
+      hasR = true;
+      rTop = Math.min(rTop, top);
+      rBottom = Math.max(rBottom, bottom);
     }
+  }
+
+  const bounds: ColumnBounds[] = [];
+  if (hasL && lBottom > lTop) bounds.push({ col: 'L', top: lTop, bottom: lBottom });
+  if (hasR && rBottom > rTop) bounds.push({ col: 'R', top: rTop, bottom: rBottom });
+  return bounds;
+}
+
+function expandDegenerateBound(
+  original: ColumnBounds,
+  fromRects: ColumnBounds[] | null,
+): ColumnBounds {
+  const match = fromRects?.find((b) => b.col === original.col);
+  const edgeBand = 0.28;
+
+  // Degenerated near bottom edge
+  if (original.top >= 0.99 && original.bottom >= 0.99) {
+    const rectTop = match?.top ?? 1;
+    return {
+      col: original.col,
+      top: Math.max(1 - edgeBand, rectTop),
+      bottom: 1,
+    };
+  }
+
+  // Degenerated near top edge
+  if (original.top <= 0.01 && original.bottom <= 0.01) {
+    const rectBottom = match?.bottom ?? 0;
+    return {
+      col: original.col,
+      top: 0,
+      bottom: Math.min(edgeBand, rectBottom > 0 ? rectBottom : edgeBand),
+    };
+  }
+
+  // Generic degenerated case: create a narrow local band around center.
+  const center = (original.top + original.bottom) * 0.5;
+  return {
+    col: original.col,
+    top: Math.max(0, center - edgeBand / 2),
+    bottom: Math.min(1, center + edgeBand / 2),
+  };
+}
+
+function mergeBoundsByColumn(bounds: ColumnBounds[]): ColumnBounds[] {
+  const merged = new Map<ColumnBounds['col'], ColumnBounds>();
+  for (const b of bounds) {
+    if (b.bottom <= b.top) continue;
+    const existing = merged.get(b.col);
+    if (!existing) {
+      merged.set(b.col, { ...b });
+      continue;
+    }
+    merged.set(b.col, {
+      col: b.col,
+      top: Math.min(existing.top, b.top),
+      bottom: Math.max(existing.bottom, b.bottom),
+    });
+  }
+
+  const ordered: ColumnBounds[] = [];
+  const full = merged.get('full');
+  if (full) ordered.push(full);
+  const left = merged.get('L');
+  if (left) ordered.push(left);
+  const right = merged.get('R');
+  if (right) ordered.push(right);
+  return ordered;
+}
+
+function reconcileBoundsWithSelectionRects(
+  computed: ColumnBounds[],
+  fromRects: ColumnBounds[],
+): ColumnBounds[] {
+  if (fromRects.length === 0) return computed;
+
+  const reconciled: ColumnBounds[] = [];
+  for (const b of computed) {
+    if (b.col === 'full') {
+      reconciled.push(...fromRects);
+      continue;
+    }
+
+    const m = fromRects.find((r) => r.col === b.col);
+    if (!m) {
+      reconciled.push(b);
+      continue;
+    }
+
+    const top = Math.max(b.top, m.top);
+    const bottom = Math.min(b.bottom, m.bottom);
+    if (bottom - top > 0.01) {
+      reconciled.push({ col: b.col, top, bottom });
+    } else {
+      reconciled.push(b);
+    }
+  }
+
+  const merged = mergeBoundsByColumn(reconciled);
+  return merged.length > 0 ? merged : computed;
+}
+
+function createImageClipKey(clip: ImageClip): string {
+  return [
+    clip.pageNumber,
+    clip.type,
+    clip.bbox.x.toFixed(3),
+    clip.bbox.y.toFixed(3),
+    clip.bbox.w.toFixed(3),
+    clip.bbox.h.toFixed(3),
+  ].join('|');
+}
+
+function selectionDebugLog(message: string): void {
+  if (typeof window !== 'undefined' && (window as any).__SELECTION_DEBUG__ === true) {
+    // eslint-disable-next-line no-console
+    console.log(message);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Selection highlight behavior
+// ---------------------------------------------------------------------------
+
 function clearSelectionOverlay(): void {
-  document.querySelectorAll(`[${OVERLAY_ATTR}]`).forEach((el) => el.remove());
+  // No-op: custom persistent overlay removed.
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +266,9 @@ function clearSelectionOverlay(): void {
 
 export function useSelectionMachine(
   blockMap: Map<number, ContentBlockDTO[]>,
+  options: SelectionMachineOptions = {},
 ): SelectionMachineState & { clearSelection: () => void } {
+  const { getPage, scale = 1 } = options;
   const [state, setState] = useState<SelectionMachineState>(IDLE_STATE);
   const blockMapRef = useRef(blockMap);
   blockMapRef.current = blockMap;
@@ -293,7 +421,7 @@ export function useSelectionMachine(
 
   // ---- Capture phase: read Selection API + capture DLA images ----
   const completeCapturePhase = useCallback(
-    (envelope: DragEnvelope & { end: DragPoint }) => {
+    async (envelope: DragEnvelope & { end: DragPoint }) => {
       const sel = window.getSelection();
       const snapshot = buildTextSnapshot(sel);
 
@@ -311,46 +439,219 @@ export function useSelectionMachine(
       const maxP = Math.max(envelope.start.page, envelope.end.page);
 
       const capturedImages: ImageClip[] = [];
+      const capturedImageKeys = new Set<string>();
       const finalBoundsMap = new Map<number, ColumnBounds[]>();
+      const offscreenPageCanvasCache = new Map<number, HTMLCanvasElement>();
 
-      for (let p = minP; p <= maxP; p++) {
-        const bounds = computePageBounds(envelope, p);
+      selectionDebugLog(
+        `[SelectionCapture] START pages=${minP}-${maxP} sourcePages=[${snapshot.sourcePages.join(',')}] textLen=${snapshot.text.length}`,
+      );
+
+      const pagesToProcess = new Set<number>();
+      for (let p = minP; p <= maxP; p++) pagesToProcess.add(p);
+      for (const p of snapshot.sourcePages) pagesToProcess.add(p);
+      const sortedPages = Array.from(pagesToProcess).sort((a, b) => a - b);
+
+      const captureBlockRegionOffscreen = async (
+        pageNumber: number,
+        bbox: { x: number; y: number; w: number; h: number },
+        blockType: string,
+      ): Promise<ImageClip | null> => {
+        if (!getPage) {
+          selectionDebugLog(
+            `[SelectionCapture] OFFSCREEN_SKIP page=${pageNumber} type=${blockType} reason=no_getPage`,
+          );
+          return null;
+        }
+
+        try {
+          let canvas = offscreenPageCanvasCache.get(pageNumber);
+          if (!canvas) {
+            const page = await getPage(pageNumber);
+            const viewport = page.getViewport({ scale });
+            const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+            canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+            canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            ctx.scale(dpr, dpr);
+
+            const renderTask = page.render({
+              canvas,
+              canvasContext: ctx,
+              viewport,
+            });
+            await renderTask.promise;
+            offscreenPageCanvasCache.set(pageNumber, canvas);
+          }
+
+          const sw = canvas.width;
+          const sh = canvas.height;
+          const sx = Math.round(bbox.x * sw);
+          const sy = Math.round(bbox.y * sh);
+          const sWidth = Math.round(bbox.w * sw);
+          const sHeight = Math.round(bbox.h * sh);
+          if (sWidth < 2 || sHeight < 2) {
+            selectionDebugLog(
+              `[SelectionCapture] OFFSCREEN_FAIL page=${pageNumber} type=${blockType} reason=small_crop size=${sWidth}x${sHeight}`,
+            );
+            return null;
+          }
+
+          const offscreen = document.createElement('canvas');
+          offscreen.width = sWidth;
+          offscreen.height = sHeight;
+          const offCtx = offscreen.getContext('2d');
+          if (!offCtx) return null;
+          offCtx.drawImage(canvas, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+
+          const clip = {
+            type: blockType,
+            dataUrl: offscreen.toDataURL('image/jpeg', 0.85),
+            pageNumber,
+            bbox,
+          };
+          selectionDebugLog(
+            `[SelectionCapture] OFFSCREEN_OK page=${pageNumber} type=${blockType} size=${sWidth}x${sHeight}`,
+          );
+          return clip;
+        } catch {
+          selectionDebugLog(
+            `[SelectionCapture] OFFSCREEN_FAIL page=${pageNumber} type=${blockType} reason=render_exception`,
+          );
+          return null;
+        }
+      };
+
+      for (const p of sortedPages) {
+        const inEnvelope = p >= minP && p <= maxP;
+        let bounds = inEnvelope ? computePageBounds(envelope, p) : [];
+        const snapshotSegment = snapshot.segments.find((s) => s.pageNumber === p);
+        const pageContainer = findPageContainer(p);
+
+        if (snapshotSegment && pageContainer) {
+          const fromRects = boundsFromSelectionRects(snapshotSegment.rects, pageContainer);
+          if (bounds.length === 0 && fromRects.length > 0) {
+            bounds = fromRects;
+            selectionDebugLog(
+              `[SelectionCapture] BOUNDS_FROM_RECTS page=${p} bounds=${fromRects.map((b) => `${b.col}:${b.top.toFixed(3)}-${b.bottom.toFixed(3)}`).join('|')}`,
+            );
+          } else if (bounds.length > 0 && fromRects.length > 0) {
+            const oldSummary = bounds
+              .map((b) => `${b.col}:${b.top.toFixed(3)}-${b.bottom.toFixed(3)}`)
+              .join('|');
+            bounds = reconcileBoundsWithSelectionRects(bounds, fromRects);
+            const reconciledSummary = bounds
+              .map((b) => `${b.col}:${b.top.toFixed(3)}-${b.bottom.toFixed(3)}`)
+              .join('|');
+            if (oldSummary !== reconciledSummary) {
+              selectionDebugLog(
+                `[SelectionCapture] BOUNDS_RECONCILED page=${p} old=${oldSummary} new=${reconciledSummary}`,
+              );
+            }
+          }
+
+          const hasDegenerateBounds = bounds.some((b) => b.bottom - b.top < 0.01);
+          if (hasDegenerateBounds) {
+            const oldSummary = bounds
+              .map((b) => `${b.col}:${b.top.toFixed(3)}-${b.bottom.toFixed(3)}`)
+              .join('|');
+            bounds = bounds.map((b) =>
+              b.bottom - b.top < 0.01
+                ? expandDegenerateBound(b, fromRects.length > 0 ? fromRects : null)
+                : b,
+            );
+            const newSummary = bounds
+              .map((b) => `${b.col}:${b.top.toFixed(3)}-${b.bottom.toFixed(3)}`)
+              .join('|');
+            selectionDebugLog(
+              `[SelectionCapture] BOUNDS_EXPANDED page=${p} old=${oldSummary} new=${newSummary}`,
+            );
+          }
+        }
+
         if (bounds.length === 0) continue;
+
         finalBoundsMap.set(p, bounds);
 
-        const pageContainer = findPageContainer(p);
         // blockMap is 0-based pageIndex
         const pageBlocks = blockMapRef.current.get(p - 1) ?? [];
         const capturableBlocks = pageBlocks.filter((b) =>
           CAPTURABLE_TYPES.has(b.type),
         );
+        const boundsSummary = bounds
+          .map((b) => `${b.col}:${b.top.toFixed(3)}-${b.bottom.toFixed(3)}`)
+          .join('|');
 
-        if (!pageContainer || capturableBlocks.length === 0) continue;
+        selectionDebugLog(
+          `[SelectionCapture] PAGE page=${p} hasContainer=${Boolean(pageContainer)} blocks=${pageBlocks.length} capturable=${capturableBlocks.length} bounds=${boundsSummary}`,
+        );
 
+        if (capturableBlocks.length === 0) continue;
+
+        let pageCaptured = 0;
         for (const block of capturableBlocks) {
           if (blockOverlaps(block.bbox, bounds)) {
-            const clip = captureBlockRegion(
-              pageContainer,
-              block.bbox,
-              p,
-              block.type,
+            let clip = pageContainer
+              ? captureBlockRegion(
+                  pageContainer,
+                  block.bbox,
+                  p,
+                  block.type,
+                )
+              : null;
+
+            if (clip) {
+              selectionDebugLog(
+                `[SelectionCapture] CANVAS_OK page=${p} type=${block.type} bbox=${block.bbox.x.toFixed(3)},${block.bbox.y.toFixed(3)},${block.bbox.w.toFixed(3)},${block.bbox.h.toFixed(3)}`,
+              );
+            }
+
+            if (!clip) {
+              selectionDebugLog(
+                `[SelectionCapture] CANVAS_MISS page=${p} type=${block.type} hasContainer=${Boolean(pageContainer)} -> try_offscreen`,
+              );
+              clip = await captureBlockRegionOffscreen(p, block.bbox, block.type);
+            }
+
+            if (clip) {
+              const key = createImageClipKey(clip);
+              if (!capturedImageKeys.has(key)) {
+                capturedImageKeys.add(key);
+                capturedImages.push(clip);
+                pageCaptured += 1;
+              } else {
+                selectionDebugLog(
+                  `[SelectionCapture] DUPLICATE_SKIP page=${p} type=${block.type}`,
+                );
+              }
+            }
+          } else {
+            selectionDebugLog(
+              `[SelectionCapture] BLOCK_SKIP page=${p} type=${block.type} reason=no_overlap`,
             );
-            if (clip) capturedImages.push(clip);
           }
         }
+
+        selectionDebugLog(
+          `[SelectionCapture] PAGE_DONE page=${p} captured=${pageCaptured}`,
+        );
       }
+
+      selectionDebugLog(
+        `[SelectionCapture] DONE capturedImages=${capturedImages.length}`,
+      );
 
       const payload: SelectionPayload = {
         sourcePages: snapshot.sourcePages,
         ...(snapshot.text ? { text: snapshot.text } : {}),
         ...(capturedImages.length > 0 ? { images: capturedImages } : {}),
       };
-
       phaseRef.current = 'CAPTURED';
 
-      // Render persistent highlight overlay so the selection stays visible
-      // even after the browser Selection collapses (e.g. user clicks chat).
-      renderSelectionOverlay(snapshot);
+      // Keep only native browser selection highlight.
 
       setState({
         phase: 'CAPTURED',
@@ -364,7 +665,7 @@ export function useSelectionMachine(
         dragBoundsMap: finalBoundsMap,
       });
     },
-    [],
+    [getPage, scale],
   );
 
   // ---- mousedown in textLayer while CAPTURED → reset to new drag ----

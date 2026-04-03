@@ -4,7 +4,7 @@
 
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
-import type { ContentBlockDTO } from '../../shared-types/models';
+import type { ContentBlockDTO, OcrLineDTO } from '../../shared-types/models';
 
 function mapRowToContentBlock(row: Record<string, unknown>): ContentBlockDTO {
   const bbox = row['bbox'] as { x: number; y: number; w: number; h: number } | undefined;
@@ -118,4 +118,67 @@ export function registerDlaHandlers(ctx: AppContext): void {
     logger.info(`[DLA-IPC] dla:analyzeDocument paper=${paperId.slice(0, 8)} totalPages=${totalPages}`);
     ctx.dlaScheduler.requestFullDocument(paperId, pdfPath, totalPages);
   });
+
+  // ── OCR Lines (text layer alignment for scanned pages) ──
+
+  typedHandler('dla:getOcrLines', logger, async (_e, paperId, pageIndex): Promise<OcrLineDTO[] | null> => {
+    try {
+      const proxy = ctx.dbProxy as Record<string, (...args: unknown[]) => Promise<unknown>>;
+      if (typeof proxy['getOcrLinesByPage'] === 'function') {
+        const rows = await proxy['getOcrLinesByPage'](paperId, pageIndex) as Array<Record<string, unknown>> | null;
+        if (rows && rows.length > 0) {
+          logger.debug?.(`[DLA-IPC] dla:getOcrLines DB hit paper=${paperId.slice(0, 8)} page=${pageIndex} (${rows.length} lines)`);
+          return rows.map(mapRowToOcrLine);
+        }
+      }
+    } catch {
+      // DB query failed (migration not yet applied)
+    }
+    return null;
+  });
+
+  typedHandler('dla:getDocumentOcrLines', logger, async (_e, paperId): Promise<Array<{ pageIndex: number; lines: OcrLineDTO[] }>> => {
+    try {
+      const proxy = ctx.dbProxy as Record<string, (...args: unknown[]) => Promise<unknown>>;
+      if (typeof proxy['getOcrLines'] === 'function') {
+        const rows = await proxy['getOcrLines'](paperId) as Array<Record<string, unknown>> | null;
+        if (rows && rows.length > 0) {
+          const grouped = new Map<number, OcrLineDTO[]>();
+          for (const row of rows) {
+            const line = mapRowToOcrLine(row);
+            const pageLines = grouped.get(line.pageIndex) ?? [];
+            pageLines.push(line);
+            grouped.set(line.pageIndex, pageLines);
+          }
+          logger.debug?.(`[DLA-IPC] dla:getDocumentOcrLines DB hit paper=${paperId.slice(0, 8)} pages=${grouped.size}`);
+          return Array.from(grouped.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map(([pageIndex, lines]) => ({ pageIndex, lines }));
+        }
+      }
+    } catch {
+      // DB query failed (migration not yet applied)
+    }
+    return [];
+  });
+}
+
+function mapRowToOcrLine(row: Record<string, unknown>): OcrLineDTO {
+  const bbox = row['bbox'] as { x: number; y: number; w: number; h: number } | undefined;
+  const words = row['words'] as Array<{ text: string; bbox: { x: number; y: number; w: number; h: number }; confidence: number }> | undefined;
+  return {
+    text: (row['text'] as string) ?? '',
+    bbox: bbox
+      ? { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h }
+      : {
+          x: row['bbox_x'] as number,
+          y: row['bbox_y'] as number,
+          w: row['bbox_w'] as number,
+          h: row['bbox_h'] as number,
+        },
+    confidence: (row['confidence'] as number) ?? 0,
+    pageIndex: (row['pageIndex'] as number) ?? (row['page_index'] as number) ?? 0,
+    lineIndex: (row['lineIndex'] as number) ?? (row['line_index'] as number) ?? 0,
+    ...(words ? { words } : {}),
+  };
 }

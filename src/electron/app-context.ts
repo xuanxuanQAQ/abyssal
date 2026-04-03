@@ -105,6 +105,9 @@ export interface AppContext {
   /** CookieJar for institutional access (china-institutional source) */
   cookieJar: CookieJar | null;
 
+  /** Read-only direct DB connection for RagService (sync access). Closed on shutdown. */
+  ragDbService: import('../core/database').DatabaseService | null;
+
   /** DLA (Document Layout Analysis) subsystem */
   dlaProxy: DlaProxy | null;
   dlaScheduler: DlaScheduler | null;
@@ -157,6 +160,7 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
 
     // Core modules
     dbProxy: opts.dbProxy,
+    ragDbService: null,
     searchModule: opts.searchModule ?? null,
     acquireModule: opts.acquireModule ?? null,
     processModule: opts.processModule ?? null,

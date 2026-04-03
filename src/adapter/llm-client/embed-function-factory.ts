@@ -34,6 +34,8 @@ function createApiEmbedClient(
 export class ReactiveEmbedFunction implements EmbedFunction {
   private inner: { client: OpenAI; model: string } | null = null;
   private maxTokensPerText: number = 8000;
+  /** Non-null when the model supports variable dimensions and needs an explicit `dimensions` param. */
+  private requestDimension: number | null = null;
   private readonly logger: Logger;
   private readonly unsubscribe: () => void;
 
@@ -56,6 +58,7 @@ export class ReactiveEmbedFunction implements EmbedFunction {
     // Derive token limit from registry; fall back to conservative default
     const modelDef = findEmbeddingModelDef(embeddingModel);
     this.maxTokensPerText = modelDef?.maxTokens ?? 512;
+    this.requestDimension = modelDef?.requestDimensions ? modelDef.dimension : null;
 
     if (embeddingProvider === 'siliconflow') {
       const apiKey = config.apiKeys.siliconflowApiKey;
@@ -64,6 +67,16 @@ export class ReactiveEmbedFunction implements EmbedFunction {
         return;
       }
       this.inner = createApiEmbedClient(apiKey, embeddingModel, 'https://api.siliconflow.cn/v1');
+      return;
+    }
+
+    if (embeddingProvider === 'jina') {
+      const apiKey = config.apiKeys.jinaApiKey;
+      if (!apiKey) {
+        this.inner = null;
+        return;
+      }
+      this.inner = createApiEmbedClient(apiKey, embeddingModel, 'https://api.jina.ai/v1');
       return;
     }
 
@@ -115,6 +128,7 @@ export class ReactiveEmbedFunction implements EmbedFunction {
         const response = await this.inner.client.embeddings.create({
           model: this.inner.model,
           input: batch,
+          ...(this.requestDimension != null && { dimensions: this.requestDimension }),
         });
         const sorted = response.data.sort((a, b) => a.index - b.index);
         for (const item of sorted) {

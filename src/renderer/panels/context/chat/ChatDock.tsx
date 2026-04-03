@@ -7,11 +7,12 @@
  * 全屏模式：覆盖 ContextBody（由 ContextPanel 的 PanelGroup 驱动）。
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Maximize2, Minimize2, Bot, MessageSquare, Trash2 } from 'lucide-react';
+import { Maximize2, Minimize2, Bot, MessageSquare, Plus, Trash2, Clock } from 'lucide-react';
 import { ChatHistory } from './ChatHistory';
 import { ChatInput } from './ChatInput';
+import { ChatSessionHistory } from './ChatSessionHistory';
 import { useChatSession, persistMessage } from './hooks/useChatSession';
 import { useChatContext } from './hooks/useChatContext';
 import { useEffectiveSource } from '../engine/useEffectiveSource';
@@ -39,10 +40,12 @@ function getToolDisplayLabel(
 
 export const ChatDock = React.memo(function ChatDock() {
   const { t } = useTranslation();
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const {
     sessionKey,
     messages,
     fullyLoaded,
+    createNewSession,
     clearCurrentSession,
     loadMoreHistory,
   } = useChatSession();
@@ -127,7 +130,6 @@ export const ChatDock = React.memo(function ChatDock() {
       unsub();
       accumulatorRef.current.dispose();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 发送去重：防止快速连点产生重复消息
@@ -150,7 +152,10 @@ export const ChatDock = React.memo(function ChatDock() {
       useChatStore.getState().addMessage(userMessage);
       persistMessage({ ...userMessage, status: 'completed' }, sessionKey);
       // ChatContext still carries the context hint (which paper/concept is active)
-      const chatContext = buildChatContext();
+      const chatContext = {
+        ...buildChatContext(),
+        conversationKey: sessionKey,
+      };
 
       try {
         const assistantMessage: ChatMessage = {
@@ -166,7 +171,7 @@ export const ChatDock = React.memo(function ChatDock() {
         useChatStore.getState().setChatStreaming(true);
         accumulatorRef.current.bind(assistantMessage.id);
 
-        await getAPI().chat.send(text, chatContext);
+        await getAPI().chat.send(text, chatContext, sessionKey);
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {
           msg.status = 'sent';
         });
@@ -203,6 +208,11 @@ export const ChatDock = React.memo(function ChatDock() {
     setChatDockMode(newMode);
   }, [chatDockMode, setChatDockMode]);
 
+  const handleCreateNewSession = useCallback(() => {
+    createNewSession();
+    setIsHistoryExpanded(false);
+  }, [createNewSession]);
+
   return (
     <div
       className="chat-dock-shell"
@@ -230,7 +240,7 @@ export const ChatDock = React.memo(function ChatDock() {
           zIndex: 1,
         }}
       >
-        <div className="chat-dock-toolbar-leading" style={{ display: 'flex', alignItems: 'center' }}>
+        <div className="chat-dock-toolbar-leading" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ 
             display: 'flex', 
             alignItems: 'center', 
@@ -241,8 +251,46 @@ export const ChatDock = React.memo(function ChatDock() {
           }}>
             <Bot size={14} style={{ color: 'var(--accent-color)' }} />
           </div>
+          <button
+            onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
+            className="chat-dock-toolbar-btn"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: isHistoryExpanded ? 'var(--accent-color)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 150ms ease',
+            }}
+            onMouseEnter={e => !isHistoryExpanded && (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={e => !isHistoryExpanded && (e.currentTarget.style.color = 'var(--text-muted)')}
+            title={t('context.chat.sessionHistory')}
+          >
+            <Clock size={14} />
+          </button>
         </div>
         <div className="chat-dock-toolbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={handleCreateNewSession}
+            className="chat-dock-toolbar-btn"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 150ms ease',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+            title={t('context.chat.newSession')}
+          >
+            <Plus size={14} />
+          </button>
           {messages.length > 0 && (
             <button
               onClick={clearCurrentSession}
@@ -285,6 +333,11 @@ export const ChatDock = React.memo(function ChatDock() {
           </button>
         </div>
       </div>
+
+      {/* 会话历史列表（可展开） */}
+      {isHistoryExpanded && (
+        <ChatSessionHistory onSessionSelected={() => setIsHistoryExpanded(false)} />
+      )}
 
       {/* 历史消息区域 */}
       <div className="chat-dock-history-stage" style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1 }}>

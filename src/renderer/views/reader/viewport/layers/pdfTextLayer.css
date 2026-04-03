@@ -21,6 +21,11 @@
   transform-origin: 0 0;
   caret-color: CanvasText;
   z-index: 2;
+
+  /* pdf.js v5 scale variables — --total-scale-factor is set by TextLayer.tsx */
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor, 1) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
 }
 
 .textLayer.highlighting {
@@ -38,6 +43,12 @@
 .textLayer > :not(.markedContent),
 .textLayer .markedContent span:not(.markedContent) {
   z-index: 1;
+  /* pdf.js v5: font-size and horizontal scaling via CSS variables */
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
 
 .textLayer span.markedContent {
@@ -126,4 +137,18 @@
   outline: 2px solid rgba(59, 130, 246, 0.5);
   outline-offset: -1px;
   border-radius: 2px;
+}
+
+/* ── OCR debug visualization (toggle via window.__toggleOcrDebug()) ── */
+
+.textLayer.ocr-debug span[data-ocr-line] {
+  color: rgba(220, 38, 38, 0.7) !important;
+  background: rgba(254, 226, 226, 0.45);
+  outline: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 1px;
+}
+
+.textLayer.ocr-debug span[data-ocr-word] {
+  outline-color: rgba(37, 99, 235, 0.5);
+  background: rgba(219, 234, 254, 0.4);
 }
