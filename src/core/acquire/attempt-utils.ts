@@ -1,7 +1,7 @@
 // ═══ Acquire Attempt 统一工具 ═══
 // 错误分类 + 重试策略 + AcquireAttempt 构造
 
-import type { AcquireAttempt, FailureCategory } from '../types';
+import type { AcquireAttempt, FailureCategory } from './types';
 import {
   TimeoutError,
   RateLimitedError,

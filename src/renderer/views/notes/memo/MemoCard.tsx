@@ -11,12 +11,14 @@ import { Pencil, Trash2, FileUp, Lightbulb, Check, X, Loader2, ChevronDown, Chev
 import type { TFunction } from 'i18next';
 import type { Memo } from '../../../../shared-types/models';
 import { useDeleteMemo, useUpdateMemo, useUpgradeMemoToNote } from '../../../core/ipc/hooks/useMemos';
-import { usePaperList } from '../../../core/ipc/hooks/usePapers';
-import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
 import { UpgradeToConceptDialog } from '../note/UpgradeToConceptDialog';
+import { useAppStore } from '../../../core/store';
+import { cancelPendingContextReveal, previewContextSource } from '../../../panels/context/engine/revealContextSource';
+import type { EntityDisplayNameCache } from '../shared/entityDisplayNameCache';
 
 interface MemoCardProps {
   memo: Memo;
+  entityNameCache: EntityDisplayNameCache;
 }
 
 function formatRelativeTime(isoDate: string, t: TFunction): string {
@@ -30,12 +32,15 @@ function formatRelativeTime(isoDate: string, t: TFunction): string {
   return t('notes.memo.daysAgo', { count: days });
 }
 
-export function MemoCard({ memo }: MemoCardProps) {
+export function MemoCard({ memo, entityNameCache }: MemoCardProps) {
   const { t } = useTranslation();
+  const navigateTo = useAppStore((s) => s.navigateTo);
+  const selectMemo = useAppStore((s) => s.selectMemo);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(memo.text);
   const [expanded, setExpanded] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [secondaryActionsOpen, setSecondaryActionsOpen] = useState(false);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [textOverflows, setTextOverflows] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -43,22 +48,6 @@ export function MemoCard({ memo }: MemoCardProps) {
   const deleteMutation = useDeleteMemo();
   const updateMutation = useUpdateMemo();
   const upgradeToNoteMutation = useUpgradeMemoToNote();
-
-  // Resolve paper/concept IDs to display names (React Query caches these)
-  const { data: papers } = usePaperList();
-  const { data: concepts } = useConceptList();
-  const paperName = (pid: string) => {
-    const p = (papers ?? []).find((pp) => ((pp as unknown as Record<string, unknown>)['id'] as string) === pid);
-    if (!p) return pid.slice(0, 10);
-    const title = (p as unknown as Record<string, unknown>)['title'] as string;
-    return title ? title.slice(0, 30) : pid.slice(0, 10);
-  };
-  const conceptName = (cid: string) => {
-    const c = (concepts ?? []).find((cc) => ((cc as unknown as Record<string, unknown>)['id'] as string) === cid);
-    if (!c) return cid.slice(0, 10);
-    const cr = c as unknown as Record<string, unknown>;
-    return ((cr['nameEn'] ?? cr['name_en'] ?? cid) as string).slice(0, 30);
-  };
 
   useEffect(() => {
     if (editing && editRef.current) {
@@ -107,6 +96,7 @@ export function MemoCard({ memo }: MemoCardProps) {
   return (
     <>
       <div
+        onClick={() => selectMemo(memo.id)}
         style={{
           padding: '12px 14px', marginBottom: 8,
           backgroundColor: 'var(--bg-surface)', borderRadius: 'var(--radius-md, 6px)',
@@ -116,6 +106,8 @@ export function MemoCard({ memo }: MemoCardProps) {
           pointerEvents: isDeleting ? 'none' : 'auto',
           transition: 'opacity 0.2s, box-shadow 0.15s',
         }}
+        onMouseEnter={() => previewContextSource({ type: 'memo', memoId: memo.id })}
+        onMouseLeave={cancelPendingContextReveal}
       >
         {/* ── Text or edit area ── */}
         {editing ? (
@@ -180,12 +172,12 @@ export function MemoCard({ memo }: MemoCardProps) {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
             {memo.paperIds.map((pid) => (
               <span key={pid} style={tagStyle('var(--color-paper-tag, #3B82F6)')}>
-                {paperName(pid)}
+                {entityNameCache.getPaperName(pid)}
               </span>
             ))}
             {memo.conceptIds.map((cid) => (
               <span key={cid} style={tagStyle('var(--color-concept-tag, #10B981)')}>
-                {conceptName(cid)}
+                {entityNameCache.getConceptName(cid)}
               </span>
             ))}
             {memo.tags.map((tag) => (
@@ -251,16 +243,41 @@ export function MemoCard({ memo }: MemoCardProps) {
                 <IconBtn
                   icon={<FileUp size={14} />}
                   title={t('notes.memo.expandToNote')}
-                  onClick={() => upgradeToNoteMutation.mutate(memo.id)}
+                  onClick={() => upgradeToNoteMutation.mutate(memo.id, {
+                    onSuccess: (result) => navigateTo({ type: 'note', noteId: result.noteId }),
+                  })}
                   disabled={upgradeToNoteMutation.isPending}
                 />
-                <IconBtn
-                  icon={<Lightbulb size={14} />}
-                  title={t('notes.memo.upgradeToConcept')}
-                  onClick={() => setShowUpgradeDialog(true)}
-                />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSecondaryActionsOpen((open) => !open);
+                  }}
+                  style={secondaryActionToggleStyle}
+                >
+                  <span>{t('common.moreActions')}</span>
+                  {secondaryActionsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
               </div>
             )}
+          </div>
+        )}
+
+        {!editing && !confirmingDelete && secondaryActionsOpen && (
+          <div style={secondaryActionsPanelStyle}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSecondaryActionsOpen(false);
+                setShowUpgradeDialog(true);
+              }}
+              style={secondaryActionBtnStyle}
+            >
+              <Lightbulb size={13} />
+              <span>{t('notes.memo.upgradeToConcept')}</span>
+            </button>
           </div>
         )}
       </div>
@@ -330,6 +347,28 @@ const expandBtnStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 2,
   marginTop: 4, padding: 0, border: 'none', background: 'none',
   color: 'var(--accent-color)', fontSize: 11, cursor: 'pointer',
+};
+
+const secondaryActionToggleStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4,
+  height: 28, padding: '0 8px',
+  border: 'none', borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'transparent', color: 'var(--text-muted)',
+  cursor: 'pointer', fontSize: 11,
+};
+
+const secondaryActionsPanelStyle: React.CSSProperties = {
+  marginTop: 8,
+  paddingTop: 8,
+  borderTop: '1px dashed var(--border-subtle)',
+};
+
+const secondaryActionBtnStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+  padding: '6px 10px',
+  border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm, 4px)',
+  backgroundColor: 'transparent', color: 'var(--text-secondary)',
+  fontSize: 12, cursor: 'pointer',
 };
 
 function tagStyle(color: string): React.CSSProperties {

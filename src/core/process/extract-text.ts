@@ -6,20 +6,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata } from '../types';
+import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata, StyledLine } from './types';
 import type { PageCharData, CharWithPosition, OcrLine, OcrWord, PageOcrLines, NormalizedBBox } from '../dla/types';
 import { PdfCorruptedError, ProcessError, OcrFailedError } from '../types/errors';
 import { countTokens, estimateTokens } from '../infra/token-counter';
 import { deriveExtractionMethod } from './extraction-method';
-
-// ─── 带样式的行信息（供 extractSections 使用） ───
-
-export interface StyledLine {
-  text: string;
-  fontSize: number;   // 该行主要字体大小（取众数）
-  isBold: boolean;    // 字体名称含 Bold/bold
-  pageIndex: number;
-}
 
 // ─── mupdf.js 懒加载 ───
 
@@ -31,7 +22,8 @@ async function getMupdf(): Promise<typeof import('mupdf')> {
     mupdfModule = await import('mupdf');
   } catch {
     try {
-      mupdfModule = await import('mupdf/dist/mupdf.js' as string);
+      const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
     } catch (err) {
       throw new ProcessError({
         message: `Failed to load mupdf.js: ${(err as Error).message}`,

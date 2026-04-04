@@ -27,16 +27,23 @@ export function createWritingCapability(): Capability {
           if (!ctx.services.orchestrator) {
             return { success: false, summary: 'Orchestrator not available' };
           }
+          const conceptIds = Array.isArray(params['conceptIds'])
+            ? (params['conceptIds'] as string[])
+            : [];
+          const concurrency = typeof params['concurrency'] === 'number'
+            ? (params['concurrency'] as number)
+            : 2;
+
           const task = ctx.services.orchestrator.start('synthesize', {
-            conceptIds: params['conceptIds'] ?? [],
-            concurrency: (params['concurrency'] as number) ?? 2,
+            conceptIds,
+            concurrency,
           });
 
           ctx.eventBus.emit({
             type: 'pipeline:started',
             taskId: task.id,
             workflow: 'synthesize',
-            conceptIds: params['conceptIds'] as string[],
+            conceptIds,
           });
 
           return {
@@ -52,15 +59,20 @@ export function createWritingCapability(): Capability {
         description: 'Trigger the article generation pipeline to draft sections based on synthesis results.',
         routeFamilies: ['writing_edit', 'workspace_control'],
         params: [
-          { name: 'articleId', type: 'string', description: 'Article ID to generate for' },
+          { name: 'articleId', type: 'string', description: 'Article ID to generate for', required: true },
         ],
         permissionLevel: 1,
         execute: async (params, ctx) => {
           if (!ctx.services.orchestrator) {
             return { success: false, summary: 'Orchestrator not available' };
           }
+          const articleId = params['articleId'];
+          if (typeof articleId !== 'string' || articleId.length === 0) {
+            return { success: false, summary: 'articleId is required' };
+          }
+
           const task = ctx.services.orchestrator.start('article', {
-            articleId: params['articleId'],
+            articleId,
           });
 
           ctx.eventBus.emit({

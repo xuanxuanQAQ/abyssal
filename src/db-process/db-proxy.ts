@@ -308,15 +308,17 @@ export class DbProxy {
   }
 
   async switchWorkspace(payload: DbInitPayload): Promise<void> {
-    this.initPayload = payload;
+    const previousPayload = this.initPayload;
     if (!this.child) {
       await this.start(payload);
       return;
     }
     const resp = await this.sendLifecycle('switch', payload);
     if (!resp.success) {
+      this.initPayload = previousPayload;
       throw new Error(`Workspace switch failed: ${resp.error}`);
     }
+    this.initPayload = payload;
   }
 
   async close(): Promise<void> {
@@ -425,17 +427,31 @@ export class DbProxy {
 
 function restoreResult(value: unknown): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === 'object' && !Array.isArray(value)) {
+  if (Array.isArray(value)) {
+    return value.map(restoreResult);
+  }
+  if (typeof value === 'object') {
     const obj = value as Record<string, unknown>;
     if (obj['__type'] === 'Set' && Array.isArray(obj['data'])) {
-      return new Set(obj['data']);
+      return new Set((obj['data'] as unknown[]).map(restoreResult));
     }
     if (obj['__type'] === 'Map' && Array.isArray(obj['data'])) {
-      return new Map(obj['data'] as [unknown, unknown][]);
+      return new Map(
+        (obj['data'] as [unknown, unknown][]).map(([key, entryValue]) => [
+          restoreResult(key),
+          restoreResult(entryValue),
+        ]),
+      );
     }
     if (obj['__type'] === 'Float32Array' && Array.isArray(obj['data'])) {
       return new Float32Array(obj['data'] as number[]);
     }
+
+    const restoredEntries = Object.entries(obj).map(([key, entryValue]) => [
+      key,
+      restoreResult(entryValue),
+    ]);
+    return Object.fromEntries(restoredEntries);
   }
   return value;
 }
@@ -448,6 +464,14 @@ function serializeArg(value: unknown): unknown {
   }
   if (Array.isArray(value)) {
     return value.map(serializeArg);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
+        key,
+        serializeArg(entryValue),
+      ]),
+    );
   }
   return value;
 }

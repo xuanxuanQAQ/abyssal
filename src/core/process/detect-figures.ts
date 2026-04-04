@@ -2,7 +2,7 @@
 // §5.1-5.2: 双通道检测（文本密度网格 + 矢量路径密度）
 
 import * as fs from 'node:fs';
-import type { FigureCandidate } from '../types';
+import type { FigureCandidate } from './types';
 import { ProcessError } from '../types/errors';
 
 // ─── §5.2 网格参数 ───
@@ -23,7 +23,8 @@ async function getMupdf(): Promise<typeof import('mupdf')> {
     mupdfModule = await import('mupdf');
   } catch {
     try {
-      mupdfModule = await import('mupdf/dist/mupdf.js' as string);
+      const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
     } catch (err) {
       throw new ProcessError({
         message: `Failed to load mupdf.js: ${(err as Error).message}`,

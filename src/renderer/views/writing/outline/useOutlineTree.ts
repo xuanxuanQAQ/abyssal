@@ -13,9 +13,9 @@ import type { MoveHandler, RenameHandler } from 'react-arborist';
 import type { SectionNode, SectionOrder } from '../../../../shared-types/models';
 import type { SectionStatus, EvidenceStatus } from '../../../../shared-types/enums';
 import {
-  useUpdateOutlineOrder,
-  useUpdateSection,
-} from '../../../core/ipc/hooks/useArticles';
+  useUpdateDraftOutlineOrder,
+  useUpdateDraftSection,
+} from '../../../core/ipc/hooks/useDrafts';
 
 export interface TreeNodeData {
   id: string;
@@ -85,6 +85,49 @@ function nodeDepth(nodes: TreeNodeData[], id: string, depth: number = 0): number
   return -1;
 }
 
+function cloneTree(nodes: TreeNodeData[]): TreeNodeData[] {
+  return nodes.map((node) => ({
+    ...node,
+    children: cloneTree(node.children),
+  }));
+}
+
+function removeDraggedNodes(
+  nodes: TreeNodeData[],
+  dragIds: Set<string>,
+  removed: Map<string, TreeNodeData>,
+): TreeNodeData[] {
+  const next: TreeNodeData[] = [];
+  for (const node of nodes) {
+    if (dragIds.has(node.id)) {
+      removed.set(node.id, { ...node, children: cloneTree(node.children) });
+      continue;
+    }
+    next.push({
+      ...node,
+      children: removeDraggedNodes(node.children, dragIds, removed),
+    });
+  }
+  return next;
+}
+
+function findChildrenArray(nodes: TreeNodeData[], parentId: string | null): TreeNodeData[] {
+  if (parentId === null) return nodes;
+  const parent = findNode(nodes, parentId);
+  return parent?.children ?? nodes;
+}
+
+function flattenOrder(nodes: TreeNodeData[], parentId: string | null = null): SectionOrder[] {
+  return nodes.flatMap((node, index) => [
+    {
+      sectionId: node.id,
+      parentId,
+      sortIndex: index,
+    },
+    ...flattenOrder(node.children, node.id),
+  ]);
+}
+
 /** Compute maximum depth of a subtree */
 function subtreeMaxDepth(node: TreeNodeData): number {
   if (node.children.length === 0) return 0;
@@ -98,9 +141,9 @@ function subtreeMaxDepth(node: TreeNodeData): number {
 
 // ── hook ──
 
-export function useOutlineTree(articleId: string, sections: SectionNode[]) {
-  const updateOutlineOrder = useUpdateOutlineOrder();
-  const updateSection = useUpdateSection();
+export function useOutlineTree(draftId: string, sections: SectionNode[]) {
+  const updateOutlineOrder = useUpdateDraftOutlineOrder();
+  const updateSection = useUpdateDraftSection();
 
   const treeData = useMemo(() => toTreeData(sections), [sections]);
 
@@ -157,15 +200,21 @@ export function useOutlineTree(articleId: string, sections: SectionNode[]) {
     (args: { dragIds: string[]; parentId: string | null; index: number }) => {
       const { dragIds, parentId, index } = args;
 
-      const orders: SectionOrder[] = dragIds.map((id: string, i: number) => ({
-        sectionId: id,
-        parentId: parentId ?? null,
-        sortIndex: index + i,
-      }));
+      const dragIdSet = new Set(dragIds);
+      const removed = new Map<string, TreeNodeData>();
+      const nextTree = removeDraggedNodes(cloneTree(treeData), dragIdSet, removed);
+      const targetChildren = findChildrenArray(nextTree, parentId ?? null);
+      const draggedNodes = dragIds
+        .map((id) => removed.get(id))
+        .filter((node): node is TreeNodeData => node !== undefined);
 
-      updateOutlineOrder.mutate({ articleId, order: orders });
+      targetChildren.splice(index, 0, ...draggedNodes);
+
+      const orders = flattenOrder(nextTree);
+
+      updateOutlineOrder.mutate({ draftId, order: orders });
     },
-    [articleId, updateOutlineOrder],
+    [draftId, treeData, updateOutlineOrder],
   );
 
   /**
@@ -176,10 +225,10 @@ export function useOutlineTree(articleId: string, sections: SectionNode[]) {
       const { id, name } = args;
       const trimmed = name.trim();
       if (trimmed) {
-        updateSection.mutate({ sectionId: id, patch: { title: trimmed } });
+        updateSection.mutate({ draftId, sectionId: id, patch: { title: trimmed } });
       }
     },
-    [updateSection],
+    [draftId, updateSection],
   );
 
   return {

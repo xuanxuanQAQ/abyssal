@@ -26,9 +26,10 @@ const mockAbyssalAPI = {
   workspace: {},
 };
 
-Object.defineProperty(globalThis, 'window', {
-  value: { ...globalThis.window, abyssal: mockAbyssalAPI },
+Object.defineProperty(globalThis.window, 'abyssal', {
+  value: mockAbyssalAPI,
   writable: true,
+  configurable: true,
 });
 
 afterEach(() => {

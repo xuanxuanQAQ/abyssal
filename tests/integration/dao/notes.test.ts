@@ -3,8 +3,8 @@ import type Database from 'better-sqlite3';
 import { createTestDB } from '../../../src/__test-utils__/test-db';
 import {
   createNote,
+  saveNoteContent,
   getNote,
-  getNoteByFilePath,
   getAllNotes,
   deleteNote,
 } from '@core/database/dao/notes';
@@ -32,6 +32,7 @@ function makeNote(
     linkedPaperIds: [],
     linkedConceptIds: [],
     tags: [],
+    documentJson: null,
     ...overrides,
   };
 }
@@ -124,20 +125,23 @@ describe('notes DAO', () => {
     expect(Array.isArray(fetched.linkedPaperIds)).toBe(true);
   });
 
-  // ── getNoteByFilePath ──
+  // ── saveNoteContent ──
 
-  it('getNoteByFilePath finds the correct note', () => {
+  it('saveNoteContent updates document_json and replaces chunks', () => {
     const note = makeNote(4);
     createNote(db, note, [], []);
 
-    const fetched = getNoteByFilePath(db, 'notes/note-4.md');
-    expect(fetched).not.toBeNull();
-    expect(fetched!.id).toBe(note.id);
-  });
+    const docJson = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }] });
+    const chunk = makeChunk(note.id, 0);
+    saveNoteContent(db, note.id, docJson, [chunk], [null]);
 
-  it('getNoteByFilePath returns null for unknown path', () => {
-    const result = getNoteByFilePath(db, 'notes/nonexistent.md');
-    expect(result).toBeNull();
+    const fetched = getNote(db, note.id)!;
+    expect(fetched.documentJson).toBe(docJson);
+
+    const chunkRows = db
+      .prepare("SELECT COUNT(*) as cnt FROM chunks WHERE chunk_id LIKE ?")
+      .get(`note__${note.id}__%`) as { cnt: number };
+    expect(chunkRows.cnt).toBe(1);
   });
 
   // ── getAllNotes ──

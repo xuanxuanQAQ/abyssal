@@ -1,7 +1,7 @@
 /**
  * useNotes -- research note query & mutation hooks (v2.0)
  *
- * Query Key: ['notes', filterParams] / ['notes', 'file', noteId]
+ * Query Key: ['notes', filterParams] / ['notes', 'content', noteId]
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -29,11 +29,11 @@ export function useNote(noteId: string | null) {
   });
 }
 
-export function useNoteFileContent(noteId: string | null) {
+export function useNoteContent(noteId: string | null) {
   const viewActive = useViewActive();
   return useQuery({
-    queryKey: ['notes', 'file', noteId],
-    queryFn: () => getAPI().fs.readNoteFile(noteId!),
+    queryKey: ['notes', 'content', noteId],
+    queryFn: () => getAPI().db.notes.getContent(noteId!),
     enabled: !!noteId && viewActive,
     staleTime: 0,
   });
@@ -82,15 +82,15 @@ export function useDeleteNote() {
   });
 }
 
-export function useSaveNoteFile() {
+export function useSaveNoteContent() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ noteId, content }: { noteId: string; content: string }) =>
-      getAPI().fs.saveNoteFile(noteId, content),
+    mutationFn: ({ noteId, documentJson }: { noteId: string; documentJson: string }) =>
+      getAPI().db.notes.saveContent(noteId, documentJson),
 
     onSuccess: (_data, { noteId }) => {
-      queryClient.invalidateQueries({ queryKey: ['notes', 'file', noteId] });
+      queryClient.invalidateQueries({ queryKey: ['notes', 'content', noteId] });
       queryClient.invalidateQueries({ queryKey: ['notes'] });
     },
 

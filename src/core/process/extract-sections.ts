@@ -17,7 +17,7 @@ import type {
   SectionBoundary,
   SectionBoundaryList,
 } from '../types/chunk';
-import type { StyledLine } from '../types';
+import type { StyledLine } from './types';
 import type { DocumentStructure, DocumentSection } from '../dla/types';
 import type { Logger } from '../infra/logger';
 

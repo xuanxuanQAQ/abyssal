@@ -52,6 +52,7 @@ export interface DeriveContextInput {
   selectedMappingConceptId: string | null;
   selectedSectionId: string | null;
   selectedArticleId: string | null;
+  selectedDraftId: string | null;
   focusedGraphNodeId: string | null;
   focusedGraphNodeType: 'paper' | 'concept' | 'memo' | 'note' | null;
   selectedMemoId: string | null;
@@ -67,7 +68,7 @@ export function deriveContextSource(input: DeriveContextInput): ContextSource {
   const {
     activeView, selectedPaperId, selectionMode, multiIds,
     selectedConceptId, selectedMappingId, selectedMappingPaperId,
-    selectedMappingConceptId, selectedSectionId, selectedArticleId,
+    selectedMappingConceptId, selectedSectionId, selectedArticleId, selectedDraftId,
     focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
   } = input;
 
@@ -82,6 +83,7 @@ export function deriveContextSource(input: DeriveContextInput): ContextSource {
       type: 'section',
       articleId: selectedArticleId ?? '',
       sectionId: selectedSectionId,
+      ...(selectedDraftId ? { draftId: selectedDraftId } : {}),
     };
   }
 
@@ -155,6 +157,7 @@ const contextInputSelector = (s: import('../../../core/store/useAppStore').AppSt
   selectedMappingConceptId: s.selectedMappingConceptId,
   selectedSectionId: s.selectedSectionId,
   selectedArticleId: s.selectedArticleId,
+  selectedDraftId: s.selectedDraftId,
   focusedGraphNodeId: s.focusedGraphNodeId,
   focusedGraphNodeType: s.focusedGraphNodeType,
   selectedMemoId: s.selectedMemoId,
@@ -165,7 +168,7 @@ export function useDerivedContextSource(): ContextSource {
   const {
     activeView, selectedPaperId, selectionMode, explicitIds, excludedIds,
     selectedConceptId, selectedMappingId, selectedMappingPaperId,
-    selectedMappingConceptId, selectedSectionId, selectedArticleId,
+    selectedMappingConceptId, selectedSectionId, selectedArticleId, selectedDraftId,
     focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
   } = useAppStore(useShallow(contextInputSelector));
 
@@ -190,14 +193,14 @@ export function useDerivedContextSource(): ContextSource {
     () => deriveContextSource({
       activeView, selectedPaperId, selectionMode, multiIds,
       selectedConceptId, selectedMappingId, selectedMappingPaperId,
-      selectedMappingConceptId, selectedSectionId, selectedArticleId,
+      selectedMappingConceptId, selectedSectionId, selectedArticleId, selectedDraftId,
       focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
       excludedCount,
     }),
     [
       activeView, selectedPaperId, selectionMode, multiIds,
       selectedConceptId, selectedMappingId, selectedMappingPaperId,
-      selectedMappingConceptId, selectedSectionId, selectedArticleId,
+      selectedMappingConceptId, selectedSectionId, selectedArticleId, selectedDraftId,
       focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
       excludedCount,
     ],

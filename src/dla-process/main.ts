@@ -187,7 +187,8 @@ async function loadMupdf(): Promise<any> {
     try {
       mupdfModule = await import('mupdf');
     } catch {
-      mupdfModule = await import('mupdf/dist/mupdf.js' as string);
+      const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
     }
   }
   return mupdfModule;

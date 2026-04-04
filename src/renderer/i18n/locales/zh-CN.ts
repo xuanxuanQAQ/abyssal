@@ -45,6 +45,7 @@ export const zhCN = {
     reject: '拒绝',
     expand: '展开',
     collapse: '收起',
+    moreActions: '更多操作',
     time: {
       justNow: '刚刚',
       minutesAgo: '{{count}} 分钟前',
@@ -342,6 +343,7 @@ export const zhCN = {
       keywords: '关键词',
       addKeyword: '添加关键词…',
       relatedNotes: '关联笔记',
+      moreRelatedItems: '还有 {{count}} 项',
       relatedPaperStats: '关联论文统计',
       evolutionTimeline: '演化时间线',
       merge: '合并',
@@ -603,6 +605,7 @@ export const zhCN = {
     },
     filter: {
       searchPlaceholder: '搜索笔记…',
+      advanced: '高级筛选',
       clearAll: '清除所有过滤',
       papers: '论文',
       concepts: '概念',

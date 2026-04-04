@@ -7,7 +7,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { AcquireResult, AcquireAttempt } from '../types';
+import type { AcquireResult, AcquireAttempt } from './types';
 import type { AbyssalConfig } from '../types/config';
 import type { Logger } from '../infra/logger';
 import { HttpClient, computeSha256 } from '../infra/http-client';
@@ -37,6 +37,7 @@ import { tryWanfang } from './sources/wanfang';
 
 // ─── 类型重导出 ───
 
+export type { FailureCategory, AcquireAttempt, AcquireResult, PdfValidation } from './types';
 export { validatePdf } from './pdf-validator';
 export { downloadPdf, computeSha256, deleteFileIfExists } from './downloader';
 
@@ -695,7 +696,8 @@ export class AcquireService {
         mupdf = await import('mupdf') as typeof mupdf;
       } catch {
         try {
-          mupdf = await import('mupdf/dist/mupdf.js' as string) as typeof mupdf;
+          const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+          mupdf = await import(/* @vite-ignore */ fallbackSpecifier) as typeof mupdf;
         } catch {
           return null;
         }

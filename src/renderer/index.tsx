@@ -9,6 +9,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import './i18n';            // i18next init — must run before App renders
 import './styles/global.css';
+import 'katex/dist/katex.min.css';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) {

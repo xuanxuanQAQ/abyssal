@@ -1,262 +1,232 @@
-/**
- * useAIOperations — hook for Generate / Rewrite / Expand operations
- *
- * Each operation:
- * 1. Sets aiGenerating = true in useEditorStore
- * 2. Inserts an aiStreamingBlock node at the appropriate position
- * 3. Subscribes to pipeline.onStreamChunk via IPC
- * 4. Creates an AIStreamAccumulator to RAF-throttle chunk updates
- * 5. On isLast → performTerminalReplacement
- * 6. Sets aiGenerating = false
- */
-
 import { useCallback, useRef } from 'react';
+import type { JSONContent } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
+import type {
+  ContextSnapshot,
+  CopilotIntent,
+  CopilotOperationEnvelope,
+  EditorSelectionContext,
+  OutputTarget,
+} from '../../../../copilot-runtime/types';
+import { buildSectionContinuityContext } from '../../../../shared/writing/documentOutline';
+import { useCopilotRuntime } from '../../../core/hooks/useCopilotRuntime';
 import { useEditorStore } from '../../../core/store/useEditorStore';
-import { getAPI } from '../../../core/ipc/bridge';
-import { AIStreamAccumulator } from './AIStreamAccumulator';
-import { performTerminalReplacement } from './terminalReplacer';
-import type { ParagraphMark } from './terminalReplacer';
-import type { StreamChunkEvent } from '../../../../shared-types/ipc';
 
 interface UseAIOperationsOptions {
   editor: Editor | null;
+  articleId: string | null;
+  draftId: string | null;
   sectionId: string | null;
 }
 
-interface AIOperationHandle {
-  taskId: string;
-  accumulator: AIStreamAccumulator;
-  unsubscribe: () => void;
-  /** For rewrite: the original selection range to delete on completion */
-  originalRange: { from: number; to: number } | null;
+interface EditorSelectionSnapshot {
+  from: number;
+  to: number;
+  selectedText: string;
 }
 
-export function useAIOperations({ editor, sectionId }: UseAIOperationsOptions) {
-  const handleRef = useRef<AIOperationHandle | null>(null);
+function buildOperationPrompt(intent: CopilotIntent): string {
+  switch (intent) {
+    case 'generate-section':
+      return '请继续完善当前章节，保持与上下文衔接，并优先吸收可用证据。';
+    case 'rewrite-selection':
+      return '请改写当前选中文本，在保留原意的前提下提升表达质量。';
+    case 'expand-selection':
+      return '请扩展当前选中文本，补足论证、细节或上下文。';
+    case 'compress-selection':
+      return '请压缩当前选中文本，保留关键信息并减少冗余。';
+    default:
+      return '请处理当前写作任务。';
+  }
+}
 
-  /**
-   * Insert an aiStreamingBlock at a given position and return its resolved pos.
-   */
-  const insertStreamingBlock = useCallback(
-    (insertPos: number): number | null => {
-      if (!editor) return null;
+function buildSelectionOutputTarget(
+  articleId: string,
+  sectionId: string,
+  selection: EditorSelectionSnapshot,
+): OutputTarget {
+  return {
+    type: 'editor-selection-replace',
+    editorId: 'main',
+    articleId,
+    sectionId,
+    from: selection.from,
+    to: selection.to,
+  };
+}
 
-      const nodeType = editor.schema.nodes.aiStreamingBlock;
-      if (!nodeType) return null;
+export function useAIOperations({ editor, articleId, draftId, sectionId }: UseAIOperationsOptions) {
+  const { execute, abort } = useCopilotRuntime();
+  const pendingOperationIdRef = useRef<string | null>(null);
 
-      const blockNode = nodeType.create({ markdown: '', status: 'streaming' });
-      editor
-        .chain()
-        .command(({ tr }) => {
-          tr.insert(insertPos, blockNode);
-          return true;
-        })
-        .run();
+  const buildOperationContext = useCallback((selection: EditorSelectionSnapshot | null): ContextSnapshot | null => {
+    if (!editor || !articleId) return null;
 
-      return insertPos;
-    },
-    [editor],
-  );
+    const documentJson = editor.getJSON() as JSONContent;
+    const continuity = sectionId
+      ? buildSectionContinuityContext(documentJson, sectionId)
+      : { section: null, precedingSummary: '', followingSectionTitles: [] };
 
-  /**
-   * Shared streaming lifecycle: subscribe to chunks, accumulate, finalize.
-   */
-  const startStreaming = useCallback(
-    (
-      taskId: string,
-      blockPos: number,
-      markType: ParagraphMark,
-      originalRange: { from: number; to: number } | null,
-    ) => {
-      if (!editor) return;
-
-      const accumulator = new AIStreamAccumulator(editor, blockPos);
-
-      const unsubscribe = getAPI().pipeline.onStreamChunk(
-        (event: StreamChunkEvent) => {
-          if (event.taskId !== taskId) return;
-
-          // Re-locate the streaming block position in case prior transactions
-          // shifted it, then update the accumulator so its RAF flush targets
-          // the correct node.
-          let currentBlockPos = blockPos;
-          editor.state.doc.descendants((node, pos) => {
-            if (node.type.name === 'aiStreamingBlock') {
-              currentBlockPos = pos;
-              return false;
-            }
-            return true;
-          });
-          accumulator.updateBlockPos(currentBlockPos);
-
-          accumulator.addChunk(event.chunk);
-
-          if (event.isLast) {
-            // Terminal replacement — use the up-to-date block position
-            const success = performTerminalReplacement(editor, currentBlockPos, markType);
-
-            if (success && originalRange) {
-              // For rewrite: delete the original content that was replaced
-              const { state } = editor;
-              const { tr } = state;
-              // After terminal replacement the positions may have shifted;
-              // the original range was captured before insertion so we need
-              // to account for the inserted content.  However the original
-              // range is *above* the streaming block (which was inserted
-              // after), so the positions are still valid.
-              tr.delete(originalRange.from, originalRange.to);
-              tr.setMeta('aiInsert', true);
-              editor.view.dispatch(tr);
-            }
-
-            accumulator.destroy();
-            unsubscribe();
-            handleRef.current = null;
-            useEditorStore.getState().setAIGenerating(false);
-          }
-        },
-      );
-
-      handleRef.current = { taskId, accumulator, unsubscribe, originalRange };
-    },
-    [editor],
-  );
-
-  // ── Generate: insert at end of document ──
-
-  const generate = useCallback(async () => {
-    if (!editor || !sectionId) return;
-    if (useEditorStore.getState().aiGenerating) return;
-
-    useEditorStore.getState().setAIGenerating(true);
-
-    const endPos = editor.state.doc.content.size;
-    const blockPos = insertStreamingBlock(endPos);
-    if (blockPos === null) {
-      useEditorStore.getState().setAIGenerating(false);
-      return;
-    }
-
-    try {
-      const taskId = await getAPI().pipeline.start('generate', {
-        sectionId,
-        operation: 'generate',
-      });
-      useEditorStore.getState().setAIGenerating(true, taskId);
-      startStreaming(taskId, blockPos, 'AI-WRITTEN', null);
-    } catch {
-      useEditorStore.getState().setAIGenerating(false);
-    }
-  }, [editor, sectionId, insertStreamingBlock, startStreaming]);
-
-  // ── Rewrite: insert after selection, delete original on completion ──
-
-  const rewrite = useCallback(async () => {
-    if (!editor || !sectionId) return;
-    if (useEditorStore.getState().aiGenerating) return;
-
-    const { from, to } = editor.state.selection;
-    if (from === to) return; // Need a selection
-
-    const selectedText = editor.state.doc.textBetween(from, to, '\n');
-    useEditorStore.getState().setAIGenerating(true);
-
-    const blockPos = insertStreamingBlock(to);
-    if (blockPos === null) {
-      useEditorStore.getState().setAIGenerating(false);
-      return;
-    }
-
-    try {
-      const taskId = await getAPI().pipeline.start('generate', {
-        sectionId,
-        operation: 'rewrite',
-        selectedText,
-      });
-      useEditorStore.getState().setAIGenerating(true, taskId);
-      startStreaming(taskId, blockPos, 'AI-WRITTEN', { from, to });
-    } catch {
-      useEditorStore.getState().setAIGenerating(false);
-    }
-  }, [editor, sectionId, insertStreamingBlock, startStreaming]);
-
-  // ── Expand: insert after selection ──
-
-  const expand = useCallback(async () => {
-    if (!editor || !sectionId) return;
-    if (useEditorStore.getState().aiGenerating) return;
-
-    const { from, to } = editor.state.selection;
-    const selectedText =
-      from !== to
-        ? editor.state.doc.textBetween(from, to, '\n')
-        : '';
-
-    const insertPos = to;
-    useEditorStore.getState().setAIGenerating(true);
-
-    const blockPos = insertStreamingBlock(insertPos);
-    if (blockPos === null) {
-      useEditorStore.getState().setAIGenerating(false);
-      return;
-    }
-
-    try {
-      const taskId = await getAPI().pipeline.start('generate', {
-        sectionId,
-        operation: 'expand',
-        selectedText,
-      });
-      useEditorStore.getState().setAIGenerating(true, taskId);
-      startStreaming(taskId, blockPos, 'AI-WRITTEN', null);
-    } catch {
-      useEditorStore.getState().setAIGenerating(false);
-    }
-  }, [editor, sectionId, insertStreamingBlock, startStreaming]);
-
-  // ── Cancel: stop pipeline, mark block as completed ──
-
-  const cancel = useCallback(async () => {
-    const handle = handleRef.current;
-    if (!handle) return;
-
-    try {
-      await getAPI().pipeline.cancel(handle.taskId);
-    } catch {
-      // Cancellation is best-effort
-    }
-
-    // Mark the streaming block as completed so the extension can render final state
-    if (editor) {
-      const { state } = editor;
-      // Find the streaming block by traversing descendants and update its status
-      let found = false;
-      state.doc.descendants((descendant, pos) => {
-        if (found) return false;
-        if (descendant.type.name === 'aiStreamingBlock') {
-          found = true;
-          editor
-            .chain()
-            .command(({ tr }) => {
-              tr.setNodeMarkup(pos, undefined, {
-                ...descendant.attrs,
-                status: 'completed',
-              });
-              return true;
-            })
-            .run();
-          return false; // stop traversal
+    const editorSelection: EditorSelectionContext | null = selection && sectionId
+      ? {
+          kind: 'editor',
+          articleId,
+          sectionId,
+          selectedText: selection.selectedText,
+          from: selection.from,
+          to: selection.to,
         }
-        return true;
-      });
-    }
+      : null;
 
-    handle.accumulator.destroy();
-    handle.unsubscribe();
-    handleRef.current = null;
-    useEditorStore.getState().setAIGenerating(false);
+    return {
+      activeView: 'writing',
+      workspaceId: '',
+      article: {
+        articleId,
+        sectionId,
+        ...(continuity.section?.title ? { sectionTitle: continuity.section.title } : {}),
+        ...(continuity.precedingSummary ? { previousSectionSummaries: [continuity.precedingSummary] } : {}),
+        ...(continuity.followingSectionTitles.length > 0 ? { nextSectionTitles: continuity.followingSectionTitles } : {}),
+      },
+      selection: editorSelection,
+      focusEntities: { paperIds: [], conceptIds: [] },
+      conversation: { recentTurns: [] },
+      retrieval: { evidence: [] },
+      writing: {
+        editorId: 'main',
+        articleId,
+        sectionId,
+        unsavedChanges: useEditorStore.getState().unsavedChanges,
+      },
+      budget: {
+        policy: 'deep',
+        tokenBudget: 12000,
+        includedLayers: ['surface', 'working', 'retrieval', 'history'],
+      },
+      frozenAt: Date.now(),
+    };
+  }, [articleId, editor, sectionId]);
+
+  const startOperation = useCallback((
+    intent: CopilotIntent,
+    outputTarget: OutputTarget,
+    selection: EditorSelectionSnapshot | null,
+  ) => {
+    if (!articleId) return;
+
+    const context = buildOperationContext(selection);
+    if (!context) return;
+
+    const operationId = globalThis.crypto.randomUUID();
+    const envelope: CopilotOperationEnvelope = {
+      operation: {
+        id: operationId,
+        sessionId: `writing:${draftId ?? articleId}`,
+        surface: 'editor-toolbar',
+        intent,
+        prompt: buildOperationPrompt(intent),
+        context,
+        outputTarget,
+        constraints: {
+          contextPolicy: 'deep',
+          preserveSelection: selection !== null,
+          preferExistingEvidence: true,
+        },
+      },
+    };
+
+    pendingOperationIdRef.current = operationId;
+    useEditorStore.getState().setAIGenerating(true, operationId);
+
+    void execute(envelope)
+      .catch((error) => {
+        console.error('Copilot writing operation failed:', error);
+      })
+      .finally(() => {
+        if (pendingOperationIdRef.current !== operationId) return;
+        pendingOperationIdRef.current = null;
+        useEditorStore.getState().setAIGenerating(false);
+      });
+  }, [articleId, buildOperationContext, draftId, execute]);
+
+  const captureSelection = useCallback((): EditorSelectionSnapshot | null => {
+    if (!editor) return null;
+    const { from, to } = editor.state.selection;
+    if (from === to) return null;
+
+    return {
+      from,
+      to,
+      selectedText: editor.state.doc.textBetween(from, to, '\n'),
+    };
   }, [editor]);
 
-  return { generate, rewrite, expand, cancel };
+  const generate = useCallback(() => {
+    if (!editor || !articleId || !sectionId) return;
+    if (useEditorStore.getState().aiGenerating) return;
+
+    startOperation('generate-section', {
+      type: 'section-replace',
+      articleId,
+      sectionId,
+    }, null);
+  }, [articleId, editor, sectionId, startOperation]);
+
+  const rewrite = useCallback(() => {
+    if (!editor || !articleId || !sectionId) return;
+    if (useEditorStore.getState().aiGenerating) return;
+
+    const selection = captureSelection();
+    if (!selection) return;
+
+    startOperation(
+      'rewrite-selection',
+      buildSelectionOutputTarget(articleId, sectionId, selection),
+      selection,
+    );
+  }, [articleId, captureSelection, editor, sectionId, startOperation]);
+
+  const expand = useCallback(() => {
+    if (!editor || !articleId || !sectionId) return;
+    if (useEditorStore.getState().aiGenerating) return;
+
+    const selection = captureSelection();
+    if (!selection) return;
+
+    startOperation(
+      'expand-selection',
+      buildSelectionOutputTarget(articleId, sectionId, selection),
+      selection,
+    );
+  }, [articleId, captureSelection, editor, sectionId, startOperation]);
+
+  const compress = useCallback(() => {
+    if (!editor || !articleId || !sectionId) return;
+    if (useEditorStore.getState().aiGenerating) return;
+
+    const selection = captureSelection();
+    if (!selection) return;
+
+    startOperation(
+      'compress-selection',
+      buildSelectionOutputTarget(articleId, sectionId, selection),
+      selection,
+    );
+  }, [articleId, captureSelection, editor, sectionId, startOperation]);
+
+  const cancel = useCallback(async () => {
+    const operationId = pendingOperationIdRef.current ?? useEditorStore.getState().aiGeneratingTaskId;
+    if (!operationId) return;
+
+    pendingOperationIdRef.current = null;
+    useEditorStore.getState().setAIGenerating(false);
+
+    try {
+      await abort(operationId);
+    } catch (error) {
+      console.error('Failed to abort copilot writing operation:', error);
+    }
+  }, [abort]);
+
+  return { generate, rewrite, expand, compress, cancel };
 }

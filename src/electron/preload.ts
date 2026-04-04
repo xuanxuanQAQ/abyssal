@@ -45,7 +45,8 @@ const INVOKE_CHANNELS = [
   'db:memos:getByEntity',
   // db:notes
   'db:notes:list', 'db:notes:get', 'db:notes:create', 'db:notes:updateMeta',
-  'db:notes:delete', 'db:notes:upgradeToConcept', 'db:notes:onFileChanged',
+  'db:notes:delete', 'db:notes:upgradeToConcept',
+  'db:notes:getContent', 'db:notes:saveContent',
   // db:suggestedConcepts
   'db:suggestedConcepts:list', 'db:suggestedConcepts:accept',
   'db:suggestedConcepts:dismiss', 'db:suggestedConcepts:restore',
@@ -58,12 +59,19 @@ const INVOKE_CHANNELS = [
   'db:annotations:update', 'db:annotations:delete',
   // db:articles
   'db:articles:listOutlines', 'db:articles:create', 'db:articles:update',
+  'db:articles:getDocument', 'db:articles:saveDocument',
   'db:articles:getOutline', 'db:articles:updateOutlineOrder',
   'db:articles:getSection', 'db:articles:updateSection',
   'db:articles:getSectionVersions', 'db:articles:createSection',
   'db:articles:deleteSection', 'db:articles:search',
   'db:articles:getFullDocument', 'db:articles:saveDocumentSections',
   'db:articles:updateMetadata', 'db:articles:cleanupVersions',
+  // db:drafts
+  'db:drafts:listByArticle', 'db:drafts:get', 'db:drafts:create', 'db:drafts:update',
+  'db:drafts:delete', 'db:drafts:getDocument', 'db:drafts:saveDocument',
+  'db:drafts:getOutline', 'db:drafts:updateOutlineOrder', 'db:drafts:updateSection',
+  'db:drafts:createSection', 'db:drafts:deleteSection', 'db:drafts:getVersions',
+  'db:drafts:restoreVersion', 'db:drafts:createFromVersion',
   // db:assets
   'db:assets:upload', 'db:assets:list', 'db:assets:get', 'db:assets:delete',
   // db:relations
@@ -86,7 +94,7 @@ const INVOKE_CHANNELS = [
   // fs
   'fs:openPDF', 'fs:savePDFAnnotations', 'fs:exportArticle', 'fs:importFiles',
   'fs:createSnapshot', 'fs:restoreSnapshot', 'fs:listSnapshots', 'fs:cleanupSnapshots',
-  'fs:readNoteFile', 'fs:saveNoteFile', 'fs:selectImageFile',
+  'fs:selectImageFile',
   // advisory
   'advisory:getRecommendations', 'advisory:execute', 'advisory:getNotifications',
   // settings
@@ -108,6 +116,10 @@ const INVOKE_CHANNELS = [
   'workspace:create', 'workspace:openDialog', 'workspace:listRecent',
   'workspace:getCurrent', 'workspace:switch', 'workspace:removeRecent',
   'workspace:togglePin',
+  // copilot runtime
+  'copilot:execute', 'copilot:abort', 'copilot:resume',
+  'copilot:getOperationStatus', 'copilot:listSessions', 'copilot:getSession',
+  'copilot:clearSession',
 ] as const satisfies readonly IpcChannel[];
 
 /** Compile-time exhaustiveness: fails if any IpcChannel is missing above */
@@ -139,6 +151,8 @@ const PUSH_CHANNELS = [
   'push:exportProgress',
   'push:dlaPageReady',
   'push:aiCommand',
+  'push:copilotEvent',
+  'push:copilotSessionChanged',
 ] as const;
 
 const FAF_CHANNELS = [
@@ -164,6 +178,7 @@ async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
   // This indicates a protocol violation — throw instead of silently returning raw data.
   if (result !== undefined && result !== null) {
     console.warn(`[preload] IPC channel "${channel}" returned non-envelope response`);
+    throw new Error(`Malformed IPC response from channel "${channel}"`);
   }
   return result;
 }

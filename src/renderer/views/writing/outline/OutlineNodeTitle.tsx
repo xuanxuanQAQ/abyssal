@@ -3,17 +3,18 @@
  *
  * Rendered when `node.isEditing` is true.
  * - Auto-focused + select-all on mount
- * - Enter / blur -> save title via useUpdateSection
+ * - Enter / blur -> save title via draft-scoped section mutation
  * - Escape       -> cancel (node.reset)
  */
 
 import React, { useRef, useEffect, useState } from 'react';
 import type { NodeApi } from 'react-arborist';
-import { useUpdateSection } from '../../../core/ipc/hooks/useArticles';
+import { useUpdateDraftSection } from '../../../core/ipc/hooks/useDrafts';
 import type { TreeNodeData } from './useOutlineTree';
 
 interface OutlineNodeTitleProps {
   node: NodeApi<TreeNodeData>;
+  draftId: string;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -27,10 +28,10 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--text-primary)',
 };
 
-export function OutlineNodeTitle({ node }: OutlineNodeTitleProps) {
+export function OutlineNodeTitle({ node, draftId }: OutlineNodeTitleProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(node.data.name);
-  const updateSection = useUpdateSection();
+  const updateSection = useUpdateDraftSection();
 
   // Track whether we already submitted, to avoid double-save on blur after Enter
   const submittedRef = useRef(false);
@@ -49,7 +50,7 @@ export function OutlineNodeTitle({ node }: OutlineNodeTitleProps) {
 
     const trimmed = title.trim();
     if (trimmed && trimmed !== node.data.name) {
-      updateSection.mutate({ sectionId: node.id, patch: { title: trimmed } });
+      updateSection.mutate({ draftId, sectionId: node.id, patch: { title: trimmed } });
     }
     node.reset();
   };

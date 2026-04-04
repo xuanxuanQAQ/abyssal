@@ -10,6 +10,24 @@
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
 
+function normalizeWorkflowOptions(
+  workflowType: string,
+  config?: Record<string, unknown>,
+): Record<string, unknown> {
+  const options = config ? { ...config } : {};
+
+  // Writing UI historically sends sectionId; article workflow expects outlineEntryId.
+  if (workflowType === 'article') {
+    const outlineEntryId = options['outlineEntryId'];
+    const sectionId = options['sectionId'];
+    if ((outlineEntryId === undefined || outlineEntryId === null) && typeof sectionId === 'string' && sectionId.length > 0) {
+      options['outlineEntryId'] = sectionId;
+    }
+  }
+
+  return options;
+}
+
 export function registerWorkflowsHandlers(ctx: AppContext): void {
   const { logger } = ctx;
 
@@ -21,7 +39,7 @@ export function registerWorkflowsHandlers(ctx: AppContext): void {
     const resolvedType = workflowType === 'generate' ? 'article' : workflowType;
 
     // Build WorkflowOptions from the generic config map
-    const options = config ? { ...config } : {};
+    const options = normalizeWorkflowOptions(resolvedType, config as Record<string, unknown> | undefined);
     const state = orchestrator.start(resolvedType as any, options as any);
 
     logger.info('Workflow started via pipeline:start', { workflowType, workflowId: state.id });

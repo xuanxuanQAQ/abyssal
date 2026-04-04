@@ -244,6 +244,18 @@ export async function batchRun(args: CliArgs): Promise<void> {
       : [args.stage as WorkflowType];
 
     const startTime = Date.now();
+    const summaryTotals = {
+      total: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+    };
+    const failureReasons: Record<string, number> = {};
+
+    const recordFailureReason = (message: string | null | undefined): void => {
+      if (!message) return;
+      failureReasons[message] = (failureReasons[message] ?? 0) + 1;
+    };
 
     for (const stage of stages) {
       if (!runner.activeWorkflowMap) break;
@@ -266,11 +278,21 @@ export async function batchRun(args: CliArgs): Promise<void> {
 
         const result = await state.completionPromise;
 
+        summaryTotals.total += result.progress.totalItems;
+        summaryTotals.completed += result.progress.completedItems;
+        summaryTotals.failed += result.progress.failedItems;
+        summaryTotals.skipped += result.progress.skippedItems;
+        for (const error of result.progress.errors) {
+          recordFailureReason(error.message);
+        }
+
         process.stderr.write(`Stage ${stage}: ${result.status} (${result.progress.completedItems}/${result.progress.totalItems})\n`);
       } catch (err) {
         if (err instanceof CircuitBreakerTripped) {
+          recordFailureReason(`${err.category}: circuit_breaker`);
           process.stderr.write(`Stage ${stage}: CIRCUIT BREAKER — ${err.consecutiveFailures} consecutive ${err.category} failures\n`);
         } else {
+          recordFailureReason((err as Error).message);
           process.stderr.write(`Stage ${stage}: FAILED — ${(err as Error).message}\n`);
         }
       }
@@ -280,10 +302,10 @@ export async function batchRun(args: CliArgs): Promise<void> {
     const costStats = llmClient?.getCostStats();
     const summary: BatchSummary = {
       stageName: args.stage === 'all' ? 'Pipeline' : args.stage,
-      // TODO: Aggregate actual counts from WorkflowRunner progress tracking.
-      // WorkflowState.progress has completedItems/failedItems/skippedItems but
-      // they are per-stage, not accumulated across stages. Needs plumbing.
-      total: 0, completed: 0, failed: 0, skipped: 0,
+      total: summaryTotals.total,
+      completed: summaryTotals.completed,
+      failed: summaryTotals.failed,
+      skipped: summaryTotals.skipped,
       durationMs: Date.now() - startTime,
       tokenUsage: costStats
         ? Object.entries(costStats.byModel).map(([model, agg]) => ({
@@ -293,7 +315,7 @@ export async function batchRun(args: CliArgs): Promise<void> {
             cost: agg.totalCost,
           }))
         : [],
-      failureReasons: {},
+      failureReasons,
       conceptSuggestions: [],
       acquisitionSources: {},
     };

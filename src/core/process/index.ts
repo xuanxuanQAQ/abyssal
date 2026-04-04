@@ -13,7 +13,10 @@ import type {
   FigureCandidate,
   FigureBlock,
   PdfAnnotationRaw,
-} from '../types';
+  StyledLine,
+  PdfEmbeddedMetadata,
+  FirstPageMetadata,
+} from './types';
 import type {
   TextChunk,
   SectionMap,
@@ -39,6 +42,16 @@ import { compressForContext } from './compress';
 
 // ─── 类型重导出 ───
 
+export type {
+  StyledLine,
+  PdfEmbeddedMetadata,
+  FirstPageMetadata,
+  TextExtractionResult,
+  ExtractedReference,
+  FigureCandidate,
+  FigureBlock,
+  PdfAnnotationRaw,
+} from './types';
 export type { ExtractTextOptions } from './extract-text';
 export type { ExtractSectionsResult } from './extract-sections';
 export type { ChunkTextOptions } from './chunk-text';
@@ -84,7 +97,7 @@ export class ProcessService {
 
   extractSections(
     fullText: string,
-    styledLines?: import('../types').StyledLine[],
+    styledLines?: StyledLine[],
   ): ExtractSectionsResult {
     return extractSections(fullText, styledLines, this.logger);
   }

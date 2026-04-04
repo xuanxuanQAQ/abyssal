@@ -3,7 +3,7 @@
 
 import type Database from 'better-sqlite3';
 import type { PaperId } from '../../types/common';
-import type { ExtractedReference } from '../../types';
+import type { ExtractedReference } from '../../process';
 
 // ─── 数据库行类型 ───
 

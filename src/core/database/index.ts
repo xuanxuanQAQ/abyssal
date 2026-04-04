@@ -14,7 +14,7 @@ import type { IDbService } from '../types/db-service';
 import { DatabaseError } from '../types/errors';
 import type { Logger } from '../infra/logger';
 import type {
-  PaperId, ConceptId, ChunkId, ArticleId, OutlineEntryId,
+  PaperId, ConceptId, ChunkId, ArticleId, OutlineEntryId, DraftId,
   MemoId, NoteId, AnnotationId, SuggestionId,
   PaginatedResult,
 } from '../types/common';
@@ -22,7 +22,7 @@ import type { PaperMetadata, PaperStatus } from '../types/paper';
 import type { ConceptDefinition } from '../types/concept';
 import type { ConceptMapping, RelationType, BilingualEvidence } from '../types/mapping';
 import type { Annotation } from '../types/annotation';
-import type { Article, OutlineEntry, SectionDraft } from '../types/article';
+import type { Article, Draft, DraftSectionMeta, DraftVersion, OutlineEntry, SectionDraft } from '../types/article';
 import type { TextChunk } from '../types/chunk';
 import type { ResearchMemo } from '../types/memo';
 import type { ResearchNote } from '../types/note';
@@ -54,6 +54,7 @@ import * as memosDao from './dao/memos';
 import * as notesDao from './dao/notes';
 import * as suggestionsDao from './dao/suggestions';
 import * as articlesDao from './dao/articles';
+import * as draftsDao from './dao/drafts';
 import * as discoverRunsDao from './dao/discover-runs';
 import * as relationsDao from './dao/relations';
 import * as referencesDao from './dao/references';
@@ -621,18 +622,13 @@ export class DatabaseService implements IDbService {
     this.withOp(() => notesDao.createNote(this.db, note, chunks, embeddings));
   }
 
-  onNoteFileChanged(
+  saveNoteContent(
     noteId: NoteId,
-    frontmatter: {
-      title: string;
-      linkedPaperIds: PaperId[];
-      linkedConceptIds: ConceptId[];
-      tags: string[];
-    },
-    newChunks: TextChunk[],
-    newEmbeddings: (Float32Array | null)[],
+    documentJson: string,
+    chunks: TextChunk[],
+    embeddings: (Float32Array | null)[],
   ): void {
-    this.withOp(() => notesDao.onNoteFileChanged(this.db, noteId, frontmatter, newChunks, newEmbeddings));
+    this.withOp(() => notesDao.saveNoteContent(this.db, noteId, documentJson, chunks, embeddings));
   }
 
   updateNoteMeta(
@@ -656,10 +652,6 @@ export class DatabaseService implements IDbService {
 
   getNote(id: NoteId): ResearchNote | null {
     return this.withOp(() => notesDao.getNote(this.db, id));
-  }
-
-  getNoteByFilePath(filePath: string): ResearchNote | null {
-    return this.withOp(() => notesDao.getNoteByFilePath(this.db, filePath));
   }
 
   getAllNotes(): ResearchNote[] {
@@ -726,7 +718,7 @@ export class DatabaseService implements IDbService {
 
   updateArticle(
     id: ArticleId,
-    updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status'>>,
+    updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status' | 'documentJson' | 'abstract' | 'keywords' | 'authors' | 'targetWordCount'>>,
   ): number {
     return this.withOp(() => articlesDao.updateArticle(this.db, id, updates));
   }
@@ -739,12 +731,89 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => articlesDao.deleteArticle(this.db, id));
   }
 
+  getArticleDocument(articleId: ArticleId): { articleId: ArticleId; documentJson: string; updatedAt: string } {
+    return this.withOp(() => articlesDao.getArticleDocument(this.db, articleId));
+  }
+
+  saveArticleDocument(articleId: ArticleId, documentJson: string, source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite'): void {
+    this.withOp(() => articlesDao.saveArticleDocument(this.db, articleId, documentJson, source));
+  }
+
   setOutline(articleId: ArticleId, entries: OutlineEntry[]): void {
     this.withOp(() => articlesDao.setOutline(this.db, articleId, entries));
   }
 
   getOutline(articleId: ArticleId): OutlineEntry[] {
     return this.withOp(() => articlesDao.getOutline(this.db, articleId));
+  }
+
+  listDraftsByArticle(articleId: ArticleId): Draft[] {
+    return this.withOp(() => draftsDao.listDraftsByArticle(this.db, articleId));
+  }
+
+  getDraft(id: DraftId): Draft | null {
+    return this.withOp(() => draftsDao.getDraft(this.db, id));
+  }
+
+  createDraft(draft: Omit<Draft, 'createdAt' | 'updatedAt'>): DraftId {
+    return this.withOp(() => draftsDao.createDraft(this.db, draft));
+  }
+
+  updateDraft(
+    id: DraftId,
+    updates: Partial<Pick<Draft, 'title' | 'status' | 'language' | 'audience' | 'writingStyle' | 'cslStyleId' | 'abstract' | 'keywords' | 'targetWordCount' | 'lastOpenedAt'>>,
+  ): number {
+    return this.withOp(() => draftsDao.updateDraft(this.db, id, updates));
+  }
+
+  deleteDraft(id: DraftId): number {
+    return this.withOp(() => draftsDao.deleteDraft(this.db, id));
+  }
+
+  getDraftDocument(draftId: DraftId): { draftId: DraftId; articleId: ArticleId; documentJson: string; updatedAt: string } {
+    return this.withOp(() => draftsDao.getDraftDocument(this.db, draftId));
+  }
+
+  saveDraftDocument(draftId: DraftId, documentJson: string, source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite' | 'ai-derive-draft' | 'duplicate'): void {
+    this.withOp(() => draftsDao.saveDraftDocument(this.db, draftId, documentJson, source));
+  }
+
+  getDraftSections(draftId: DraftId) {
+    return this.withOp(() => draftsDao.getDraftSections(this.db, draftId));
+  }
+
+  getDraftSectionMeta(draftId: DraftId): DraftSectionMeta[] {
+    return this.withOp(() => draftsDao.getDraftSectionMeta(this.db, draftId));
+  }
+
+  updateDraftSectionMeta(
+    draftId: DraftId,
+    sectionId: string,
+    patch: Partial<Pick<DraftSectionMeta, 'lineageId' | 'basedOnSectionId' | 'status' | 'writingInstruction' | 'conceptIds' | 'paperIds' | 'aiModel' | 'evidenceStatus' | 'evidenceGaps'>>,
+  ): number {
+    return this.withOp(() => draftsDao.updateDraftSectionMeta(this.db, draftId, sectionId, patch));
+  }
+
+  updateDraftSectionContent(
+    draftId: DraftId,
+    sectionId: string,
+    content: string,
+    documentJson?: string | null,
+    source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite' | 'ai-derive-draft' | 'duplicate' = 'manual',
+  ): void {
+    this.withOp(() => draftsDao.updateDraftSectionContent(this.db, draftId, sectionId, content, documentJson, source));
+  }
+
+  getDraftVersions(draftId: DraftId): DraftVersion[] {
+    return this.withOp(() => draftsDao.getDraftVersions(this.db, draftId));
+  }
+
+  restoreDraftVersion(draftId: DraftId, version: number): void {
+    this.withOp(() => draftsDao.restoreDraftVersion(this.db, draftId, version));
+  }
+
+  createDraftFromVersion(draftId: DraftId, version: number, title: string): DraftId {
+    return this.withOp(() => draftsDao.createDraftFromVersion(this.db, draftId, version, title));
   }
 
   getOutlineEntry(id: OutlineEntryId): OutlineEntry | null {
@@ -766,8 +835,8 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => articlesDao.searchSections(this.db, query));
   }
 
-  addSectionDraft(outlineEntryId: OutlineEntryId, content: string, llmBackend: string): number {
-    return this.withOp(() => articlesDao.addSectionDraft(this.db, outlineEntryId, content, llmBackend));
+  addSectionDraft(outlineEntryId: OutlineEntryId, content: string, llmBackend: string, source?: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite', documentJson?: string | null): number {
+    return this.withOp(() => articlesDao.addSectionDraft(this.db, outlineEntryId, content, llmBackend, source, documentJson));
   }
 
   getSectionDrafts(outlineEntryId: OutlineEntryId): SectionDraft[] {
@@ -837,7 +906,7 @@ export class DatabaseService implements IDbService {
   // §11 参考文献 + 水合日志
   // ════════════════════════════════════════
 
-  upsertReferences(paperId: PaperId, refs: import('../types').ExtractedReference[]): number {
+  upsertReferences(paperId: PaperId, refs: import('../process').ExtractedReference[]): number {
     return this.withOp(() => referencesDao.upsertReferences(this.db, paperId, refs));
   }
 

@@ -9,7 +9,7 @@
  */
 
 import type {
-  PaperId, ConceptId, ChunkId, ArticleId, OutlineEntryId,
+  PaperId, ConceptId, ChunkId, ArticleId, OutlineEntryId, DraftId,
   MemoId, NoteId, AnnotationId, SuggestionId,
   PaginatedResult,
 } from './common';
@@ -17,7 +17,7 @@ import type { PaperMetadata, PaperStatus } from './paper';
 import type { ConceptDefinition } from './concept';
 import type { ConceptMapping, RelationType, BilingualEvidence } from './mapping';
 import type { Annotation } from './annotation';
-import type { Article, ArticleAsset, OutlineEntry, SectionDraft } from './article';
+import type { Article, ArticleAsset, Draft, DraftSectionMeta, DraftVersion, OutlineEntry, SectionDraft } from './article';
 import type { TextChunk } from './chunk';
 import type { ResearchMemo } from './memo';
 import type { ResearchNote } from './note';
@@ -127,13 +127,12 @@ export interface IDbService {
 
   // ─── 笔记 ───
   createNote(note: Omit<ResearchNote, 'createdAt' | 'updatedAt'>, chunks: TextChunk[], embeddings: (Float32Array | null)[]): void;
-  onNoteFileChanged(noteId: NoteId, frontmatter: { title: string; linkedPaperIds: PaperId[]; linkedConceptIds: ConceptId[]; tags: string[] }, newChunks: TextChunk[], newEmbeddings: (Float32Array | null)[]): void;
+  saveNoteContent(noteId: NoteId, documentJson: string, chunks: TextChunk[], embeddings: (Float32Array | null)[]): void;
   linkMemoToNote(memoId: MemoId, noteId: NoteId): void;
   linkNoteToConcept(noteId: NoteId, conceptId: ConceptId): void;
   updateNoteMeta(id: NoteId, updates: Partial<Pick<ResearchNote, 'title' | 'linkedPaperIds' | 'linkedConceptIds' | 'tags'>>): ResearchNote | null;
   queryNotes(filter?: { conceptIds?: string[]; paperIds?: string[]; tags?: string[]; searchText?: string }): ResearchNote[];
   getNote(id: NoteId): ResearchNote | null;
-  getNoteByFilePath(filePath: string): ResearchNote | null;
   getAllNotes(): ResearchNote[];
   deleteNote(id: NoteId): number;
 
@@ -149,16 +148,32 @@ export interface IDbService {
   // ─── 文章 ───
   createArticle(article: Omit<Article, 'createdAt' | 'updatedAt'>): ArticleId;
   getArticle(id: ArticleId): Article | null;
-  updateArticle(id: ArticleId, updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status'>>): number;
+  updateArticle(id: ArticleId, updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status' | 'documentJson' | 'abstract' | 'keywords' | 'authors' | 'targetWordCount'>>): number;
   getAllArticles(): Article[];
   deleteArticle(id: ArticleId): number;
+  getArticleDocument(articleId: ArticleId): { articleId: ArticleId; documentJson: string; updatedAt: string };
+  saveArticleDocument(articleId: ArticleId, documentJson: string, source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite'): void;
   setOutline(articleId: ArticleId, entries: OutlineEntry[]): void;
   getOutline(articleId: ArticleId): OutlineEntry[];
+  listDraftsByArticle(articleId: ArticleId): Draft[];
+  getDraft(id: DraftId): Draft | null;
+  createDraft(draft: Omit<Draft, 'createdAt' | 'updatedAt'>): DraftId;
+  updateDraft(id: DraftId, updates: Partial<Pick<Draft, 'title' | 'status' | 'language' | 'audience' | 'writingStyle' | 'cslStyleId' | 'abstract' | 'keywords' | 'targetWordCount' | 'lastOpenedAt'>>): number;
+  deleteDraft(id: DraftId): number;
+  getDraftDocument(draftId: DraftId): { draftId: DraftId; articleId: ArticleId; documentJson: string; updatedAt: string };
+  saveDraftDocument(draftId: DraftId, documentJson: string, source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite' | 'ai-derive-draft' | 'duplicate'): void;
+  getDraftSections(draftId: DraftId): Array<{ sectionId: string; title: string; parentId: string | null; sortIndex: number; depth: number; wordCount: number; lineageId: string; basedOnSectionId: string | null; status: string; writingInstruction: string | null; conceptIds: string[]; paperIds: string[]; aiModel: string | null; evidenceStatus: string | null; evidenceGaps: string[] }>;
+  getDraftSectionMeta(draftId: DraftId): DraftSectionMeta[];
+  updateDraftSectionMeta(draftId: DraftId, sectionId: string, patch: Partial<Pick<DraftSectionMeta, 'lineageId' | 'basedOnSectionId' | 'status' | 'writingInstruction' | 'conceptIds' | 'paperIds' | 'aiModel' | 'evidenceStatus' | 'evidenceGaps'>>): number;
+  updateDraftSectionContent(draftId: DraftId, sectionId: string, content: string, documentJson?: string | null, source?: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite' | 'ai-derive-draft' | 'duplicate'): void;
+  getDraftVersions(draftId: DraftId): DraftVersion[];
+  restoreDraftVersion(draftId: DraftId, version: number): void;
+  createDraftFromVersion(draftId: DraftId, version: number, title: string): DraftId;
   getOutlineEntry(id: OutlineEntryId): OutlineEntry | null;
   updateOutlineEntry(id: OutlineEntryId, updates: Partial<Pick<OutlineEntry, 'title' | 'coreArgument' | 'writingInstruction' | 'conceptIds' | 'paperIds' | 'status' | 'sortOrder'>>): number;
   markOutlineEntryDeleted(id: OutlineEntryId): number;
   searchSections(query: string): Array<{ outlineEntryId: OutlineEntryId; articleId: ArticleId; title: string; snippet: string }>;
-  addSectionDraft(outlineEntryId: OutlineEntryId, content: string, llmBackend: string): number;
+  addSectionDraft(outlineEntryId: OutlineEntryId, content: string, llmBackend: string, source?: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite', documentJson?: string | null): number;
   getSectionDrafts(outlineEntryId: OutlineEntryId): SectionDraft[];
   markEditedParagraphs(outlineEntryId: OutlineEntryId, version: number, paragraphIndices: number[]): number;
 
@@ -286,9 +301,9 @@ const _dbServiceMethodMap: Record<keyof IDbService, true> = {
   addMemo: true, markMemoIndexed: true, updateMemo: true,
   getMemosByEntity: true, queryMemos: true, getMemo: true, deleteMemo: true,
   // 笔记
-  createNote: true, onNoteFileChanged: true, linkMemoToNote: true,
+  createNote: true, saveNoteContent: true, linkMemoToNote: true,
   linkNoteToConcept: true, updateNoteMeta: true, queryNotes: true,
-  getNote: true, getNoteByFilePath: true, getAllNotes: true, deleteNote: true,
+  getNote: true, getAllNotes: true, deleteNote: true,
   // 概念建议
   addSuggestedConcept: true, adoptSuggestedConcept: true,
   dismissSuggestedConcept: true, getSuggestedConcepts: true,
@@ -296,8 +311,15 @@ const _dbServiceMethodMap: Record<keyof IDbService, true> = {
   getSuggestedConceptsStats: true,
   // 文章
   createArticle: true, getArticle: true, updateArticle: true,
-  getAllArticles: true, deleteArticle: true, setOutline: true,
-  getOutline: true, getOutlineEntry: true, updateOutlineEntry: true,
+  getAllArticles: true, deleteArticle: true, getArticleDocument: true,
+  saveArticleDocument: true, setOutline: true,
+  getOutline: true, listDraftsByArticle: true, getDraft: true,
+  createDraft: true, updateDraft: true, deleteDraft: true,
+  getDraftDocument: true, saveDraftDocument: true,
+  getDraftSections: true, getDraftSectionMeta: true,
+  updateDraftSectionMeta: true, updateDraftSectionContent: true,
+  getDraftVersions: true, restoreDraftVersion: true,
+  createDraftFromVersion: true, getOutlineEntry: true, updateOutlineEntry: true,
   markOutlineEntryDeleted: true, searchSections: true,
   addSectionDraft: true, getSectionDrafts: true, markEditedParagraphs: true,
   // 全文档

@@ -66,6 +66,7 @@ function renderContentPane(source: ContextSource): React.ReactNode {
         <WritingSectionPane
           articleId={source.articleId}
           sectionId={source.sectionId}
+          {...(source.draftId ? { draftId: source.draftId } : {})}
         />
       );
     case 'memo':

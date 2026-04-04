@@ -139,6 +139,14 @@ export function resetAppStoreForProjectSwitch(): void {
     focusedGraphNodeType: null,
     // NotesSlice
     memoQuickInputOpen: false,
+    memoQuickInputContext: {
+      sourceView: 'global',
+      initialText: '',
+      paperIds: [],
+      conceptIds: [],
+      outlineId: null,
+      keepOpenOnSubmit: false,
+    },
     sectionQualityReports: {},
     projectWizardOpen: false,
     // SelectionSlice v2.0

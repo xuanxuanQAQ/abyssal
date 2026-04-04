@@ -1,15 +1,10 @@
 # ══════════════════════════════════════════════════════════════
-# Abyssal CI — 全量检查流水线
+# Abyssal CI — 分层验证流水线
 #
-# 检查维度（本地 npm test 只覆盖 #4）：
-#   1. 类型安全     tsc --noEmit（全项目零 TS 错误）
-#   2. 代码风格     eslint（强制一致性）
-#   3. 原生模块编译  postinstall → npm rebuild better-sqlite3（ABI 对齐系统 Node.js）
-#   4. 单元测试     vitest --project unit（纯逻辑，无 I/O）
-#   5. 集成测试     vitest --project integration（真实 SQLite）
-#   6. 渲染测试     vitest --project renderer（React 组件 + jsdom）
-#   7. 构建验证     esbuild + vite build（确保产物可生成）
-#   8. 打包验证     electron-builder --dir（确保可打包，不发布）
+# 目标：
+#   1. PR 保持快速反馈：Ubuntu + 仅跑受影响测试项目
+#   2. 主干 push 保留跨平台兜底：Windows/macOS/Linux
+#   3. build / package 只在必要时执行，避免测试改动重复耗时构建
 # ══════════════════════════════════════════════════════════════
 
 name: CI
@@ -31,10 +26,6 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # ──────────────────────────────────────────
-  # Gate 1: 快速检查（<2 分钟）
-  # 类型 + 风格，不需要原生模块
-  # ──────────────────────────────────────────
   check:
     name: Typecheck + Lint
     runs-on: ubuntu-latest
@@ -57,13 +48,113 @@ jobs:
       - name: ESLint (zero errors, warnings allowed)
         run: npx eslint src/
 
-  # ──────────────────────────────────────────
-  # Gate 2: 测试矩阵（核心）
-  # 跨 OS 验证，含原生模块重编
-  # ──────────────────────────────────────────
-  test:
-    name: Test (${{ matrix.os }})
-    needs: check
+  changes:
+    name: Detect changed surfaces
+    runs-on: ubuntu-latest
+    outputs:
+      unit: ${{ steps.filter.outputs.unit }}
+      integration: ${{ steps.filter.outputs.integration }}
+      renderer: ${{ steps.filter.outputs.renderer }}
+      build: ${{ steps.filter.outputs.build }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Classify changed files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            unit:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vitest.config.ts'
+              - 'tsconfig.json'
+              - 'tsconfig.main.json'
+              - 'src/adapter/**'
+              - 'src/cli/**'
+              - 'src/copilot-runtime/**'
+              - 'src/core/**'
+              - 'src/electron/**'
+              - 'src/shared-types/**'
+            integration:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vitest.config.ts'
+              - 'tsconfig.json'
+              - 'tsconfig.main.json'
+              - 'src/core/**'
+              - 'src/db-process/**'
+              - 'src/dla-process/**'
+              - 'src/electron/**'
+              - 'src/mcp-adapter/**'
+              - 'src/shared/**'
+              - 'src/shared-types/**'
+              - 'tests/integration/**'
+            renderer:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vitest.config.ts'
+              - 'tsconfig.json'
+              - 'tsconfig.main.json'
+              - 'src/renderer/**'
+              - 'src/electron/preload.ts'
+              - 'src/electron/ipc/**'
+              - 'src/shared-types/**'
+            build:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'electron-builder.yml'
+              - 'esbuild.main.mjs'
+              - 'vite.renderer.config.ts'
+              - 'tsconfig.json'
+              - 'tsconfig.main.json'
+              - 'assets/**'
+              - 'config/**'
+              - 'src/**'
+              - '!src/**/*.test.ts'
+              - '!src/**/*.test.tsx'
+              - '!src/**/__tests__/**'
+              - '!src/__test-utils__/**'
+              - 'templates/**'
+
+  pr-test:
+    name: PR tests (ubuntu)
+    needs: [check, changes]
+    if: github.event_name == 'pull_request' && (needs.changes.outputs.unit == 'true' || needs.changes.outputs.integration == 'true' || needs.changes.outputs.renderer == 'true')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        if: needs.changes.outputs.unit == 'true'
+        run: npx vitest run --project unit --reporter=verbose
+
+      - name: Integration tests
+        if: needs.changes.outputs.integration == 'true'
+        run: npx vitest run --project integration --reporter=verbose
+
+      - name: Renderer tests
+        if: needs.changes.outputs.renderer == 'true'
+        run: npx vitest run --project renderer --reporter=verbose
+
+  push-test:
+    name: Push tests (${{ matrix.os }})
+    needs: [check, changes]
+    if: github.event_name == 'push' && (needs.changes.outputs.unit == 'true' || needs.changes.outputs.integration == 'true' || needs.changes.outputs.renderer == 'true')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -80,33 +171,23 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        # postinstall → npm rebuild better-sqlite3 → 系统 Node ABI（子进程直接可用）
 
       - name: Unit tests
+        if: needs.changes.outputs.unit == 'true'
         run: npx vitest run --project unit --reporter=verbose
 
       - name: Integration tests
+        if: needs.changes.outputs.integration == 'true'
         run: npx vitest run --project integration --reporter=verbose
 
       - name: Renderer tests
+        if: needs.changes.outputs.renderer == 'true'
         run: npx vitest run --project renderer --reporter=verbose
 
-      - name: Upload coverage (ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 7
-        continue-on-error: true
-
-  # ──────────────────────────────────────────
-  # Gate 3: 构建验证
-  # 确保 esbuild + vite 产物可正常生成
-  # ──────────────────────────────────────────
   build:
-    name: Build verification
-    needs: check
+    name: Build verification (ubuntu)
+    needs: [check, changes]
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,22 +200,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 构建主进程（esbuild）
       - name: Build main process
         run: node esbuild.main.mjs
 
-      # 构建渲染进程（vite）
       - name: Build renderer
         run: npx vite build -c vite.renderer.config.ts
 
-      # 验证产物存在
       - name: Verify build artifacts
         run: |
           test -f dist/electron/main.js || (echo "main.js missing" && exit 1)
           test -d dist/renderer || (echo "renderer/ missing" && exit 1)
           echo "Build artifacts OK"
 
-      # 上传构建产物供 package job 复用
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -142,15 +219,10 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # ──────────────────────────────────────────
-  # Gate 4: 打包验证（仅 main 分支）
-  # 确保 electron-builder 能产出安装包
-  # 复用 build job 的 dist/ 产物，避免重复构建
-  # ──────────────────────────────────────────
   package:
     name: Package (${{ matrix.os }})
-    needs: [test, build]
-    if: github.ref == 'refs/heads/main'
+    needs: [push-test, build, changes]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true' && needs.build.result == 'success' && (needs.push-test.result == 'success' || needs.push-test.result == 'skipped')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -168,18 +240,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 下载 build job 的产物（避免重复构建）
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: dist-build
           path: dist/
 
-      # --dir 只生成目录形式的包，不生成安装程序（快 + 不需要签名）
       - name: Package (dir only)
         run: npx electron-builder --dir
         env:
-          # 跳过代码签名（CI 不需要）
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Verify package output

@@ -78,6 +78,9 @@ function AppShell() {
   const { showWizard: autoShowWizard } = useProjectSetup();
   const projectWizardOpen = useAppStore((s) => s.projectWizardOpen);
   const setProjectWizardOpen = useAppStore((s) => s.setProjectWizardOpen);
+  const memoQuickInputOpen = useAppStore((s) => s.memoQuickInputOpen);
+  const openMemoQuickInput = useAppStore((s) => s.openMemoQuickInput);
+  const closeMemoQuickInput = useAppStore((s) => s.closeMemoQuickInput);
   const queryClient = useQueryClient();
 
   // 自动弹出向导（首次启动无项目时）
@@ -108,7 +111,11 @@ function AppShell() {
   // Ctrl+Shift+N 快捷键打开 MemoQuickInput
   useHotkey('Ctrl+Shift+N', () => {
     const store = useAppStore.getState();
-    store.setMemoQuickInputOpen(!store.memoQuickInputOpen);
+    if (memoQuickInputOpen) {
+      closeMemoQuickInput();
+      return;
+    }
+    openMemoQuickInput({ sourceView: store.activeView });
   });
 
   return (

@@ -8,7 +8,7 @@
 import type { StateCreator } from 'zustand';
 import type { ViewType } from '../../../../shared-types/enums';
 import type { NavigationTarget } from '../../navigation/types';
-import { applyNavigation } from '../../navigation/navigateTo';
+import { applyNavigation, resolveTargetView } from '../../navigation/navigateTo';
 import type { SelectionSlice } from './selectionSlice';
 import type { PanelSlice } from './panelSlice';
 import type { SearchSlice } from './searchSlice';
@@ -26,6 +26,50 @@ export interface NavigationSlice {
   /** 简单视图切换（不涉及实体选择，仅维护 previousView） */
   switchView: (view: ViewType) => void;
   goBack: () => void;
+}
+
+function restoreSelectionFromTarget(state: SelectionSlice, target: NavigationTarget): void {
+  state.selectedPaperId = null;
+  state.selectionMode = 'explicit';
+  state.explicitIds = {};
+  state.excludedIds = {};
+  state.selectionAnchorId = null;
+  state.selectedConceptId = null;
+  state.selectedMappingId = null;
+  state.selectedMappingPaperId = null;
+  state.selectedMappingConceptId = null;
+  state.selectedSectionId = null;
+  state.selectedArticleId = null;
+  state.selectedDraftId = null;
+  state.focusedGraphNodeId = null;
+  state.focusedGraphNodeType = null;
+  state.selectedMemoId = null;
+  state.selectedNoteId = null;
+
+  switch (target.type) {
+    case 'paper':
+      state.selectedPaperId = target.id;
+      state.explicitIds = { [target.id]: true };
+      state.selectionAnchorId = target.id;
+      break;
+    case 'concept':
+      state.selectedConceptId = target.id;
+      break;
+    case 'section':
+      state.selectedSectionId = target.sectionId;
+      state.selectedArticleId = target.articleId;
+      state.selectedDraftId = target.draftId ?? null;
+      break;
+    case 'graph':
+      state.focusedGraphNodeId = target.focusNodeId;
+      break;
+    case 'note':
+      state.selectedNoteId = target.noteId;
+      break;
+    case 'memo':
+      state.selectedMemoId = target.memoId;
+      break;
+  }
 }
 
 export const createNavigationSlice: StateCreator<
@@ -58,23 +102,14 @@ export const createNavigationSlice: StateCreator<
   goBack: () => {
     const stack = get().navigationStack;
     if (stack.length < 2) return;
-    // 弹出当前，跳转到前一个
+    const currentView = get().activeView;
     const prev = stack[stack.length - 2];
     if (prev) {
       set((state) => {
         state.navigationStack = stack.slice(0, -1);
-      });
-      // 重新 navigateTo 不推栈，直接设状态
-      const prevView =
-        prev.type === 'paper'
-          ? prev.view
-          : prev.type === 'concept'
-            ? 'analysis'
-            : prev.type === 'section'
-              ? 'writing'
-              : 'graph';
-      set((state) => {
-        state.activeView = prevView;
+        state.previousView = currentView;
+        state.activeView = resolveTargetView(prev);
+        restoreSelectionFromTarget(state, prev);
       });
     }
   },

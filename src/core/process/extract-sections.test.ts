@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { extractSections } from './extract-sections';
-import type { StyledLine } from '../types';
+import type { StyledLine } from './types';
 
 describe('extractSections', () => {
   const baseStyled = (text: string, fontSize = 12, isBold = false, pageIndex = 0): StyledLine => ({

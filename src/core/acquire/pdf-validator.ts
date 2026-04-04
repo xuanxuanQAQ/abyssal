@@ -2,7 +2,7 @@
 // §8: 魔数 → mupdf.js → 页数 三步管线
 
 import * as fs from 'node:fs';
-import type { PdfValidation } from '../types';
+import type { PdfValidation } from './types';
 import { PdfCorruptedError } from '../types/errors';
 
 // PDF 魔数: %PDF-
@@ -50,7 +50,8 @@ export async function validatePdf(filePath: string): Promise<PdfValidation> {
       mupdf = await import('mupdf');
     } catch {
       try {
-        mupdf = await import('mupdf/dist/mupdf.js' as string);
+        const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+        mupdf = await import(/* @vite-ignore */ fallbackSpecifier);
       } catch {
         // mupdf 不可用——跳过步骤 2 和 3，仅依赖魔数检测
         return { ...base, valid: true, reason: null, pageCount: null };

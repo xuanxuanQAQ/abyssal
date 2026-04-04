@@ -129,8 +129,6 @@ export interface CapabilityServices {
   pushManager?: {
     pushNotification: (n: { type: string; title: string; message: string }) => void;
   } | null;
-  /** Write a note file to the workspace (frontmatter + body) */
-  writeNoteFile?: (noteId: string, content: string) => Promise<void>;
   /** Callback for Level 2 operations requiring user confirmation */
   confirmWrite?: ((toolName: string, description: string, args: Record<string, unknown>) => Promise<boolean>) | null;
   /** Config provider for reading/updating settings */

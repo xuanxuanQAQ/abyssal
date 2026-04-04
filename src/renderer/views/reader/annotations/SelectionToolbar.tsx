@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Highlighter, StickyNote, Tag, ChevronDown, PenLine, Image } from 'lucide-react';
+import { Highlighter, StickyNote, Tag, ChevronDown, Image } from 'lucide-react';
 import { ColorPicker } from './ColorPicker';
 import type { HighlightColor } from '../../../../shared-types/enums';
 import { HIGHLIGHT_COLOR_MAP as COLOR_MAP } from '../shared/highlightColors';
@@ -11,7 +11,6 @@ export function SelectionToolbar({
   onNote,
   onConceptTag,
   onColorChange,
-  onMemo,
   capturedImageCount = 0,
 }: {
   position: { x: number; y: number } | null;
@@ -20,8 +19,6 @@ export function SelectionToolbar({
   onNote: () => void;
   onConceptTag: () => void;
   onColorChange: (color: HighlightColor) => void;
-  /** v1.3: Record memo — opens QuickMemoFloat with selected text */
-  onMemo?: () => void;
   /** Number of auto-captured images (formula/figure/table) in the selection range */
   capturedImageCount?: number;
 }) {
@@ -148,17 +145,6 @@ export function SelectionToolbar({
         <Tag size={16} />
         <span>概念</span>
       </button>
-
-      {/* v1.3: Quick memo button */}
-      {onMemo && (
-        <>
-          <div style={separatorStyle} />
-          <button type="button" onClick={onMemo} style={buttonStyle}>
-            <PenLine size={16} />
-            <span>记录</span>
-          </button>
-        </>
-      )}
 
       {/* Captured image indicator */}
       {capturedImageCount > 0 && (

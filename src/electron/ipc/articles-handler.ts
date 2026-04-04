@@ -8,11 +8,18 @@
 
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
-import { asArticleId, asOutlineEntryId } from '../../core/types/common';
-import type { Article, OutlineEntry, SectionDraft } from '../../core/types/article';
+import { asArticleId, asDraftId, asOutlineEntryId } from '../../core/types/common';
+import type { Article, Draft, OutlineEntry, SectionDraft } from '../../core/types/article';
+import {
+  deleteSectionFromDocument,
+  insertSectionInDocument,
+  parseArticleDocument,
+  renameSectionInDocument,
+  reorderSectionsInDocument,
+} from '../../shared/writing/documentOutline';
 import type {
-  ArticleOutline, SectionNode, SectionContent, SectionVersion,
-  SectionOrder,
+  ArticleOutline, DraftOutline, DraftSummary, SectionNode, SectionContent, SectionVersion,
+  SectionOrder, ArticleAuthorInfo,
 } from '../../shared-types/models';
 import type { CitationStyle } from '../../shared-types/enums';
 import type { SectionSearchResult } from '../../shared-types/ipc';
@@ -25,7 +32,21 @@ function articleToOutline(a: Article, sections: SectionNode[]): ArticleOutline {
     title: a.title ?? 'Untitled',
     citationStyle: mapCslToFrontend(a.cslStyleId ?? 'gb-t-7714'),
     exportFormat: 'markdown',
-    metadata: {},
+    metadata: {
+      writingStyle: a.style ?? undefined,
+      abstract: a.abstract ?? undefined,
+      keywords: a.keywords?.length ? a.keywords : undefined,
+      authors: a.authors?.length
+        ? a.authors.map((au): ArticleAuthorInfo => {
+            const info: ArticleAuthorInfo = { name: au.name };
+            if (au.affiliation) info.affiliation = au.affiliation;
+            if (au.email) info.email = au.email;
+            if (au.isCorresponding != null) info.isCorresponding = au.isCorresponding;
+            return info;
+          })
+        : undefined,
+      targetWordCount: a.targetWordCount ?? undefined,
+    },
     createdAt: a.createdAt ?? new Date().toISOString(),
     updatedAt: a.updatedAt ?? new Date().toISOString(),
     sections,
@@ -41,8 +62,96 @@ function outlineEntryToSectionNode(e: OutlineEntry): SectionNode {
     status: e.status ?? 'pending',
     wordCount: 0,
     writingInstructions: e.writingInstruction ?? null,
+    conceptIds: e.conceptIds ?? [],
+    paperIds: e.paperIds ?? [],
     aiModel: null,
     children: [],
+  };
+}
+
+function draftToSummary(draft: Draft): DraftSummary {
+  return {
+    id: draft.id,
+    articleId: draft.articleId,
+    title: draft.title,
+    status: draft.status,
+    metadata: {
+      abstract: draft.abstract ?? undefined,
+      keywords: draft.keywords?.length ? draft.keywords : undefined,
+      writingStyle: draft.writingStyle ?? undefined,
+      targetWordCount: draft.targetWordCount ?? undefined,
+      citationStyle: mapCslToFrontend(draft.cslStyleId ?? 'gb-t-7714'),
+      language: draft.language ?? undefined,
+      audience: draft.audience ?? undefined,
+    },
+    basedOnDraftId: draft.basedOnDraftId ?? undefined,
+    source: draft.source,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt,
+    lastOpenedAt: draft.lastOpenedAt ?? undefined,
+  };
+}
+
+function draftSectionToNode(section: {
+  sectionId: string;
+  title: string;
+  parentId: string | null;
+  sortIndex: number;
+  status: string;
+  wordCount: number;
+  writingInstruction: string | null;
+  conceptIds: string[];
+  paperIds: string[];
+  aiModel: string | null;
+  evidenceStatus: string | null;
+  evidenceGaps: string[];
+}): SectionNode {
+  return {
+    id: section.sectionId,
+    title: section.title,
+    parentId: section.parentId,
+    sortIndex: section.sortIndex,
+    status: section.status as SectionNode['status'],
+    wordCount: section.wordCount,
+    writingInstructions: section.writingInstruction,
+    conceptIds: section.conceptIds,
+    paperIds: section.paperIds,
+    aiModel: section.aiModel,
+    evidenceStatus: section.evidenceStatus as SectionNode['evidenceStatus'],
+    evidenceGaps: section.evidenceGaps,
+    children: [],
+  };
+}
+
+function buildSectionTreeFromDraftSections(sections: Array<Parameters<typeof draftSectionToNode>[0]>): SectionNode[] {
+  const nodeMap = new Map<string, SectionNode>();
+  const roots: SectionNode[] = [];
+
+  for (const section of sections) {
+    nodeMap.set(section.sectionId, draftSectionToNode(section));
+  }
+
+  for (const section of sections) {
+    const node = nodeMap.get(section.sectionId)!;
+    if (section.parentId && nodeMap.has(section.parentId)) {
+      nodeMap.get(section.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const sortNodes = (nodes: SectionNode[]) => {
+    nodes.sort((left, right) => left.sortIndex - right.sortIndex);
+    for (const node of nodes) sortNodes(node.children);
+  };
+  sortNodes(roots);
+  return roots;
+}
+
+function draftAndSectionsToOutline(draft: Draft, sections: Array<Parameters<typeof draftSectionToNode>[0]>): DraftOutline {
+  return {
+    ...draftToSummary(draft),
+    sections: buildSectionTreeFromDraftSections(sections),
   };
 }
 
@@ -87,7 +196,10 @@ function draftToSectionContent(sectionId: string, draft: SectionDraft | null): S
   return {
     id: sectionId,
     outlineId: draft?.outlineEntryId ?? '',
+    articleId: undefined,
+    title: undefined,
     content: draft?.content ?? '',
+    documentJson: draft?.documentJson ?? null,
     version: draft?.version ?? 1,
     citedPaperIds: draft?.citedPaperIds ?? [],
   };
@@ -95,8 +207,10 @@ function draftToSectionContent(sectionId: string, draft: SectionDraft | null): S
 
 function draftToSectionVersion(draft: SectionDraft): SectionVersion {
   return {
+    sectionId: draft.outlineEntryId,
     version: draft.version,
     content: draft.content,
+    documentJson: draft.documentJson ?? null,
     createdAt: draft.createdAt ?? '',
     source: draft.llmBackend === 'manual' ? 'manual' : 'ai-generate',
   };
@@ -133,6 +247,190 @@ export function registerArticlesHandlers(ctx: AppContext): void {
     return articles.map((a) => articleToOutline(a, []));
   });
 
+  typedHandler('db:drafts:listByArticle', logger, async (_e, articleId) => {
+    const drafts = await ctx.dbProxy.listDraftsByArticle(asArticleId(articleId));
+    return drafts.map(draftToSummary);
+  });
+
+  typedHandler('db:drafts:get', logger, async (_e, draftId) => {
+    const draft = await ctx.dbProxy.getDraft(asDraftId(draftId));
+    return draft ? draftToSummary(draft) : null;
+  });
+
+  typedHandler('db:drafts:create', logger, async (_e, articleId, seed) => {
+    const article = await ctx.dbProxy.getArticle(asArticleId(articleId));
+    if (!article) throw new Error('Article not found');
+
+    const basedOnDraftId = seed?.basedOnDraftId ?? article.defaultDraftId ?? null;
+    const baseDraft = basedOnDraftId ? await ctx.dbProxy.getDraft(asDraftId(basedOnDraftId)) : null;
+    const id = asDraftId(crypto.randomUUID());
+
+    await ctx.dbProxy.createDraft({
+      id,
+      articleId: asArticleId(articleId),
+      title: seed?.title ?? `稿件 ${new Date().toLocaleString('zh-CN')}`,
+      status: seed?.status ?? 'drafting',
+      documentJson: baseDraft?.documentJson ?? article.documentJson ?? '{"type":"doc","content":[{"type":"paragraph"}]}',
+      basedOnDraftId: basedOnDraftId ? asDraftId(basedOnDraftId) : null,
+      source: seed?.source ?? (basedOnDraftId ? 'duplicate' : 'manual'),
+      language: seed?.metadata?.language ?? baseDraft?.language ?? article.outputLanguage ?? null,
+      audience: seed?.metadata?.audience ?? baseDraft?.audience ?? null,
+      writingStyle: seed?.metadata?.writingStyle ?? baseDraft?.writingStyle ?? article.style ?? null,
+      cslStyleId: seed?.metadata?.citationStyle ? mapFrontendToCsl(seed.metadata.citationStyle) : (baseDraft?.cslStyleId ?? article.cslStyleId ?? null),
+      abstract: seed?.metadata?.abstract ?? baseDraft?.abstract ?? article.abstract ?? null,
+      keywords: seed?.metadata?.keywords ?? baseDraft?.keywords ?? article.keywords ?? [],
+      targetWordCount: seed?.metadata?.targetWordCount ?? baseDraft?.targetWordCount ?? article.targetWordCount ?? null,
+      lastOpenedAt: seed?.lastOpenedAt ?? null,
+    });
+
+    const created = await ctx.dbProxy.getDraft(id);
+    if (!created) throw new Error('Failed to create draft');
+    ctx.pushManager?.enqueueDbChange(['article_drafts'], 'insert');
+    return draftToSummary(created);
+  });
+
+  typedHandler('db:drafts:update', logger, async (_e, draftId, patch) => {
+    const updates: Record<string, unknown> = {};
+    if (patch.title !== undefined) updates['title'] = patch.title;
+    if (patch.status !== undefined) updates['status'] = patch.status;
+    if (patch.lastOpenedAt !== undefined) updates['lastOpenedAt'] = patch.lastOpenedAt;
+    if (patch.metadata) {
+      if (patch.metadata.abstract !== undefined) updates['abstract'] = patch.metadata.abstract;
+      if (patch.metadata.keywords !== undefined) updates['keywords'] = patch.metadata.keywords;
+      if (patch.metadata.writingStyle !== undefined) updates['writingStyle'] = patch.metadata.writingStyle;
+      if (patch.metadata.targetWordCount !== undefined) updates['targetWordCount'] = patch.metadata.targetWordCount;
+      if (patch.metadata.language !== undefined) updates['language'] = patch.metadata.language;
+      if (patch.metadata.audience !== undefined) updates['audience'] = patch.metadata.audience;
+      if (patch.metadata.citationStyle !== undefined) updates['cslStyleId'] = mapFrontendToCsl(patch.metadata.citationStyle);
+    }
+    await ctx.dbProxy.updateDraft(asDraftId(draftId), updates as any);
+    ctx.pushManager?.enqueueDbChange(['article_drafts'], 'update');
+  });
+
+  typedHandler('db:drafts:delete', logger, async (_e, draftId) => {
+    await ctx.dbProxy.deleteDraft(asDraftId(draftId));
+    ctx.pushManager?.enqueueDbChange(['article_drafts'], 'delete');
+  });
+
+  typedHandler('db:drafts:getDocument', logger, async (_e, draftId) => {
+    return await ctx.dbProxy.getDraftDocument(asDraftId(draftId));
+  });
+
+  typedHandler('db:drafts:saveDocument', logger, async (_e, draftId, documentJson, source = 'manual') => {
+    await ctx.dbProxy.saveDraftDocument(asDraftId(draftId), documentJson, source);
+    ctx.pushManager?.enqueueDbChange(['article_drafts', 'draft_versions'], 'update');
+  });
+
+  typedHandler('db:drafts:getOutline', logger, async (_e, draftId) => {
+    const draft = await ctx.dbProxy.getDraft(asDraftId(draftId));
+    if (!draft) throw new Error('Draft not found');
+    const sections = await ctx.dbProxy.getDraftSections(asDraftId(draftId));
+    return draftAndSectionsToOutline(draft, sections);
+  });
+
+  typedHandler('db:drafts:updateOutlineOrder', logger, async (_e, draftId, order) => {
+    const current = await ctx.dbProxy.getDraftDocument(asDraftId(draftId));
+    const reordered = reorderSectionsInDocument(
+      parseArticleDocument(current.documentJson),
+      order as SectionOrder[],
+    );
+    await ctx.dbProxy.saveDraftDocument(asDraftId(draftId), JSON.stringify(reordered), 'manual');
+    ctx.pushManager?.enqueueDbChange(['article_drafts', 'draft_versions'], 'update');
+  });
+
+  typedHandler('db:drafts:updateSection', logger, async (_e, draftId, sectionId, patch) => {
+    if (patch.content != null || patch.documentJson !== undefined) {
+      await ctx.dbProxy.updateDraftSectionContent(
+        asDraftId(draftId),
+        sectionId,
+        patch.content ?? '',
+        patch.documentJson ?? null,
+        'manual',
+      );
+    }
+
+    if (patch.title != null) {
+      const current = await ctx.dbProxy.getDraftDocument(asDraftId(draftId));
+      const renamed = renameSectionInDocument(parseArticleDocument(current.documentJson), sectionId, patch.title);
+      await ctx.dbProxy.saveDraftDocument(asDraftId(draftId), JSON.stringify(renamed), 'manual');
+    }
+
+    const metaPatch: Record<string, unknown> = {};
+    if (patch.status !== undefined) metaPatch['status'] = patch.status;
+    if (patch.writingInstructions !== undefined) metaPatch['writingInstruction'] = patch.writingInstructions;
+    if (patch.aiModel !== undefined) metaPatch['aiModel'] = patch.aiModel;
+    if (patch.evidenceStatus !== undefined) metaPatch['evidenceStatus'] = patch.evidenceStatus;
+    if (patch.evidenceGaps !== undefined) metaPatch['evidenceGaps'] = patch.evidenceGaps;
+    if (Object.keys(metaPatch).length > 0) {
+      await ctx.dbProxy.updateDraftSectionMeta(asDraftId(draftId), sectionId, metaPatch as any);
+    }
+
+    ctx.pushManager?.enqueueDbChange(['draft_section_meta', 'draft_versions'], 'update');
+  });
+
+  typedHandler('db:drafts:createSection', logger, async (_e, draftId, parentId, sortIndex, title) => {
+    const id = crypto.randomUUID();
+    const current = await ctx.dbProxy.getDraftDocument(asDraftId(draftId));
+    const nextDocument = insertSectionInDocument(parseArticleDocument(current.documentJson), {
+      parentId,
+      sortIndex,
+      title: title ?? '新节',
+      idFactory: () => id,
+    });
+    await ctx.dbProxy.saveDraftDocument(asDraftId(draftId), JSON.stringify(nextDocument), 'manual');
+    const sections = await ctx.dbProxy.getDraftSections(asDraftId(draftId));
+    const created = sections.find((section) => section.sectionId === id);
+    ctx.pushManager?.enqueueDbChange(['draft_section_meta', 'draft_versions'], 'insert');
+    return draftSectionToNode(created ?? {
+      sectionId: id,
+      title: title ?? '新节',
+      parentId,
+      sortIndex,
+      status: 'pending',
+      wordCount: 0,
+      writingInstruction: null,
+      conceptIds: [],
+      paperIds: [],
+      aiModel: null,
+      evidenceStatus: null,
+      evidenceGaps: [],
+    });
+  });
+
+  typedHandler('db:drafts:deleteSection', logger, async (_e, draftId, sectionId) => {
+    const current = await ctx.dbProxy.getDraftDocument(asDraftId(draftId));
+    const nextDocument = deleteSectionFromDocument(parseArticleDocument(current.documentJson), sectionId);
+    await ctx.dbProxy.saveDraftDocument(asDraftId(draftId), JSON.stringify(nextDocument), 'manual');
+    ctx.pushManager?.enqueueDbChange(['draft_section_meta', 'draft_versions'], 'delete');
+  });
+
+  typedHandler('db:drafts:getVersions', logger, async (_e, draftId) => {
+    const versions = await ctx.dbProxy.getDraftVersions(asDraftId(draftId));
+    return versions.map((version) => ({
+      draftId: version.draftId,
+      version: version.version,
+      title: version.title,
+      content: version.content,
+      documentJson: version.documentJson,
+      createdAt: version.createdAt,
+      source: version.source,
+      summary: version.summary ?? undefined,
+    }));
+  });
+
+  typedHandler('db:drafts:restoreVersion', logger, async (_e, draftId, version) => {
+    await ctx.dbProxy.restoreDraftVersion(asDraftId(draftId), version);
+    ctx.pushManager?.enqueueDbChange(['draft_versions'], 'update');
+  });
+
+  typedHandler('db:drafts:createFromVersion', logger, async (_e, draftId, version, title) => {
+    const nextDraftId = await ctx.dbProxy.createDraftFromVersion(asDraftId(draftId), version, title);
+    const created = await ctx.dbProxy.getDraft(nextDraftId);
+    if (!created) throw new Error('Failed to create draft from version');
+    ctx.pushManager?.enqueueDbChange(['article_drafts', 'draft_versions'], 'insert');
+    return draftToSummary(created);
+  });
+
   // ── db:articles:create ──
   typedHandler('db:articles:create', logger, async (_e, title) => {
     const id = crypto.randomUUID();
@@ -165,11 +463,33 @@ export function registerArticlesHandlers(ctx: AppContext): void {
 
   // ── db:articles:update ──
   typedHandler('db:articles:update', logger, async (_e, articleId, patch) => {
-    const updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status'>> = {};
+    logger.info('[OutlineDebug] db:articles:update', { articleId, patchKeys: Object.keys(patch) });
+    const updates: Record<string, unknown> = {};
     if (patch.title != null) updates.title = patch.title;
     if (patch.citationStyle != null) updates.cslStyleId = mapFrontendToCsl(patch.citationStyle);
-    await ctx.dbProxy.updateArticle(asArticleId(articleId), updates);
+    // Handle metadata fields (writingStyle, abstract, keywords, authors, targetWordCount)
+    const md = (patch as Record<string, unknown>).metadata as Record<string, unknown> | undefined;
+    if (md) {
+      if (md['writingStyle'] !== undefined) updates['style'] = md['writingStyle'];
+      if (md['abstract'] !== undefined) updates['abstract'] = md['abstract'];
+      if (md['keywords'] !== undefined) updates['keywords'] = md['keywords'];
+      if (md['authors'] !== undefined) updates['authors'] = md['authors'];
+      if (md['targetWordCount'] !== undefined) updates['targetWordCount'] = md['targetWordCount'];
+    }
+    logger.info('[OutlineDebug] db:articles:update resolved updates', { updateKeys: Object.keys(updates) });
+    await ctx.dbProxy.updateArticle(asArticleId(articleId), updates as any);
     ctx.pushManager?.enqueueDbChange(['articles'], 'update');
+  });
+
+  // ── db:articles:getDocument ──
+  typedHandler('db:articles:getDocument', logger, async (_e, articleId) => {
+    return await ctx.dbProxy.getArticleDocument(asArticleId(articleId));
+  });
+
+  // ── db:articles:saveDocument ──
+  typedHandler('db:articles:saveDocument', logger, async (_e, articleId, documentJson, source = 'manual') => {
+    await ctx.dbProxy.saveArticleDocument(asArticleId(articleId), documentJson, source);
+    ctx.pushManager?.enqueueDbChange(['articles', 'outlines'], 'update');
   });
 
   // ── db:articles:getOutline ──
@@ -179,45 +499,92 @@ export function registerArticlesHandlers(ctx: AppContext): void {
       throw new Error('Article not found');
     }
     const entries = await ctx.dbProxy.getOutline(asArticleId(articleId));
+    const fullDocument = await ctx.dbProxy.getFullDocument(asArticleId(articleId));
+    logger.info('[OutlineDebug] db:articles:getOutline', {
+      articleId,
+      articleTitle: article.title,
+      articleStyle: article.style,
+      entriesCount: entries.length,
+      entryIds: entries.map(e => e.id),
+    });
     const sections = buildSectionTree(entries);
+
+    const wordCountMap = new Map<string, number>();
+    for (const section of fullDocument) {
+      const text = String(section.content ?? '').trim();
+      const count = text.length > 0 ? text.split(/\s+/).length : 0;
+      wordCountMap.set(section.sectionId, count);
+    }
+
+    // Apply word counts to section tree
+    function applyWordCounts(nodes: SectionNode[]): void {
+      for (const node of nodes) {
+        const wc = wordCountMap.get(node.id);
+        if (wc !== undefined) (node as any).wordCount = wc;
+        applyWordCounts(node.children);
+      }
+    }
+    applyWordCounts(sections);
+
     return articleToOutline(article, sections);
   });
 
   // ── db:articles:updateOutlineOrder ──
   typedHandler('db:articles:updateOutlineOrder', logger, async (_e, articleId, order) => {
-    // Update sortOrder, parentId, and compute depth for each entry
-    for (const o of order as SectionOrder[]) {
-      // Compute depth from parent chain
-      let depth = 0;
-      let parentId = o.parentId;
-      const orderMap = new Map((order as SectionOrder[]).map((x) => [x.sectionId, x]));
-      while (parentId) {
-        depth++;
-        const parent = orderMap.get(parentId);
-        parentId = parent?.parentId ?? null;
-      }
-
-      await ctx.dbProxy.updateOutlineEntry(
-        asOutlineEntryId(o.sectionId),
-        { sortOrder: o.sortIndex, depth } as any,
-      );
-    }
-    ctx.pushManager?.enqueueDbChange(['outlines'], 'update');
+    const current = await ctx.dbProxy.getArticleDocument(asArticleId(articleId));
+    const reordered = reorderSectionsInDocument(
+      parseArticleDocument(current.documentJson),
+      order as SectionOrder[],
+    );
+    await ctx.dbProxy.saveArticleDocument(
+      asArticleId(articleId),
+      JSON.stringify(reordered),
+      'manual',
+    );
+    ctx.pushManager?.enqueueDbChange(['articles', 'outlines'], 'update');
   });
 
   // ── db:articles:getSection ──
   typedHandler('db:articles:getSection', logger, async (_e, sectionId) => {
     const drafts = await ctx.dbProxy.getSectionDrafts(asOutlineEntryId(sectionId));
     const latest = drafts[0] ?? null; // sorted by version DESC
-    return draftToSectionContent(sectionId, latest);
+    if (latest) {
+      const base = draftToSectionContent(sectionId, latest);
+      return base;
+    }
+
+    const articles = await ctx.dbProxy.getAllArticles();
+    for (const article of articles) {
+      const sections = await ctx.dbProxy.getFullDocument(asArticleId(article.id));
+      const match = sections.find((section) => section.sectionId === sectionId);
+      if (!match) continue;
+      return {
+        id: sectionId,
+        outlineId: sectionId,
+        articleId: article.id,
+        title: match.title,
+        content: match.content,
+        documentJson: match.documentJson,
+        version: match.version,
+        citedPaperIds: [],
+      } satisfies SectionContent;
+    }
+
+    return draftToSectionContent(sectionId, null);
   });
 
   // ── db:articles:updateSection ──
   typedHandler('db:articles:updateSection', logger, async (_e, sectionId, patch) => {
     const entryId = asOutlineEntryId(sectionId);
 
-    if (patch.content != null) {
-      await ctx.dbProxy.addSectionDraft(entryId, patch.content, 'manual');
+    if (patch.content != null || patch.documentJson !== undefined) {
+      await ctx.dbProxy.addSectionDraft(
+        entryId,
+        patch.content ?? '',
+        'manual',
+        'manual',
+        patch.documentJson ?? null,
+      );
     }
     // Update outline entry fields if provided
     const entryUpdates: Record<string, unknown> = {};
@@ -251,39 +618,26 @@ export function registerArticlesHandlers(ctx: AppContext): void {
   // ── db:articles:createSection ──
   typedHandler('db:articles:createSection', logger, async (_e, articleId, parentId, sortIndex, title) => {
     const id = crypto.randomUUID();
-    const existing = await ctx.dbProxy.getOutline(asArticleId(articleId));
-
-    // Compute depth from parent chain
-    let depth = 0;
-    if (parentId) {
-      const parentEntry = existing.find((e) => e.id === parentId);
-      depth = parentEntry ? ((parentEntry as any).depth ?? 0) + 1 : 1;
-    }
-
-    const newEntry: OutlineEntry = {
-      id: asOutlineEntryId(id),
-      articleId: asArticleId(articleId),
-      parentId: parentId ? asOutlineEntryId(parentId) : null,
-      depth,
-      sortOrder: sortIndex,
+    const current = await ctx.dbProxy.getArticleDocument(asArticleId(articleId));
+    const nextDocument = insertSectionInDocument(parseArticleDocument(current.documentJson), {
+      parentId,
+      sortIndex,
       title: title ?? '新节',
-      coreArgument: null,
-      writingInstruction: null,
-      conceptIds: [],
-      paperIds: [],
-      status: 'pending',
-    };
-    await ctx.dbProxy.setOutline(asArticleId(articleId), [...existing, newEntry]);
-    ctx.pushManager?.enqueueDbChange(['outlines'], 'insert');
+      idFactory: () => id,
+    });
+    await ctx.dbProxy.saveArticleDocument(asArticleId(articleId), JSON.stringify(nextDocument), 'manual');
+    const entries = await ctx.dbProxy.getOutline(asArticleId(articleId));
+    const newEntry = entries.find((entry) => entry.id === id);
+    ctx.pushManager?.enqueueDbChange(['articles', 'outlines'], 'insert');
 
     return {
       id,
-      title: newEntry.title,
+      title: newEntry?.title ?? title ?? '新节',
       parentId,
-      sortIndex,
-      status: 'pending' as const,
+      sortIndex: newEntry?.sortOrder ?? sortIndex,
+      status: newEntry?.status ?? 'pending',
       wordCount: 0,
-      writingInstructions: null,
+      writingInstructions: newEntry?.writingInstruction ?? null,
       aiModel: null,
       children: [],
     } satisfies SectionNode;
@@ -292,7 +646,7 @@ export function registerArticlesHandlers(ctx: AppContext): void {
   // ── db:articles:deleteSection ──
   typedHandler('db:articles:deleteSection', logger, async (_e, sectionId) => {
     await ctx.dbProxy.markOutlineEntryDeleted(asOutlineEntryId(sectionId));
-    ctx.pushManager?.enqueueDbChange(['outlines'], 'delete');
+    ctx.pushManager?.enqueueDbChange(['articles', 'outlines'], 'delete');
   });
 
   // ── db:articles:getFullDocument ──

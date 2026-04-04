@@ -118,36 +118,24 @@ export function registerMemosHandlers(ctx: AppContext): void {
     // Create a new note with memo content
     const noteId = asNoteId(crypto.randomUUID());
     const title = memo.text.slice(0, 60).replace(/\n/g, ' ').trim() || 'Untitled Note';
-    const filePath = `notes/${noteId}.md`;
 
-    // Build note file with frontmatter
-    const fsp = await import('node:fs/promises');
-    const path = await import('node:path');
-    const notesDir = path.join(ctx.workspaceRoot, 'notes');
-    await fsp.mkdir(notesDir, { recursive: true });
-
-    const fmLines = [
-      '---',
-      `title: "${title.replace(/"/g, '\\"')}"`,
-      `linkedPaperIds: ${JSON.stringify(memo.paperIds)}`,
-      `linkedConceptIds: ${JSON.stringify(memo.conceptIds)}`,
-      `tags: ${JSON.stringify(memo.tags)}`,
-      '---',
-      '',
-      memo.text,
-    ];
-    const absPath = path.join(notesDir, `${noteId}.md`);
-    await fsp.writeFile(absPath, fmLines.join('\n'), 'utf-8');
+    // Build ProseMirror JSON from memo text
+    const paragraphs = memo.text.split(/\n{2,}/).filter((p) => p.trim());
+    const docContent = paragraphs.length > 0
+      ? paragraphs.map((p) => ({ type: 'paragraph', content: [{ type: 'text', text: p }] }))
+      : [{ type: 'paragraph' }];
+    const documentJson = JSON.stringify({ type: 'doc', content: docContent });
 
     // Create note in DB
     await ctx.dbProxy.createNote(
       {
         id: noteId,
         title,
-        filePath,
+        filePath: '',
         linkedPaperIds: memo.paperIds,
         linkedConceptIds: memo.conceptIds,
         tags: memo.tags,
+        documentJson,
       } as unknown as Omit<ResearchNote, 'createdAt' | 'updatedAt'>,
       [],
       [],

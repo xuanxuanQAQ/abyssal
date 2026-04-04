@@ -2,7 +2,7 @@
 // §6: readAnnotations + writeAnnotation（mupdf.js 标注 API）
 
 import * as fs from 'node:fs';
-import type { PdfAnnotationRaw } from '../types';
+import type { PdfAnnotationRaw } from './types';
 import type { PdfRect } from '../types/annotation';
 import { ProcessError } from '../types/errors';
 
@@ -16,7 +16,8 @@ async function getMupdf(): Promise<typeof import('mupdf')> {
     mupdfModule = await import('mupdf');
   } catch {
     try {
-      mupdfModule = await import('mupdf/dist/mupdf.js' as string);
+      const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
     } catch (err) {
       throw new ProcessError({
         message: `Failed to load mupdf.js: ${(err as Error).message}`,

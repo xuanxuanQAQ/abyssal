@@ -302,6 +302,16 @@ export class PushManager {
     this.send('workspace:switched$event', data);
   }
 
+  // ── copilot events (no limit) — unified runtime events ──
+
+  pushCopilotEvent(data: unknown): void {
+    this.send('push:copilotEvent', data);
+  }
+
+  pushCopilotSessionChanged(data: { sessionId: string; operationId: string }): void {
+    this.send('push:copilotSessionChanged', data);
+  }
+
   // ── cleanup ──
 
   destroy(): void {

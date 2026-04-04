@@ -25,6 +25,7 @@ export interface SectionTarget {
   type: 'section';
   articleId: string;
   sectionId: string;
+  draftId?: string;
 }
 
 /** 跳转到图焦点节点（Graph 视图） */

@@ -12,8 +12,17 @@ import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { ChatMessage, ChatSessionCache } from '../../../shared-types/models';
+import { loadFromStorage, saveToStorage } from '../utils/localStorage';
 
 const MAX_CACHED_SESSIONS = 4;
+const ACTIVE_CHAT_SESSION_STORAGE_KEY = 'abyssal-chat-active-session';
+
+function getInitialActiveSessionKey(): string {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return 'workspace';
+  }
+  return loadFromStorage<string>(ACTIVE_CHAT_SESSION_STORAGE_KEY, 'workspace');
+}
 
 /** ChatDock 三种形态（§1.2） */
 export type ChatDockMode = 'collapsed' | 'expanded' | 'fullscreen';
@@ -46,10 +55,16 @@ interface ChatState {
   addMessage: (message: ChatMessage) => void;
   /** 更新指定消息（用于流式完成、状态变更） */
   updateMessage: (messageId: string, updater: (msg: ChatMessage) => void) => void;
+  /** 更新指定会话中的消息 */
+  updateMessageInSession: (key: string, messageId: string, updater: (msg: ChatMessage) => void) => void;
   /** 追加文本到最后一条 assistant 消息的 streamBuffer */
   appendToStreamBuffer: (chunk: string) => void;
+  /** 追加文本到指定会话最后一条 assistant 消息的 streamBuffer */
+  appendToStreamBufferInSession: (key: string, chunk: string) => void;
   /** 将 streamBuffer 刷新到 content（RAF 节流后调用） */
   flushStreamBuffer: () => void;
+  /** 将指定会话的 streamBuffer 刷新到 content */
+  flushStreamBufferInSession: (key: string) => void;
   /** 清除指定会话的消息 */
   clearSession: (key: string) => void;
   /** 完全重置聊天状态（项目切换时使用） */
@@ -90,7 +105,7 @@ export const useChatStore = create<ChatState>()(
   devtools(
     subscribeWithSelector(
       immer((set) => ({
-        activeSessionKey: 'workspace',
+        activeSessionKey: getInitialActiveSessionKey(),
         sessions: {},
         chatInputDraft: '',
         chatStreaming: false,
@@ -99,6 +114,9 @@ export const useChatStore = create<ChatState>()(
         setActiveSessionKey: (key) =>
           set((state) => {
             state.activeSessionKey = key;
+            if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+              saveToStorage(ACTIVE_CHAT_SESSION_STORAGE_KEY, key);
+            }
           }),
 
         setChatInputDraft: (draft) =>
@@ -156,6 +174,15 @@ export const useChatStore = create<ChatState>()(
             }
           }),
 
+        updateMessageInSession: (key, messageId, updater) =>
+          set((state) => {
+            const session = state.sessions[key];
+            if (session) {
+              const msg = session.messages.find((m) => m.id === messageId);
+              if (msg) updater(msg);
+            }
+          }),
+
         appendToStreamBuffer: (chunk) =>
           set((state) => {
             const session = state.sessions[state.activeSessionKey];
@@ -166,9 +193,29 @@ export const useChatStore = create<ChatState>()(
             }
           }),
 
+        appendToStreamBufferInSession: (key, chunk) =>
+          set((state) => {
+            const session = state.sessions[key];
+            if (!session) return;
+            const last = session.messages[session.messages.length - 1];
+            if (last && last.role === 'assistant') {
+              last.streamBuffer = (last.streamBuffer ?? '') + chunk;
+            }
+          }),
+
         flushStreamBuffer: () =>
           set((state) => {
             const session = state.sessions[state.activeSessionKey];
+            if (!session) return;
+            const last = session.messages[session.messages.length - 1];
+            if (last && last.role === 'assistant' && last.streamBuffer !== undefined) {
+              last.content = last.streamBuffer;
+            }
+          }),
+
+        flushStreamBufferInSession: (key) =>
+          set((state) => {
+            const session = state.sessions[key];
             if (!session) return;
             const last = session.messages[session.messages.length - 1];
             if (last && last.role === 'assistant' && last.streamBuffer !== undefined) {
@@ -192,6 +239,9 @@ export const useChatStore = create<ChatState>()(
             state.chatInputDraft = '';
             state.chatStreaming = false;
             state.chatDockMode = 'collapsed';
+            if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+              saveToStorage(ACTIVE_CHAT_SESSION_STORAGE_KEY, 'workspace');
+            }
           }),
       }))
     ),

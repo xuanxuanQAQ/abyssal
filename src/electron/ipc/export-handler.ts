@@ -13,9 +13,11 @@ import * as fs from 'node:fs/promises';
 import type { AppContext } from '../app-context';
 import type { ExportFormat, CitationStyle } from '../../shared-types/enums';
 import type { ExportProgress, FullDocumentSection } from '../../shared-types/models';
+import { buildDocumentProjection, parseArticleDocument, serializeArticleDocument } from '../../shared/writing/documentOutline';
 
 interface ExportOptions {
   articleId: string;
+  draftId?: string | undefined;
   format: ExportFormat;
   citationStyle?: CitationStyle;
 }
@@ -35,7 +37,7 @@ export async function exportArticle(
   ctx: AppContext,
   options: ExportOptions,
 ): Promise<string> {
-  const { articleId, format, citationStyle = 'APA' } = options;
+  const { articleId, draftId, format, citationStyle = 'APA' } = options;
   const { logger } = ctx;
 
   const emitProgress = (stage: ExportProgress['stage'], progress: number, message: string) => {
@@ -48,17 +50,33 @@ export async function exportArticle(
   const article = (await ctx.dbProxy.getArticle(articleId as any)) as Record<string, unknown> | null;
   if (!article) throw new Error('Article not found');
 
-  const title = (article['title'] as string) ?? 'Untitled';
+  const baseTitle = (article['title'] as string) ?? 'Untitled';
+  const draft = draftId ? await ctx.dbProxy.getDraft(draftId as any) : null;
+  const title = draft ? `${baseTitle} - ${draft.title}` : baseTitle;
 
   // Load full document sections
   let sections: FullDocumentSection[];
-  try {
-    const fullDoc = (await (ctx.dbProxy as any).getFullDocument(articleId)) as any;
-    sections = (fullDoc?.sections ?? []) as FullDocumentSection[];
-  } catch {
-    // Fallback: build from outline
-    const outlineSections = (article['sections'] as Array<Record<string, unknown>>) ?? [];
-    sections = flattenSections(outlineSections);
+  if (draft) {
+    const projection = buildDocumentProjection(parseArticleDocument(draft.documentJson));
+    sections = projection.flatSections.map((section) => ({
+      sectionId: section.id,
+      title: section.title,
+      content: section.plainText,
+      documentJson: serializeArticleDocument(section.bodyDocument),
+      version: 1,
+      sortIndex: section.sortIndex,
+      parentId: section.parentId,
+      depth: section.depth,
+    }));
+  } else {
+    try {
+      const fullDoc = (await (ctx.dbProxy as any).getFullDocument(articleId)) as any;
+      sections = (fullDoc?.sections ?? []) as FullDocumentSection[];
+    } catch {
+      // Fallback: build from outline
+      const outlineSections = (article['sections'] as Array<Record<string, unknown>>) ?? [];
+      sections = flattenSections(outlineSections);
+    }
   }
 
   emitProgress('assembling', 30, '文档加载完成');
@@ -132,7 +150,7 @@ export async function exportArticle(
   await fs.writeFile(exportPath, content, 'utf-8');
 
   emitProgress('writing', 100, '导出完成');
-  logger.info('Article exported', { articleId, format, exportPath });
+  logger.info('Article exported', { articleId, draftId, format, exportPath });
 
   return exportPath;
 }

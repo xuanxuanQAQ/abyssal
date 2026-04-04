@@ -79,6 +79,7 @@ export function useChatSession() {
   } = useChatStore();
 
   const sessionKey = activeSessionKey || DEFAULT_SESSION_KEY;
+  const currentCachedSession = sessions[sessionKey];
 
   // 从数据库加载历史（当热缓存未命中时）
   const { data: dbHistory } = useQuery({
@@ -89,7 +90,7 @@ export function useChatSession() {
     },
     staleTime: 30_000,
     gcTime: 300_000,
-    enabled: !sessions[sessionKey],
+    enabled: !currentCachedSession || currentCachedSession.messages.length === 0,
   });
 
   // 初始化会话 + 从 DB 填充热缓存

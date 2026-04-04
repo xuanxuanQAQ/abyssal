@@ -37,22 +37,11 @@ export function createNotesCapability(): Capability {
             ctx.session.focus.activeConcepts.slice(0, 3);
           const tags = (params['tags'] as string[]) ?? [];
 
-          // Write frontmatter + content to disk
-          if (ctx.services.writeNoteFile) {
-            const fmLines = [
-              '---',
-              `title: "${title.replace(/"/g, '\\"')}"`,
-              `linkedPaperIds: ${JSON.stringify(linkedPaperIds)}`,
-              `linkedConceptIds: ${JSON.stringify(linkedConceptIds)}`,
-              `tags: ${JSON.stringify(tags)}`,
-              '---',
-              '',
-            ];
-            await ctx.services.writeNoteFile(noteId, fmLines.join('\n') + content);
-          }
+          // Build ProseMirror JSON from markdown content
+          const documentJson = content ? JSON.stringify(markdownToProseMirrorJson(content)) : null;
 
           await ctx.services.dbProxy.createNote(
-            { id: noteId, title, filePath: `notes/${noteId}.md`, linkedPaperIds, linkedConceptIds, tags },
+            { id: noteId, title, filePath: '', linkedPaperIds, linkedConceptIds, tags, documentJson },
             [], [],
           );
 
@@ -119,22 +108,11 @@ export function createNotesCapability(): Capability {
           const noteId = globalThis.crypto.randomUUID();
           const tags = ['auto-generated'];
 
-          // Write frontmatter + content to disk
-          if (ctx.services.writeNoteFile) {
-            const fmLines = [
-              '---',
-              `title: "${title.replace(/"/g, '\\"')}"`,
-              `linkedPaperIds: ${JSON.stringify(linkedPaperIds)}`,
-              `linkedConceptIds: ${JSON.stringify(linkedConceptIds)}`,
-              `tags: ${JSON.stringify(tags)}`,
-              '---',
-              '',
-            ];
-            await ctx.services.writeNoteFile(noteId, fmLines.join('\n') + content);
-          }
+          // Build ProseMirror JSON from compiled findings
+          const documentJson = JSON.stringify(markdownToProseMirrorJson(content));
 
           await ctx.services.dbProxy.createNote(
-            { id: noteId, title, filePath: `notes/${noteId}.md`, linkedPaperIds, linkedConceptIds, tags },
+            { id: noteId, title, filePath: '', linkedPaperIds, linkedConceptIds, tags, documentJson },
             [], [],
           );
 
@@ -261,4 +239,52 @@ export function createNotesCapability(): Capability {
       },
     ],
   };
+}
+
+/** Convert simple markdown content to ProseMirror JSON (lightweight, no schema dependency) */
+function markdownToProseMirrorJson(markdown: string): Record<string, unknown> {
+  const content: Record<string, unknown>[] = [];
+  const lines = markdown.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i]!;
+
+    // Heading
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      content.push({
+        type: 'heading',
+        attrs: { level: headingMatch[1]!.length },
+        content: [{ type: 'text', text: headingMatch[2] }],
+      });
+      i++;
+      continue;
+    }
+
+    // Empty line
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+
+    // Regular paragraph — collect contiguous non-empty lines
+    const paraLines: string[] = [];
+    while (i < lines.length && lines[i]!.trim() && !lines[i]!.match(/^#{1,6}\s/)) {
+      paraLines.push(lines[i]!);
+      i++;
+    }
+    if (paraLines.length > 0) {
+      content.push({
+        type: 'paragraph',
+        content: [{ type: 'text', text: paraLines.join('\n') }],
+      });
+    }
+  }
+
+  if (content.length === 0) {
+    content.push({ type: 'paragraph' });
+  }
+
+  return { type: 'doc', content };
 }

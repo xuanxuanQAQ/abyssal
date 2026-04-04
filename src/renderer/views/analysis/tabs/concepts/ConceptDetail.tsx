@@ -15,6 +15,7 @@ import { ConceptMergeDialog } from '../../concept-editor/ConceptMergeDialog';
 import { ConceptSplitWizard } from '../../concept-editor/ConceptSplitWizard';
 import { useUpdateMaturity } from '../../../../core/ipc/hooks/useConcepts';
 import { useAppStore } from '../../../../core/store';
+import { cancelPendingContextReveal, previewContextSource } from '../../../../panels/context/engine/revealContextSource';
 import { RELATION_LABELS_ZH, RELATION_COLORS } from '../../shared/relationTheme';
 import type { RelationType } from '../../../../../shared-types/enums';
 
@@ -283,9 +284,9 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
  */
 function RelatedNotesSection({ conceptId }: { conceptId: string }) {
   const { t } = useTranslation();
-  const switchView = useAppStore((s) => s.switchView);
   const selectNote = useAppStore((s) => s.selectNote);
   const selectMemo = useAppStore((s) => s.selectMemo);
+  const navigateTo = useAppStore((s) => s.navigateTo);
 
   // We use getAPI directly for getByEntity since there's no dedicated hook
   const [memos, setMemos] = React.useState<Array<{ id: string; content: string }>>([]);
@@ -306,7 +307,7 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
           setMemos(
             (memoResult ?? []).map((m: any) => ({
               id: m.id,
-              content: typeof m.content === 'string' ? m.content.slice(0, 60) : '',
+              content: typeof m.text === 'string' ? m.text.slice(0, 60) : '',
             })),
           );
           setNotes(
@@ -326,6 +327,10 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
     };
   }, [conceptId]);
 
+  const previewNotes = notes.slice(0, 2);
+  const previewMemos = memos.slice(0, 2);
+  const hiddenCount = (notes.length - previewNotes.length) + (memos.length - previewMemos.length);
+
   if (memos.length === 0 && notes.length === 0) {
     return (
       <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
@@ -337,14 +342,30 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {notes.map((note) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {notes.length > 0 && (
+          <SummaryChip icon={<FileText size={11} />} label={`${notes.length} ${t('notes.tabs.researchNotes')}`} />
+        )}
+        {memos.length > 0 && (
+          <SummaryChip icon={<StickyNote size={11} />} label={`${memos.length} ${t('notes.tabs.memos')}`} />
+        )}
+        {hiddenCount > 0 && (
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', alignSelf: 'center' }}>
+            {t('analysis.concepts.moreRelatedItems', { count: hiddenCount })}
+          </span>
+        )}
+      </div>
+
+      {previewNotes.map((note) => (
         <button
           key={note.id}
           type="button"
+          onMouseEnter={() => previewContextSource({ type: 'note', noteId: note.id })}
+          onMouseLeave={cancelPendingContextReveal}
           onClick={() => {
             selectNote(note.id);
-            switchView('notes');
+            navigateTo({ type: 'note', noteId: note.id });
           }}
           style={{
             display: 'flex',
@@ -364,13 +385,15 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
           {note.title}
         </button>
       ))}
-      {memos.map((memo) => (
+      {previewMemos.map((memo) => (
         <button
           key={memo.id}
           type="button"
+          onMouseEnter={() => previewContextSource({ type: 'memo', memoId: memo.id })}
+          onMouseLeave={cancelPendingContextReveal}
           onClick={() => {
             selectMemo(memo.id);
-            switchView('notes');
+            navigateTo({ type: 'memo', memoId: memo.id });
           }}
           style={{
             display: 'flex',
@@ -400,6 +423,21 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
         </button>
       ))}
     </div>
+  );
+}
+
+function SummaryChip({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '2px 8px', borderRadius: 999,
+      backgroundColor: 'var(--bg-surface-low, var(--bg-surface))',
+      color: 'var(--text-secondary)', fontSize: 11,
+      border: '1px solid var(--border-subtle)',
+    }}>
+      {icon}
+      {label}
+    </span>
   );
 }
 

@@ -1,7 +1,7 @@
 // ═══ Level 5: Sci-Hub ═══
 // §6.7: 多域名自动探测 + 从 HTML 页面提取 PDF URL + 总超时上限
 
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';

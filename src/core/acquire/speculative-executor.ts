@@ -3,7 +3,7 @@
 // 每个候选分配独立临时文件，通过 AbortController 实现取消。
 
 import type { HttpClient } from '../infra/http-client';
-import type { AcquireAttempt } from '../types';
+import type { AcquireAttempt } from './types';
 import type { Logger } from '../infra/logger';
 import type { DownloadCandidate } from './strategy';
 import { downloadPdf, deleteFileIfExists } from './downloader';

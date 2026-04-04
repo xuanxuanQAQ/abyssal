@@ -180,9 +180,73 @@ export interface ArticleOutline {
   citationStyle: CitationStyle;
   exportFormat: ExportFormat;
   metadata: ArticleMetadata;
+  defaultDraftId?: string | null | undefined;
+  draftCount?: number | undefined;
   createdAt: string;
   updatedAt: string;
   sections: SectionNode[];
+}
+
+export interface ArticleWorkspaceSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  defaultDraftId: string | null;
+  draftCount: number;
+  latestDraftUpdatedAt?: string | undefined;
+}
+
+export interface DraftMetadata {
+  abstract?: string | undefined;
+  keywords?: string[] | undefined;
+  writingStyle?: string | undefined;
+  targetWordCount?: number | undefined;
+  citationStyle?: CitationStyle | undefined;
+  language?: string | undefined;
+  audience?: string | undefined;
+}
+
+export interface DraftSummary {
+  id: string;
+  articleId: string;
+  title: string;
+  status: 'drafting' | 'review' | 'ready' | 'archived';
+  metadata: DraftMetadata;
+  basedOnDraftId?: string | null | undefined;
+  source?: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite' | 'ai-derive-draft' | 'duplicate' | undefined;
+  createdAt: string;
+  updatedAt: string;
+  lastOpenedAt?: string | null | undefined;
+}
+
+export interface DraftOutline extends DraftSummary {
+  sections: SectionNode[];
+}
+
+export interface DraftPatch {
+  title?: string | undefined;
+  status?: 'drafting' | 'review' | 'ready' | 'archived' | undefined;
+  metadata?: DraftMetadata | undefined;
+  lastOpenedAt?: string | null | undefined;
+}
+
+export interface DraftDocumentPayload {
+  draftId: string;
+  articleId: string;
+  documentJson: string;
+  updatedAt: string;
+}
+
+export interface DraftVersion {
+  draftId: string;
+  version: number;
+  title: string;
+  content: string;
+  documentJson: string;
+  createdAt: string;
+  source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite' | 'ai-derive-draft' | 'duplicate';
+  summary?: string | null | undefined;
 }
 
 export interface SectionNode {
@@ -193,6 +257,8 @@ export interface SectionNode {
   status: SectionStatus;
   wordCount: number;
   writingInstructions: string | null;
+  conceptIds?: string[] | undefined;
+  paperIds?: string[] | undefined;
   aiModel: string | null;
   children: SectionNode[];
   /** v1.2 证据充分度状态 */
@@ -210,25 +276,41 @@ export interface SectionOrder {
 export interface SectionContent {
   id: string;
   outlineId: string;
+  articleId?: string | undefined;
+  title?: string | undefined;
   content: string; // Markdown（【Δ-4】不含标题）
+  documentJson?: string | null | undefined;
   version: number;
   citedPaperIds: string[];
 }
 
 export interface SectionPatch {
   content?: string | undefined;
+  documentJson?: string | null | undefined;
   title?: string | undefined;
   wordCount?: number | undefined;
   citedPaperIds?: string[] | undefined;
   status?: SectionStatus | undefined;
   writingInstructions?: string | null | undefined;
+  aiModel?: string | null | undefined;
+  evidenceStatus?: EvidenceStatus | undefined;
+  evidenceGaps?: string[] | undefined;
 }
 
 export interface SectionVersion {
+  sectionId?: string | undefined;
+  title?: string | undefined;
   version: number;
   content: string;
+  documentJson?: string | null | undefined;
   createdAt: string;
   source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite';
+}
+
+export interface ArticleDocumentPayload {
+  articleId: string;
+  documentJson: string;
+  updatedAt: string;
 }
 
 // ═══ Full Document Operations ═══
@@ -251,6 +333,7 @@ export interface FullDocumentContent {
 
 export interface SectionSave {
   sectionId: string;
+  title?: string | undefined;
   content: string;
   documentJson?: string | null;
   source: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite';
@@ -413,6 +496,14 @@ export interface WritingContext {
   followingSectionTitles: string[];
 }
 
+export interface WritingContextRequest {
+  articleId?: string | undefined;
+  draftId?: string | undefined;
+  sectionId: string | null;
+  mode?: 'local' | 'article' | 'draft' | undefined;
+  documentJson?: string | undefined;
+}
+
 // ═══ Chat ═══
 
 /** 消息状态（§5.2） */
@@ -510,6 +601,7 @@ export interface SectionContext {
   type: 'section';
   articleId: string;
   sectionId: string;
+  draftId?: string | undefined;
 }
 
 export interface GraphNodeContext {
@@ -809,11 +901,11 @@ export interface MemoFilter {
 export interface NoteMeta {
   id: string;
   title: string;
-  filePath: string;
   linkedPaperIds: string[];
   linkedConceptIds: string[];
   tags: string[];
   wordCount: number;
+  documentJson: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -823,7 +915,10 @@ export interface NewNote {
   linkedPaperIds?: string[];
   linkedConceptIds?: string[];
   tags?: string[];
+  /** Markdown content — converted to ProseMirror JSON on creation */
   initialContent?: string;
+  /** ProseMirror JSON — takes precedence over initialContent */
+  documentJson?: string;
 }
 
 export interface NoteFilter {
@@ -833,10 +928,8 @@ export interface NoteFilter {
   searchText?: string;
 }
 
-export interface SaveNoteResult {
+export interface SaveNoteContentResult {
   chunksUpdated: number;
-  frontmatterValid: boolean;
-  frontmatterError?: string;
 }
 
 // ═══ v2.0 Advisory 通知（事件驱动） ═══

@@ -2,7 +2,7 @@
 // §6.6b: 通过中国高校机构认证（CARSI/Shibboleth）下载论文
 // 依赖 BrowserWindow 登录流获取的 session cookies
 
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import type { CookieJar } from '../../infra/cookie-jar';
 import { downloadPdf, deleteFileIfExists } from '../downloader';

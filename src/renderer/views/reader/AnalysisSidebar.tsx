@@ -12,27 +12,28 @@ import React, { useState, useCallback } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import {
   FileText, Lightbulb, Highlighter, StickyNote, Link2,
-  Check, Edit3, X, PenLine,
+  Check, Edit3, X,
 } from 'lucide-react';
 import { useMappingsForPaper, useAdjudicateMapping } from '../../core/ipc/hooks/useMappings';
 import { useMemoList } from '../../core/ipc/hooks/useMemos';
 import { MemoCard } from '../notes/memo/MemoCard';
+import { useEntityDisplayNameCache } from '../notes/shared/entityDisplayNameCache';
 
 // ─── Props ───
 
 interface AnalysisSidebarProps {
   paperId: string;
   onScrollToPage?: (page: number) => void;
-  onOpenMemoFloat?: (conceptIds?: string[]) => void;
 }
 
 // ─── Component ───
 
-export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: AnalysisSidebarProps) {
+export function AnalysisSidebar({ paperId, onScrollToPage }: AnalysisSidebarProps) {
   const [activeTab, setActiveTab] = useState('mappings');
   const { data: mappings } = useMappingsForPaper(paperId);
   const { data: memosData } = useMemoList({ paperIds: [paperId] });
   const memos = memosData?.pages.flat() ?? [];
+  const entityNameCache = useEntityDisplayNameCache();
   const adjudicate = useAdjudicateMapping();
 
   return (
@@ -72,7 +73,6 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
                 paperId={paperId}
                 adjudicate={adjudicate}
                 {...(onScrollToPage != null ? { onScrollToPage } : {})}
-                {...(onOpenMemoFloat != null ? { onMemo: () => onOpenMemoFloat([m['conceptId'] as string]) } : {})}
               />
               );
             })}
@@ -90,7 +90,7 @@ export function AnalysisSidebar({ paperId, onScrollToPage, onOpenMemoFloat }: An
         {/* Memos Tab */}
         <Tabs.Content value="memos" style={tabContentStyle}>
           <div style={{ padding: 8 }}>
-            {memos.map((m) => <MemoCard key={m.id} memo={m} />)}
+            {memos.map((m) => <MemoCard key={m.id} memo={m} entityNameCache={entityNameCache} />)}
             {memos.length === 0 && (
               <div style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>
                 No memos linked to this paper
@@ -117,13 +117,11 @@ function MappingCard({
   paperId,
   adjudicate,
   onScrollToPage,
-  onMemo,
 }: {
   mapping: Record<string, unknown>;
   paperId: string;
   adjudicate: ReturnType<typeof useAdjudicateMapping>;
   onScrollToPage?: (page: number) => void;
-  onMemo?: () => void;
 }) {
   const conceptId = (mapping['conceptId'] ?? mapping['concept_id']) as string ?? '';
   const relation = (mapping['relation'] as string) ?? '';
@@ -198,9 +196,6 @@ function MappingCard({
           if (!mappingId) return;
           adjudicate.mutate({ mappingId, decision: 'reject', paperId });
         }} />
-        {onMemo && (
-          <ActionButton icon={<PenLine size={12} />} label="Memo" color="var(--text-muted)" onClick={onMemo} />
-        )}
       </div>
     </div>
   );

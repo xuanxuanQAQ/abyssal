@@ -1,13 +1,8 @@
 /**
- * NotesFilterSidebar — multi-dimensional filter panel for notes view.
+ * NotesFilterSidebar — search-first filter panel for NotesView.
  *
- * Dimensions:
- * - Full-text search (500ms debounce)
- * - Associated papers (search-to-select dropdown)
- * - Associated concepts (search-to-select dropdown)
- * - Tags (tag cloud toggle)
- *
- * See spec: section 6.2
+ * Default path keeps only full-text search visible.
+ * Paper / concept / tag filters stay available behind an advanced toggle.
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
@@ -30,6 +25,11 @@ export interface NotesFilterSidebarProps {
 export function NotesFilterSidebar({ filter, onFilterChange, concepts, papers, allTags }: NotesFilterSidebarProps) {
   const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState(filter.searchText ?? '');
+  const [advancedOpen, setAdvancedOpen] = useState(() => Boolean(
+    (filter.paperIds?.length ?? 0) > 0
+    || (filter.conceptIds?.length ?? 0) > 0
+    || (filter.tags?.length ?? 0) > 0,
+  ));
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // 500ms debounce for search
@@ -86,7 +86,19 @@ export function NotesFilterSidebar({ filter, onFilterChange, concepts, papers, a
   const selectedPapers = filter.paperIds ?? [];
   const selectedConcepts = filter.conceptIds ?? [];
   const selectedTags = filter.tags ?? [];
-  const hasActiveFilters = searchInput || selectedPapers.length > 0 || selectedConcepts.length > 0 || selectedTags.length > 0;
+  const hasAdvancedFilters = selectedPapers.length > 0 || selectedConcepts.length > 0 || selectedTags.length > 0;
+  const hasActiveFilters = Boolean(searchInput || hasAdvancedFilters);
+  const advancedSummary = [
+    selectedPapers.length > 0 ? `${t('notes.filter.papers')} ${selectedPapers.length}` : null,
+    selectedConcepts.length > 0 ? `${t('notes.filter.concepts')} ${selectedConcepts.length}` : null,
+    selectedTags.length > 0 ? `${t('common.tags')} ${selectedTags.length}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  useEffect(() => {
+    if (hasAdvancedFilters) {
+      setAdvancedOpen(true);
+    }
+  }, [hasAdvancedFilters]);
 
   return (
     <div style={{
@@ -106,51 +118,106 @@ export function NotesFilterSidebar({ filter, onFilterChange, concepts, papers, a
         />
       </div>
 
-      {/* ── Papers ── */}
-      <EntitySelector
-        icon={<FileText size={12} />}
-        label={t('notes.filter.papers')}
-        placeholder={t('notes.filter.searchPapers')}
-        items={papers}
-        selectedIds={selectedPapers}
-        onToggle={handlePaperToggle}
-        getLabel={(p) => p.title}
-        chipColor="#3B82F6"
-      />
+      <div>
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((open) => !open)}
+          aria-expanded={advancedOpen}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '8px 10px', border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm, 4px)', background: 'var(--bg-surface-low, var(--bg-surface))',
+            color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12,
+          }}
+        >
+          <span>{t('notes.filter.advanced')}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {hasAdvancedFilters && (
+              <span style={{
+                minWidth: 18, height: 18, padding: '0 5px',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 999, backgroundColor: 'var(--bg-surface-high, rgba(0,0,0,0.06))',
+                color: 'var(--text-primary)', fontSize: 11,
+              }}>
+                {selectedPapers.length + selectedConcepts.length + selectedTags.length}
+              </span>
+            )}
+            <ChevronDown
+              size={12}
+              style={{ transform: advancedOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.15s ease' }}
+            />
+          </span>
+        </button>
 
-      {/* ── Concepts ── */}
-      <EntitySelector
-        icon={<Lightbulb size={12} />}
-        label={t('notes.filter.concepts')}
-        placeholder={t('notes.filter.searchConcepts')}
-        items={concepts}
-        selectedIds={selectedConcepts}
-        onToggle={handleConceptToggle}
-        getLabel={(c) => c.nameEn}
-        chipColor="#10B981"
-      />
-
-      {/* ── Tags ── */}
-      {allTags.length > 0 && (
-        <div>
-          <SectionLabel icon={<Tag size={12} />} label={t('common.tags')} />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {allTags.map((tag) => (
-              <button
-                key={tag}
-                onClick={() => handleTagToggle(tag)}
+        {!advancedOpen && advancedSummary.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+            {advancedSummary.map((item) => (
+              <span
+                key={item}
                 style={{
-                  padding: '2px 8px', fontSize: 11, border: 'none', borderRadius: 10, cursor: 'pointer',
-                  background: selectedTags.includes(tag) ? 'var(--accent-color)' : 'var(--bg-surface-high, var(--bg-surface))',
-                  color: selectedTags.includes(tag) ? '#fff' : 'var(--text-muted)',
+                  padding: '2px 8px', borderRadius: 999,
+                  backgroundColor: 'var(--bg-surface-high, var(--bg-surface))',
+                  color: 'var(--text-muted)', fontSize: 11,
                 }}
               >
-                #{tag}
-              </button>
+                {item}
+              </span>
             ))}
           </div>
-        </div>
-      )}
+        )}
+
+        {advancedOpen && (
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 14,
+            marginTop: 8, padding: 10,
+            border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm, 4px)',
+            background: 'var(--bg-surface-low, var(--bg-surface))',
+          }}>
+            <EntitySelector
+              icon={<FileText size={12} />}
+              label={t('notes.filter.papers')}
+              placeholder={t('notes.filter.searchPapers')}
+              items={papers}
+              selectedIds={selectedPapers}
+              onToggle={handlePaperToggle}
+              getLabel={(p) => p.title}
+              chipColor="#3B82F6"
+            />
+
+            <EntitySelector
+              icon={<Lightbulb size={12} />}
+              label={t('notes.filter.concepts')}
+              placeholder={t('notes.filter.searchConcepts')}
+              items={concepts}
+              selectedIds={selectedConcepts}
+              onToggle={handleConceptToggle}
+              getLabel={(c) => c.nameEn}
+              chipColor="#10B981"
+            />
+
+            {allTags.length > 0 && (
+              <div>
+                <SectionLabel icon={<Tag size={12} />} label={t('common.tags')} />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      onClick={() => handleTagToggle(tag)}
+                      style={{
+                        padding: '2px 8px', fontSize: 11, border: 'none', borderRadius: 10, cursor: 'pointer',
+                        background: selectedTags.includes(tag) ? 'var(--accent-color)' : 'var(--bg-surface-high, var(--bg-surface))',
+                        color: selectedTags.includes(tag) ? '#fff' : 'var(--text-muted)',
+                      }}
+                    >
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ── Clear ── */}
       {hasActiveFilters && (

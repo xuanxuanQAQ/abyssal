@@ -14,6 +14,7 @@ import { NoteCard } from './NoteCard';
 import { CreateNoteDialog } from './CreateNoteDialog';
 import { useNoteList } from '../../../core/ipc/hooks/useNotes';
 import type { MemoFilter } from '../../../../shared-types/models';
+import { useEntityDisplayNameCache } from '../shared/entityDisplayNameCache';
 
 interface NoteCardGridProps {
   onOpenNote: (noteId: string) => void;
@@ -22,6 +23,7 @@ interface NoteCardGridProps {
 
 export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
   const { t } = useTranslation();
+  const entityNameCache = useEntityDisplayNameCache();
   // Extract NoteFilter-compatible fields from MemoFilter
   const noteFilter = filter ? (() => {
     const nf: import('../../../../shared-types/models').NoteFilter = {};
@@ -59,7 +61,7 @@ export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
         gap: 12,
       }}>
         {filteredNotes.map((note) => (
-          <NoteCard key={note.id} note={note} onClick={() => onOpenNote(note.id)} />
+          <NoteCard key={note.id} note={note} onClick={() => onOpenNote(note.id)} entityNameCache={entityNameCache} />
         ))}
       </div>
 

@@ -62,7 +62,7 @@ export const sectionExtension = Node.create({
       'section',
       mergeAttributes(HTMLAttributes, {
         class: 'tiptap-section',
-        style: 'margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle, #e5e7eb);',
+        style: 'margin-bottom: 24px; padding-bottom: 16px;',
       }),
       0,
     ];

@@ -1,26 +1,252 @@
-// ═══ 文章、纲要与节草稿 CRUD ═══
-// §8: createArticle / setOutline / addSectionDraft / markEditedParagraphs
-
 import type Database from 'better-sqlite3';
 import type { ArticleId, OutlineEntryId } from '../../types/common';
-import type { Article, OutlineEntry, SectionDraft, ArticleStyle, ArticleStatus, OutlineEntryStatus, ArticleAsset, DraftSource } from '../../types/article';
+import type {
+  Article,
+  OutlineEntry,
+  SectionDraft,
+  ArticleAsset,
+  DraftSource,
+  ArticleSectionMeta,
+  ArticleSectionVersion,
+  OutlineEntryStatus,
+} from '../../types/article';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
+import {
+  buildDocumentProjection,
+  contentHash,
+  createBodyDocumentFromText,
+  createEmptyArticleDocument,
+  deleteSectionFromDocument,
+  extractPlainText,
+  insertSectionInDocument,
+  parseArticleDocument,
+  renameSectionInDocument,
+  reorderSectionsInDocument,
+  replaceSectionBodyInDocument,
+  serializeArticleDocument,
+  ensureOutlineHeadingIds,
+} from '../../../shared/writing/documentOutline';
+import { createInitialDefaultDraft } from './drafts';
 
-// ─── createArticle ───
+type SectionVersionRow = ArticleSectionVersion;
+type SectionMetaRow = ArticleSectionMeta;
+
+function defaultDocumentString(): string {
+  return serializeArticleDocument(createEmptyArticleDocument());
+}
+
+function extractCitedPaperIds(text: string): string[] {
+  const ids = new Set<string>();
+  const regex = /\[@([a-zA-Z0-9_-]+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    if (match[1]) ids.add(match[1]);
+  }
+  return [...ids];
+}
+
+function getArticleOrThrow(db: Database.Database, articleId: ArticleId): Article {
+  const article = getArticle(db, articleId);
+  if (!article) {
+    throw new Error(`Article not found: ${articleId}`);
+  }
+  return article;
+}
+
+function getSectionMetaMap(
+  db: Database.Database,
+  articleId: ArticleId,
+): Map<string, SectionMetaRow> {
+  const rows = db.prepare(
+    'SELECT * FROM article_section_meta WHERE article_id = ? ORDER BY updated_at',
+  ).all(articleId) as Record<string, unknown>[];
+  return new Map(rows.map((row) => {
+    const parsed = fromRow<SectionMetaRow>(row);
+    return [parsed.sectionId, parsed];
+  }));
+}
+
+function getLatestVersionMap(
+  db: Database.Database,
+  articleId: ArticleId,
+): Map<string, SectionVersionRow> {
+  const rows = db.prepare(`
+    SELECT article_id, section_id, version, title, content, document_json, content_hash, source, created_at
+    FROM article_section_versions v
+    WHERE article_id = ?
+      AND version = (
+        SELECT MAX(v2.version)
+        FROM article_section_versions v2
+        WHERE v2.article_id = v.article_id AND v2.section_id = v.section_id
+      )
+  `).all(articleId) as Record<string, unknown>[];
+
+  return new Map(rows.map((row) => {
+    const parsed = fromRow<SectionVersionRow>(row);
+    return [parsed.sectionId, parsed];
+  }));
+}
+
+function findArticleIdBySectionId(
+  db: Database.Database,
+  sectionId: string,
+): ArticleId | null {
+  const row = db.prepare(`
+    SELECT article_id
+    FROM article_section_meta
+    WHERE section_id = ?
+    UNION
+    SELECT article_id
+    FROM article_section_versions
+    WHERE section_id = ?
+    LIMIT 1
+  `).get(sectionId, sectionId) as { article_id: string } | undefined;
+
+  return (row?.article_id as ArticleId | undefined) ?? null;
+}
+
+function buildLegacyOutlineEntries(
+  db: Database.Database,
+  articleId: ArticleId,
+): OutlineEntry[] {
+  const article = getArticleOrThrow(db, articleId);
+  const normalized = ensureOutlineHeadingIds(parseArticleDocument(article.documentJson), () => crypto.randomUUID());
+  const projection = buildDocumentProjection(normalized.document);
+  const metaMap = getSectionMetaMap(db, articleId);
+
+  return projection.flatSections.map((section, index) => {
+    const meta = metaMap.get(section.id);
+    return {
+      id: section.id as OutlineEntryId,
+      articleId,
+      parentId: (section.parentId as OutlineEntryId | null) ?? null,
+      depth: section.depth,
+      sortOrder: index,
+      title: section.title,
+      coreArgument: null,
+      writingInstruction: meta?.writingInstruction ?? null,
+      conceptIds: meta?.conceptIds ?? [],
+      paperIds: meta?.paperIds ?? [],
+      status: (meta?.status ?? 'pending') as OutlineEntryStatus,
+    } satisfies OutlineEntry;
+  });
+}
+
+function syncDocumentState(
+  db: Database.Database,
+  articleId: ArticleId,
+  inputDocumentJson: string,
+  source: DraftSource,
+): { documentJson: string; updatedAt: string } {
+  const timestamp = now();
+  const parsed = parseArticleDocument(inputDocumentJson);
+  const normalized = ensureOutlineHeadingIds(parsed, () => crypto.randomUUID());
+  const projection = buildDocumentProjection(normalized.document);
+  const serialized = serializeArticleDocument(normalized.document);
+
+  const existingMeta = getSectionMetaMap(db, articleId);
+  const latestVersions = getLatestVersionMap(db, articleId);
+
+  const upsertMeta = db.prepare(`
+    INSERT INTO article_section_meta (
+      article_id, section_id, status, writing_instruction,
+      concept_ids, paper_ids, ai_model, evidence_status, evidence_gaps,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(article_id, section_id) DO UPDATE SET
+      status = excluded.status,
+      writing_instruction = excluded.writing_instruction,
+      concept_ids = excluded.concept_ids,
+      paper_ids = excluded.paper_ids,
+      ai_model = excluded.ai_model,
+      evidence_status = excluded.evidence_status,
+      evidence_gaps = excluded.evidence_gaps,
+      updated_at = excluded.updated_at
+  `);
+
+  const deleteMeta = db.prepare(
+    'DELETE FROM article_section_meta WHERE article_id = ? AND section_id = ?',
+  );
+  const nextVersionStmt = db.prepare(
+    'SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM article_section_versions WHERE article_id = ? AND section_id = ?',
+  );
+  const insertVersion = db.prepare(`
+    INSERT INTO article_section_versions (
+      article_id, section_id, version, title, content,
+      document_json, content_hash, source, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  writeTransaction(db, () => {
+    db.prepare(
+      'UPDATE articles SET document_json = ?, updated_at = ? WHERE id = ?',
+    ).run(serialized, timestamp, articleId);
+
+    const activeIds = new Set<string>();
+
+    for (const section of projection.flatSections) {
+      activeIds.add(section.id);
+      const previousMeta = existingMeta.get(section.id);
+
+      upsertMeta.run(
+        articleId,
+        section.id,
+        previousMeta?.status ?? 'pending',
+        previousMeta?.writingInstruction ?? null,
+        JSON.stringify(previousMeta?.conceptIds ?? []),
+        JSON.stringify(previousMeta?.paperIds ?? []),
+        previousMeta?.aiModel ?? null,
+        previousMeta?.evidenceStatus ?? null,
+        JSON.stringify(previousMeta?.evidenceGaps ?? []),
+        previousMeta?.createdAt ?? timestamp,
+        timestamp,
+      );
+
+      const bodyHash = contentHash(section.bodyDocument);
+      const latestVersion = latestVersions.get(section.id);
+      if (!latestVersion || latestVersion.contentHash !== bodyHash || latestVersion.title !== section.title) {
+        const versionRow = nextVersionStmt.get(articleId, section.id) as { next_version: number };
+        insertVersion.run(
+          articleId,
+          section.id,
+          versionRow.next_version,
+          section.title,
+          section.plainText,
+          serializeArticleDocument(section.bodyDocument),
+          bodyHash,
+          source,
+          timestamp,
+        );
+      }
+    }
+
+    for (const sectionId of existingMeta.keys()) {
+      if (!activeIds.has(sectionId)) {
+        deleteMeta.run(articleId, sectionId);
+      }
+    }
+  });
+
+  return {
+    documentJson: serialized,
+    updatedAt: timestamp,
+  };
+}
 
 export function createArticle(
   db: Database.Database,
   article: Omit<Article, 'createdAt' | 'updatedAt'>,
 ): ArticleId {
   const timestamp = now();
+  const documentJson = article.documentJson ?? defaultDocumentString();
 
   db.prepare(`
     INSERT INTO articles (
       id, title, style, csl_style_id, output_language, status,
-      abstract, keywords, authors, target_word_count,
+      document_json, abstract, keywords, authors, target_word_count,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     article.id,
     article.title,
@@ -28,6 +254,7 @@ export function createArticle(
     article.cslStyleId,
     article.outputLanguage,
     article.status,
+    documentJson,
     article.abstract ?? null,
     JSON.stringify(article.keywords ?? []),
     JSON.stringify(article.authors ?? []),
@@ -36,28 +263,36 @@ export function createArticle(
     timestamp,
   );
 
+  createInitialDefaultDraft(db, {
+    articleId: article.id,
+    title: '主稿',
+    documentJson,
+    writingStyle: article.style,
+    cslStyleId: article.cslStyleId,
+    abstract: article.abstract ?? null,
+    keywords: article.keywords ?? [],
+    targetWordCount: article.targetWordCount ?? null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  syncDocumentState(db, article.id, documentJson, 'manual');
   return article.id;
 }
-
-// ─── getArticle ───
 
 export function getArticle(
   db: Database.Database,
   id: ArticleId,
 ): Article | null {
-  const row = db
-    .prepare('SELECT * FROM articles WHERE id = ?')
-    .get(id) as Record<string, unknown> | undefined;
+  const row = db.prepare('SELECT * FROM articles WHERE id = ?').get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
   return fromRow<Article>(row);
 }
 
-// ─── updateArticle ───
-
 export function updateArticle(
   db: Database.Database,
   id: ArticleId,
-  updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status' | 'abstract' | 'keywords' | 'authors' | 'targetWordCount'>>,
+  updates: Partial<Pick<Article, 'title' | 'style' | 'cslStyleId' | 'outputLanguage' | 'status' | 'documentJson' | 'abstract' | 'keywords' | 'authors' | 'targetWordCount'>>,
 ): number {
   const setClauses: string[] = ['updated_at = ?'];
   const params: unknown[] = [now()];
@@ -67,307 +302,280 @@ export function updateArticle(
   if (updates.cslStyleId !== undefined) { setClauses.push('csl_style_id = ?'); params.push(updates.cslStyleId); }
   if (updates.outputLanguage !== undefined) { setClauses.push('output_language = ?'); params.push(updates.outputLanguage); }
   if (updates.status !== undefined) { setClauses.push('status = ?'); params.push(updates.status); }
+  if (updates.documentJson !== undefined) { setClauses.push('document_json = ?'); params.push(updates.documentJson); }
   if (updates.abstract !== undefined) { setClauses.push('abstract = ?'); params.push(updates.abstract); }
   if (updates.keywords !== undefined) { setClauses.push('keywords = ?'); params.push(JSON.stringify(updates.keywords)); }
   if (updates.authors !== undefined) { setClauses.push('authors = ?'); params.push(JSON.stringify(updates.authors)); }
   if (updates.targetWordCount !== undefined) { setClauses.push('target_word_count = ?'); params.push(updates.targetWordCount); }
 
   params.push(id);
-
-  return db
-    .prepare(`UPDATE articles SET ${setClauses.join(', ')} WHERE id = ?`)
-    .run(...params).changes;
+  return db.prepare(`UPDATE articles SET ${setClauses.join(', ')} WHERE id = ?`).run(...params).changes;
 }
 
-// ─── §8.1 setOutline ───
+export function getAllArticles(db: Database.Database): Article[] {
+  const rows = db.prepare('SELECT * FROM articles ORDER BY updated_at DESC').all() as Record<string, unknown>[];
+  return rows.map((row) => fromRow<Article>(row));
+}
+
+export function deleteArticle(
+  db: Database.Database,
+  id: ArticleId,
+): number {
+  return db.prepare('DELETE FROM articles WHERE id = ?').run(id).changes;
+}
+
+export function getArticleDocument(
+  db: Database.Database,
+  articleId: ArticleId,
+): { articleId: ArticleId; documentJson: string; updatedAt: string } {
+  const article = getArticleOrThrow(db, articleId);
+  const normalized = ensureOutlineHeadingIds(parseArticleDocument(article.documentJson), () => crypto.randomUUID());
+  const serialized = serializeArticleDocument(normalized.document);
+  if (serialized !== (article.documentJson ?? defaultDocumentString())) {
+    updateArticle(db, articleId, { documentJson: serialized });
+  }
+  return {
+    articleId,
+    documentJson: serialized,
+    updatedAt: article.updatedAt,
+  };
+}
+
+export function saveArticleDocument(
+  db: Database.Database,
+  articleId: ArticleId,
+  documentJson: string,
+  source: DraftSource,
+): void {
+  syncDocumentState(db, articleId, documentJson, source);
+}
 
 export function setOutline(
   db: Database.Database,
   articleId: ArticleId,
   entries: OutlineEntry[],
 ): void {
-  writeTransaction(db, () => {
-    const timestamp = now();
-
-    // 获取现有纲要节 ID
-    const existingRows = db
-      .prepare('SELECT id FROM outlines WHERE article_id = ?')
-      .all(articleId) as { id: string }[];
-    const existingIds = new Set(existingRows.map((r) => r.id));
-
-    const newIds = new Set(entries.map((e) => e.id as string));
-
-    // INSERT 或 UPDATE
-    for (const entry of entries) {
-      if (existingIds.has(entry.id)) {
-        db.prepare(`
-          UPDATE outlines
-          SET sort_order = ?, title = ?, core_argument = ?,
-              writing_instruction = ?, concept_ids = ?, paper_ids = ?,
-              status = ?, parent_id = ?, depth = ?, updated_at = ?
-          WHERE id = ?
-        `).run(
-          entry.sortOrder,
-          entry.title,
-          entry.coreArgument,
-          entry.writingInstruction,
-          JSON.stringify(entry.conceptIds),
-          JSON.stringify(entry.paperIds),
-          entry.status,
-          entry.parentId ?? null,
-          entry.depth ?? 0,
-          timestamp,
-          entry.id,
-        );
-      } else {
-        db.prepare(`
-          INSERT INTO outlines (
-            id, article_id, sort_order, title, core_argument,
-            writing_instruction, concept_ids, paper_ids, status,
-            parent_id, depth,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          entry.id,
-          articleId,
-          entry.sortOrder,
-          entry.title,
-          entry.coreArgument,
-          entry.writingInstruction,
-          JSON.stringify(entry.conceptIds),
-          JSON.stringify(entry.paperIds),
-          entry.status,
-          entry.parentId ?? null,
-          entry.depth ?? 0,
-          timestamp,
-          timestamp,
-        );
-      }
-    }
-
-    // 不在新列表中的旧节标记为 deprecated（§8.1: 不删除，保留历史草稿）
-    for (const existingId of existingIds) {
-      if (!newIds.has(existingId)) {
-        // outlines 表没有 deprecated 列，使用 status 标记
-        // 规范原文使用 status = 'deprecated'，但 CHECK 约束不含此值
-        // 这里保留原节不动，不改变 status（避免触发 CHECK 约束错误）
-        // 从前端通过 sort_order = -1 标记为不显示
-        db.prepare(
-          'UPDATE outlines SET sort_order = -1, updated_at = ? WHERE id = ?',
-        ).run(timestamp, existingId);
-      }
-    }
-  });
+  const sorted = [...entries].sort((left, right) => left.sortOrder - right.sortOrder);
+  const doc = {
+    type: 'doc',
+    content: sorted.flatMap((entry) => [
+      {
+        type: 'heading',
+        attrs: {
+          level: Math.min((entry.depth ?? 0) + 1, 3),
+          sectionId: entry.id,
+        },
+        content: [{ type: 'text', text: entry.title || '未命名节' }],
+      },
+      { type: 'paragraph' },
+    ]),
+  };
+  saveArticleDocument(db, articleId, JSON.stringify(doc), 'manual');
 }
-
-// ─── getOutline ───
 
 export function getOutline(
   db: Database.Database,
   articleId: ArticleId,
 ): OutlineEntry[] {
-  const rows = db
-    .prepare(
-      'SELECT * FROM outlines WHERE article_id = ? AND sort_order >= 0 ORDER BY sort_order',
-    )
-    .all(articleId) as Record<string, unknown>[];
-
-  return rows.map((r) => fromRow<OutlineEntry>(r));
+  return buildLegacyOutlineEntries(db, articleId);
 }
-
-// ─── §8.2 addSectionDraft ───
-
-export function addSectionDraft(
-  db: Database.Database,
-  outlineEntryId: OutlineEntryId,
-  content: string,
-  llmBackend: string,
-  source: DraftSource = 'manual',
-  documentJson: string | null = null,
-): number {
-  const timestamp = now();
-
-  return writeTransaction(db, () => {
-    // 计算新版本号
-    const versionRow = db
-      .prepare(
-        'SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM section_drafts WHERE outline_entry_id = ?',
-      )
-      .get(outlineEntryId) as { next_version: number };
-
-    const version = versionRow.next_version;
-
-    db.prepare(`
-      INSERT INTO section_drafts (
-        outline_entry_id, version, content, document_json, llm_backend,
-        source, edited_paragraphs, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, '[]', ?)
-    `).run(outlineEntryId, version, content, documentJson, llmBackend, source, timestamp);
-
-    // 首次生成时从 pending → drafted
-    db.prepare(`
-      UPDATE outlines SET status = 'drafted', updated_at = ?
-      WHERE id = ? AND status = 'pending'
-    `).run(timestamp, outlineEntryId);
-
-    return version;
-  });
-}
-
-// ─── getSectionDrafts ───
-
-export function getSectionDrafts(
-  db: Database.Database,
-  outlineEntryId: OutlineEntryId,
-): SectionDraft[] {
-  const rows = db
-    .prepare(
-      'SELECT * FROM section_drafts WHERE outline_entry_id = ? ORDER BY version DESC',
-    )
-    .all(outlineEntryId) as Record<string, unknown>[];
-
-  return rows.map((r) => fromRow<SectionDraft>(r));
-}
-
-// ─── §8.3 markEditedParagraphs ───
-
-export function markEditedParagraphs(
-  db: Database.Database,
-  outlineEntryId: OutlineEntryId,
-  version: number,
-  paragraphIndices: number[],
-): number {
-  return db
-    .prepare(
-      'UPDATE section_drafts SET edited_paragraphs = ? WHERE outline_entry_id = ? AND version = ?',
-    )
-    .run(JSON.stringify(paragraphIndices), outlineEntryId, version).changes;
-}
-
-// ─── getOutlineEntry ───
 
 export function getOutlineEntry(
   db: Database.Database,
   id: OutlineEntryId,
 ): OutlineEntry | null {
-  const row = db
-    .prepare('SELECT * FROM outlines WHERE id = ?')
-    .get(id) as Record<string, unknown> | undefined;
-  if (!row) return null;
-  return fromRow<OutlineEntry>(row);
+  const articleId = findArticleIdBySectionId(db, id);
+  if (!articleId) return null;
+  return buildLegacyOutlineEntries(db, articleId).find((entry) => entry.id === id) ?? null;
 }
 
-// ─── updateOutlineEntry ───
+function upsertSectionMetaPatch(
+  db: Database.Database,
+  articleId: ArticleId,
+  sectionId: string,
+  patch: Partial<Pick<OutlineEntry, 'writingInstruction' | 'conceptIds' | 'paperIds' | 'status'>> & {
+    aiModel?: string | null;
+    evidenceStatus?: string | null;
+    evidenceGaps?: string[];
+  },
+): number {
+  const metaMap = getSectionMetaMap(db, articleId);
+  const current = metaMap.get(sectionId);
+  const timestamp = now();
+  return db.prepare(`
+    INSERT INTO article_section_meta (
+      article_id, section_id, status, writing_instruction,
+      concept_ids, paper_ids, ai_model, evidence_status, evidence_gaps,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(article_id, section_id) DO UPDATE SET
+      status = excluded.status,
+      writing_instruction = excluded.writing_instruction,
+      concept_ids = excluded.concept_ids,
+      paper_ids = excluded.paper_ids,
+      ai_model = excluded.ai_model,
+      evidence_status = excluded.evidence_status,
+      evidence_gaps = excluded.evidence_gaps,
+      updated_at = excluded.updated_at
+  `).run(
+    articleId,
+    sectionId,
+    patch.status ?? current?.status ?? 'pending',
+    patch.writingInstruction ?? current?.writingInstruction ?? null,
+    JSON.stringify(patch.conceptIds ?? current?.conceptIds ?? []),
+    JSON.stringify(patch.paperIds ?? current?.paperIds ?? []),
+    patch.aiModel ?? current?.aiModel ?? null,
+    patch.evidenceStatus ?? current?.evidenceStatus ?? null,
+    JSON.stringify(patch.evidenceGaps ?? current?.evidenceGaps ?? []),
+    current?.createdAt ?? timestamp,
+    timestamp,
+  ).changes;
+}
 
 export function updateOutlineEntry(
   db: Database.Database,
   id: OutlineEntryId,
   updates: Partial<Pick<OutlineEntry, 'title' | 'coreArgument' | 'writingInstruction' | 'conceptIds' | 'paperIds' | 'status' | 'sortOrder' | 'parentId' | 'depth'>>,
 ): number {
-  const setClauses: string[] = ['updated_at = ?'];
-  const params: unknown[] = [now()];
+  const articleId = findArticleIdBySectionId(db, id);
+  if (!articleId) return 0;
 
-  if (updates.title !== undefined) { setClauses.push('title = ?'); params.push(updates.title); }
-  if (updates.coreArgument !== undefined) { setClauses.push('core_argument = ?'); params.push(updates.coreArgument); }
-  if (updates.writingInstruction !== undefined) { setClauses.push('writing_instruction = ?'); params.push(updates.writingInstruction); }
-  if (updates.conceptIds !== undefined) { setClauses.push('concept_ids = ?'); params.push(JSON.stringify(updates.conceptIds)); }
-  if (updates.paperIds !== undefined) { setClauses.push('paper_ids = ?'); params.push(JSON.stringify(updates.paperIds)); }
-  if (updates.status !== undefined) { setClauses.push('status = ?'); params.push(updates.status); }
-  if (updates.sortOrder !== undefined) { setClauses.push('sort_order = ?'); params.push(updates.sortOrder); }
-  if (updates.parentId !== undefined) { setClauses.push('parent_id = ?'); params.push(updates.parentId); }
-  if (updates.depth !== undefined) { setClauses.push('depth = ?'); params.push(updates.depth); }
+  let changed = 0;
+  if (updates.title !== undefined) {
+    const current = getArticleDocument(db, articleId);
+    const renamed = renameSectionInDocument(parseArticleDocument(current.documentJson), id, updates.title);
+    saveArticleDocument(db, articleId, JSON.stringify(renamed), 'manual');
+    changed += 1;
+  }
 
-  params.push(id);
+  if (
+    updates.writingInstruction !== undefined ||
+    updates.conceptIds !== undefined ||
+    updates.paperIds !== undefined ||
+    updates.status !== undefined
+  ) {
+    const metaPatch: Parameters<typeof upsertSectionMetaPatch>[3] = {};
+    if (updates.writingInstruction !== undefined) metaPatch.writingInstruction = updates.writingInstruction;
+    if (updates.conceptIds !== undefined) metaPatch.conceptIds = updates.conceptIds;
+    if (updates.paperIds !== undefined) metaPatch.paperIds = updates.paperIds;
+    if (updates.status !== undefined) metaPatch.status = updates.status;
+    changed += upsertSectionMetaPatch(db, articleId, id, metaPatch);
+  }
 
-  return db
-    .prepare(`UPDATE outlines SET ${setClauses.join(', ')} WHERE id = ?`)
-    .run(...params).changes;
+  return changed;
 }
-
-// ─── markOutlineEntryDeleted ───
 
 export function markOutlineEntryDeleted(
   db: Database.Database,
   id: OutlineEntryId,
 ): number {
-  return db
-    .prepare('UPDATE outlines SET sort_order = -1, updated_at = ? WHERE id = ?')
-    .run(now(), id).changes;
+  const articleId = findArticleIdBySectionId(db, id);
+  if (!articleId) return 0;
+  const current = getArticleDocument(db, articleId);
+  const next = deleteSectionFromDocument(parseArticleDocument(current.documentJson), id);
+  saveArticleDocument(db, articleId, JSON.stringify(next), 'manual');
+  return 1;
 }
-
-// ─── searchSections ───
 
 export function searchSections(
   db: Database.Database,
   query: string,
 ): Array<{ outlineEntryId: OutlineEntryId; articleId: ArticleId; title: string; snippet: string }> {
-  const likePattern = `%${query}%`;
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length === 0) return [];
 
-  // Search in outline titles
-  const titleMatches = db.prepare(`
-    SELECT o.id AS outline_entry_id, o.article_id, o.title, '' AS snippet
-    FROM outlines o
-    WHERE o.sort_order >= 0 AND o.title LIKE ?
-    LIMIT 20
-  `).all(likePattern) as Array<Record<string, unknown>>;
-
-  // Search in section draft content
-  const contentMatches = db.prepare(`
-    SELECT o.id AS outline_entry_id, o.article_id, o.title,
-           SUBSTR(sd.content, MAX(1, INSTR(sd.content, ?) - 40), 120) AS snippet
-    FROM outlines o
-    JOIN section_drafts sd ON sd.outline_entry_id = o.id
-    WHERE o.sort_order >= 0 AND sd.content LIKE ?
-      AND sd.version = (
-        SELECT MAX(sd2.version) FROM section_drafts sd2 WHERE sd2.outline_entry_id = o.id
-      )
-    LIMIT 20
-  `).all(query, likePattern) as Array<Record<string, unknown>>;
-
-  // Deduplicate by outlineEntryId
-  const seen = new Set<string>();
   const results: Array<{ outlineEntryId: OutlineEntryId; articleId: ArticleId; title: string; snippet: string }> = [];
+  for (const article of getAllArticles(db)) {
+    const projection = buildDocumentProjection(parseArticleDocument(article.documentJson));
+    for (const section of projection.flatSections) {
+      const haystack = `${section.title}\n${section.plainText}`.toLowerCase();
+      if (!haystack.includes(normalizedQuery)) continue;
 
-  for (const row of [...titleMatches, ...contentMatches]) {
-    const eid = row['outline_entry_id'] as string;
-    if (seen.has(eid)) continue;
-    seen.add(eid);
-    results.push({
-      outlineEntryId: eid as OutlineEntryId,
-      articleId: row['article_id'] as ArticleId,
-      title: (row['title'] as string) ?? '',
-      snippet: (row['snippet'] as string) ?? '',
-    });
+      const index = section.plainText.toLowerCase().indexOf(normalizedQuery);
+      const snippet = index >= 0
+        ? section.plainText.slice(Math.max(0, index - 40), index + normalizedQuery.length + 80)
+        : '';
+      results.push({
+        outlineEntryId: section.id as OutlineEntryId,
+        articleId: article.id,
+        title: section.title,
+        snippet,
+      });
+    }
   }
 
-  return results;
+  return results.slice(0, 20);
 }
 
-// ─── getAllArticles ───
-
-export function getAllArticles(db: Database.Database): Article[] {
-  const rows = db
-    .prepare('SELECT * FROM articles ORDER BY updated_at DESC')
-    .all() as Record<string, unknown>[];
-  return rows.map((r) => fromRow<Article>(r));
-}
-
-// ─── deleteArticle ───
-
-export function deleteArticle(
+export function addSectionDraft(
   db: Database.Database,
-  id: ArticleId,
+  outlineEntryId: OutlineEntryId,
+  content: string,
+  _llmBackend: string,
+  source: DraftSource = 'manual',
+  documentJson: string | null = null,
 ): number {
-  // ON DELETE CASCADE 会删除 outlines → section_drafts
-  return db.prepare('DELETE FROM articles WHERE id = ?').run(id).changes;
+  const articleId = findArticleIdBySectionId(db, outlineEntryId);
+  if (!articleId) {
+    throw new Error(`Section not found: ${outlineEntryId}`);
+  }
+
+  const current = getArticleDocument(db, articleId);
+  const bodyDoc = documentJson ? parseArticleDocument(documentJson) : createBodyDocumentFromText(content);
+  const nextDocument = replaceSectionBodyInDocument(parseArticleDocument(current.documentJson), outlineEntryId, bodyDoc);
+  saveArticleDocument(db, articleId, JSON.stringify(nextDocument), source);
+
+  const latest = db.prepare(`
+    SELECT version
+    FROM article_section_versions
+    WHERE article_id = ? AND section_id = ?
+    ORDER BY version DESC
+    LIMIT 1
+  `).get(articleId, outlineEntryId) as { version: number } | undefined;
+
+  return latest?.version ?? 1;
 }
 
-// ═══ Full Document Operations ═══
+export function getSectionDrafts(
+  db: Database.Database,
+  outlineEntryId: OutlineEntryId,
+): SectionDraft[] {
+  const articleId = findArticleIdBySectionId(db, outlineEntryId);
+  if (!articleId) return [];
 
-/**
- * Fetch all sections for an article with their latest draft content.
- * Returns sections ordered by sort_order with parent_id/depth.
- */
+  const rows = db.prepare(`
+    SELECT article_id, section_id AS outline_entry_id, version, title, content,
+           document_json, source, created_at
+    FROM article_section_versions
+    WHERE article_id = ? AND section_id = ?
+    ORDER BY version DESC
+  `).all(articleId, outlineEntryId) as Record<string, unknown>[];
+
+  return rows.map((row) => {
+    const citedPaperIds = extractCitedPaperIds(String(row['content'] ?? ''));
+    return {
+      outlineEntryId: row['outline_entry_id'] as OutlineEntryId,
+      version: Number(row['version'] ?? 1),
+      content: String(row['content'] ?? ''),
+      documentJson: (row['document_json'] as string | null) ?? null,
+      llmBackend: row['source'] === 'manual' ? 'manual' : 'ai',
+      source: (row['source'] as DraftSource) ?? 'manual',
+      editedParagraphs: [],
+      createdAt: String(row['created_at'] ?? ''),
+      citedPaperIds,
+    } satisfies SectionDraft;
+  });
+}
+
+export function markEditedParagraphs(
+  _db: Database.Database,
+  _outlineEntryId: OutlineEntryId,
+  _version: number,
+  _paragraphIndices: number[],
+): number {
+  return 1;
+}
+
 export function getFullDocument(
   db: Database.Database,
   articleId: ArticleId,
@@ -381,41 +589,25 @@ export function getFullDocument(
   parentId: string | null;
   depth: number;
 }> {
-  const rows = db.prepare(`
-    SELECT
-      o.id AS section_id,
-      o.title,
-      o.sort_order,
-      o.parent_id,
-      o.depth,
-      sd.content,
-      sd.document_json,
-      sd.version
-    FROM outlines o
-    LEFT JOIN section_drafts sd ON sd.outline_entry_id = o.id
-      AND sd.version = (
-        SELECT MAX(sd2.version) FROM section_drafts sd2 WHERE sd2.outline_entry_id = o.id
-      )
-    WHERE o.article_id = ? AND o.sort_order >= 0
-    ORDER BY o.sort_order
-  `).all(articleId) as Array<Record<string, unknown>>;
+  const article = getArticleOrThrow(db, articleId);
+  const projection = buildDocumentProjection(parseArticleDocument(article.documentJson));
+  const latestVersions = getLatestVersionMap(db, articleId);
 
-  return rows.map((r) => ({
-    sectionId: r['section_id'] as string,
-    title: (r['title'] as string) ?? '',
-    content: (r['content'] as string) ?? '',
-    documentJson: (r['document_json'] as string | null) ?? null,
-    version: (r['version'] as number) ?? 0,
-    sortIndex: (r['sort_order'] as number) ?? 0,
-    parentId: (r['parent_id'] as string | null) ?? null,
-    depth: (r['depth'] as number) ?? 0,
-  }));
+  return projection.flatSections.map((section, index) => {
+    const latest = latestVersions.get(section.id);
+    return {
+      sectionId: section.id,
+      title: section.title,
+      content: latest?.content ?? section.plainText,
+      documentJson: latest?.documentJson ?? serializeArticleDocument(section.bodyDocument),
+      version: latest?.version ?? 0,
+      sortIndex: index,
+      parentId: section.parentId,
+      depth: section.depth,
+    };
+  });
 }
 
-/**
- * Save multiple section drafts atomically.
- * Only saves sections that have actually changed.
- */
 export function saveDocumentSections(
   db: Database.Database,
   articleId: ArticleId,
@@ -427,27 +619,53 @@ export function saveDocumentSections(
     source: DraftSource;
   }>,
 ): void {
-  const updateTitle = db.prepare(
-    `UPDATE outlines SET title = ?, updated_at = ? WHERE id = ? AND article_id = ?`,
-  );
-  writeTransaction(db, () => {
-    for (const section of sections) {
-      addSectionDraft(
-        db,
-        section.sectionId as OutlineEntryId,
-        section.content,
-        section.source === 'manual' ? 'manual' : 'ai',
-        section.source,
-        section.documentJson ?? null,
-      );
-      if (section.title !== undefined) {
-        updateTitle.run(section.title, new Date().toISOString(), section.sectionId, articleId);
-      }
+  let document = parseArticleDocument(getArticleDocument(db, articleId).documentJson);
+
+  for (const section of sections) {
+    if (section.title !== undefined) {
+      document = renameSectionInDocument(document, section.sectionId, section.title);
     }
-  });
+    if (section.documentJson !== undefined || section.content !== undefined) {
+      const bodyDoc = section.documentJson
+        ? parseArticleDocument(section.documentJson)
+        : createBodyDocumentFromText(section.content);
+      document = replaceSectionBodyInDocument(document, section.sectionId, bodyDoc);
+    }
+  }
+
+  saveArticleDocument(db, articleId, JSON.stringify(document), sections[0]?.source ?? 'manual');
 }
 
-// ═══ Article Assets CRUD ═══
+export function cleanupVersions(
+  db: Database.Database,
+  articleId: ArticleId,
+  keepCount: number,
+): number {
+  return writeTransaction(db, () => {
+    const sectionRows = db.prepare(
+      'SELECT DISTINCT section_id FROM article_section_versions WHERE article_id = ?',
+    ).all(articleId) as Array<{ section_id: string }>;
+
+    let totalDeleted = 0;
+    for (const sectionRow of sectionRows) {
+      const threshold = db.prepare(`
+        SELECT version
+        FROM article_section_versions
+        WHERE article_id = ? AND section_id = ?
+        ORDER BY version DESC
+        LIMIT 1 OFFSET ?
+      `).get(articleId, sectionRow.section_id, keepCount) as { version: number } | undefined;
+
+      if (!threshold) continue;
+      totalDeleted += db.prepare(`
+        DELETE FROM article_section_versions
+        WHERE article_id = ? AND section_id = ? AND version <= ?
+      `).run(articleId, sectionRow.section_id, threshold.version).changes;
+    }
+
+    return totalDeleted;
+  });
+}
 
 export function addArticleAsset(
   db: Database.Database,
@@ -478,16 +696,14 @@ export function getArticleAssets(
   const rows = db.prepare(
     'SELECT * FROM article_assets WHERE article_id = ? ORDER BY created_at',
   ).all(articleId) as Record<string, unknown>[];
-  return rows.map((r) => fromRow<ArticleAsset>(r));
+  return rows.map((row) => fromRow<ArticleAsset>(row));
 }
 
 export function getArticleAsset(
   db: Database.Database,
   assetId: string,
 ): ArticleAsset | null {
-  const row = db.prepare(
-    'SELECT * FROM article_assets WHERE id = ?',
-  ).get(assetId) as Record<string, unknown> | undefined;
+  const row = db.prepare('SELECT * FROM article_assets WHERE id = ?').get(assetId) as Record<string, unknown> | undefined;
   if (!row) return null;
   return fromRow<ArticleAsset>(row);
 }
@@ -497,46 +713,4 @@ export function deleteArticleAsset(
   assetId: string,
 ): number {
   return db.prepare('DELETE FROM article_assets WHERE id = ?').run(assetId).changes;
-}
-
-// ═══ Version Cleanup ═══
-
-/**
- * Delete old draft versions, keeping the most recent `keepCount` per section.
- * Returns the number of deleted rows.
- */
-export function cleanupVersions(
-  db: Database.Database,
-  articleId: ArticleId,
-  keepCount: number,
-): number {
-  return writeTransaction(db, () => {
-    // Get all outline entry IDs for this article
-    const entries = db.prepare(
-      'SELECT id FROM outlines WHERE article_id = ? AND sort_order >= 0',
-    ).all(articleId) as { id: string }[];
-
-    let totalDeleted = 0;
-
-    for (const entry of entries) {
-      // Find the version threshold
-      const thresholdRow = db.prepare(`
-        SELECT version FROM section_drafts
-        WHERE outline_entry_id = ?
-        ORDER BY version DESC
-        LIMIT 1 OFFSET ?
-      `).get(entry.id, keepCount) as { version: number } | undefined;
-
-      if (!thresholdRow) continue; // fewer versions than keepCount
-
-      const deleted = db.prepare(`
-        DELETE FROM section_drafts
-        WHERE outline_entry_id = ? AND version <= ?
-      `).run(entry.id, thresholdRow.version).changes;
-
-      totalDeleted += deleted;
-    }
-
-    return totalDeleted;
-  });
 }

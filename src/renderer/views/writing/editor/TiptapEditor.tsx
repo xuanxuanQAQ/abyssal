@@ -28,7 +28,7 @@ import { paragraphMarkPlugin } from './extensions/paragraphMarkPlugin';
 import { paragraphIdPlugin } from './extensions/paragraphIdPlugin';
 import { mathExtension } from './extensions/mathExtension';
 import { aiStreamingBlockExtension } from './extensions/aiStreamingBlockExtension';
-import { sectionExtension } from './extensions/sectionExtension';
+import { outlineHeadingExtension } from './extensions/outlineHeadingExtension';
 import { imageExtension } from './extensions/imageExtension';
 import { footnoteExtension } from './extensions/footnoteExtension';
 import { crossRefExtension } from './extensions/crossRefExtension';
@@ -48,7 +48,7 @@ interface TiptapEditorProps {
   onJsonUpdate?: ((json: object) => void) | undefined;
   /** Called once when the Tiptap editor instance is created */
   onEditorReady?: ((editor: Editor) => void) | undefined;
-  /** Whether to use unified document mode (doc > section+) */
+  /** Whether to use the article-wide heading-driven document mode */
   unifiedMode?: boolean;
 }
 
@@ -57,9 +57,8 @@ interface TiptapEditorProps {
 function createExtensions(unifiedMode: boolean = false) {
   return [
     StarterKit.configure({
-      heading: {
-        levels: unifiedMode ? [1, 2, 3, 4, 5, 6] : [2, 3],
-      },
+      heading: false,
+      link: false,
     }),
     Link.configure({
       openOnClick: false,
@@ -86,8 +85,9 @@ function createExtensions(unifiedMode: boolean = false) {
     paragraphIdPlugin,
     ...mathExtension,
     aiStreamingBlockExtension,
-    // New extensions for writing pipeline overhaul
-    ...(unifiedMode ? [sectionExtension] : []),
+    outlineHeadingExtension.configure({
+      levels: unifiedMode ? [1, 2, 3, 4, 5, 6] : [2, 3],
+    }),
     imageExtension,
     footnoteExtension,
     crossRefExtension,
@@ -109,13 +109,13 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       ({ editor: ed }: { editor: Editor }) => {
         editorRef.current = ed;
         setUnsavedChanges(true);
+        onJsonUpdate?.(ed.getJSON());
 
         // Debounce serialization to avoid per-keystroke full DOM traversal.
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
           if (editorRef.current && !editorRef.current.isDestroyed) {
             onUpdate?.(editorRef.current.getHTML());
-            onJsonUpdate?.(editorRef.current.getJSON());
           }
         }, 300);
       },
@@ -135,12 +135,14 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     const editor = useEditor({
       extensions: createExtensions(unifiedMode ?? false),
       content: initialContent,
+      editable: true,
       onUpdate: handleUpdate,
       onFocus: handleFocus,
       onBlur: handleBlur,
       editorProps: {
         attributes: {
           class: 'tiptap-editor-content',
+          'data-writing-editor': 'true',
         },
       },
     });
@@ -213,12 +215,40 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     return (
       <div
         className="tiptap-editor-wrapper"
+        onMouseDown={(event) => {
+          if (!editor) return;
+
+          const target = event.target as HTMLElement;
+          if (target.closest('[data-writing-toolbar="true"]')) {
+            return;
+          }
+          const clickedInsideEditor = target.closest('.ProseMirror') !== null;
+
+          // Click on wrapper blank area: focus editor and move caret near click.
+          if (!clickedInsideEditor) {
+            const coords = { left: event.clientX, top: event.clientY };
+            const resolved = editor.view.posAtCoords(coords);
+            if (resolved?.pos != null) {
+              editor.chain().focus().setTextSelection(resolved.pos).run();
+            } else {
+              const endPos = editor.state.doc.content.size;
+              editor.chain().focus().setTextSelection(endPos).run();
+            }
+            return;
+          }
+
+          editor.chain().focus().run();
+        }}
         style={{
-          maxWidth: 720,
-          margin: '0 auto',
-          padding: 24,
+          width: '100%',
+          margin: 0,
+          padding: '16px 20px 24px',
           flex: 1,
+          minHeight: 0,
+          height: '100%',
           overflowY: 'auto',
+          overscrollBehavior: 'contain',
+          cursor: 'text',
         }}
       >
         <EditorContent editor={editor} />

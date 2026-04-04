@@ -10,12 +10,12 @@
 
 import React, { useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ArticleOutline, SectionNode } from '../../../../shared-types/models';
+import type { DraftOutline, SectionNode } from '../../../../shared-types/models';
 import type { CitationStyle } from '../../../../shared-types/enums';
-import { useUpdateArticle } from '../../../core/ipc/hooks/useArticles';
+import { useUpdateDraft } from '../../../core/ipc/hooks/useDrafts';
 
 interface OutlineMetadataProps {
-  article: ArticleOutline;
+  draft: DraftOutline;
 }
 
 const WRITING_STYLES = [
@@ -101,42 +101,45 @@ const progressBarOuterStyle: React.CSSProperties = {
   overflow: 'hidden',
 };
 
-export function OutlineMetadata({ article }: OutlineMetadataProps) {
+export function OutlineMetadata({ draft }: OutlineMetadataProps) {
   const { t } = useTranslation();
-  const updateArticle = useUpdateArticle();
+  const updateDraft = useUpdateDraft();
 
   const { total, nonPending, wordCount } = useMemo(
-    () => countAllSections(article.sections),
-    [article.sections],
+    () => countAllSections(draft.sections),
+    [draft.sections],
   );
 
   const progressPct = total > 0 ? Math.round((nonPending / total) * 100) : 0;
 
   const handleWritingStyleChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      updateArticle.mutate({
-        articleId: article.id,
+      updateDraft.mutate({
+        draftId: draft.id,
         patch: {
           metadata: {
-            ...article.metadata,
+            ...draft.metadata,
             writingStyle: e.target.value || undefined,
           },
         },
       });
     },
-    [article.id, article.metadata, updateArticle],
+    [draft.id, draft.metadata, updateDraft],
   );
 
   const handleCitationStyleChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      updateArticle.mutate({
-        articleId: article.id,
+      updateDraft.mutate({
+        draftId: draft.id,
         patch: {
-          citationStyle: e.target.value as CitationStyle,
+          metadata: {
+            ...draft.metadata,
+            citationStyle: e.target.value as CitationStyle,
+          },
         },
       });
     },
-    [article.id, updateArticle],
+    [draft.id, draft.metadata, updateDraft],
   );
 
   return (
@@ -146,7 +149,7 @@ export function OutlineMetadata({ article }: OutlineMetadataProps) {
         <span style={labelStyle}>{t('writing.metadata.writingStyle')}</span>
         <select
           style={selectStyle}
-          value={article.metadata.writingStyle ?? ''}
+          value={draft.metadata.writingStyle ?? ''}
           onChange={handleWritingStyleChange}
         >
           <option value="">--</option>
@@ -163,7 +166,7 @@ export function OutlineMetadata({ article }: OutlineMetadataProps) {
         <span style={labelStyle}>{t('writing.metadata.citationFormat')}</span>
         <select
           style={selectStyle}
-          value={article.citationStyle}
+          value={draft.metadata.citationStyle ?? 'GB/T 7714'}
           onChange={handleCitationStyleChange}
         >
           {CITATION_STYLES.map((cs) => (

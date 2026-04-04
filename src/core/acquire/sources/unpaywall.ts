@@ -1,7 +1,7 @@
 // ═══ Level 1: Unpaywall ═══
 // §6.3: 通过 DOI 查询 OA PDF 链接
 
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import type { RateLimiter } from '../../infra/rate-limiter';
 import { downloadPdf, deleteFileIfExists } from '../downloader';

@@ -26,7 +26,7 @@ import type {
   PersonalizationConfig,
   WebSearchConfig,
 } from '../types/config';
-import { ConfigParseError } from '../types/errors';
+import { ConfigError, ConfigParseError } from '../types/errors';
 import { CONFIG_FIELD_DEFS, coerceToSchemaType, getNestedValue } from './config-schema';
 import { parseEnvironmentVariables, resolveApiKeys } from './env-parser';
 
@@ -815,8 +815,6 @@ function readAndParseToml(
 
 /** 独立验证函数，供 loadUnifiedConfig 和 loadConfig 共用 */
 function validateConfig(config: AbyssalConfig): void {
-  const { ConfigError } = require('../types/errors');
-
   if (config.rag.embeddingDimension <= 0) {
     throw new ConfigError({
       message: 'rag.embeddingDimension must be > 0',

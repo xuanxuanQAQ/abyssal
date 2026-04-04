@@ -23,6 +23,7 @@ function defaultInput(overrides?: Partial<DeriveContextInput>): DeriveContextInp
     selectedMappingConceptId: null,
     selectedSectionId: null,
     selectedArticleId: null,
+    selectedDraftId: null,
     focusedGraphNodeId: null,
     focusedGraphNodeType: null,
     selectedMemoId: null,
@@ -76,6 +77,17 @@ describe('deriveContextSource', () => {
       selectedArticleId: null,
     }));
     expect(result).toEqual({ type: 'section', articleId: '', sectionId: 's1' });
+  });
+
+  it('writing + selected draft → section context carries draftId', () => {
+    const result = deriveContextSource(defaultInput({
+      activeView: 'writing',
+      selectedSectionId: 's1',
+      selectedArticleId: 'a1',
+      selectedDraftId: 'd1',
+    }));
+
+    expect(result).toEqual({ type: 'section', articleId: 'a1', sectionId: 's1', draftId: 'd1' });
   });
 
   // ─── 优先级 4: Analysis + mapping ───
@@ -433,6 +445,7 @@ describe('store → deriveContextSource integration', () => {
       selectedMappingConceptId: s.selectedMappingConceptId,
       selectedSectionId: s.selectedSectionId,
       selectedArticleId: s.selectedArticleId,
+      selectedDraftId: s.selectedDraftId,
       focusedGraphNodeId: s.focusedGraphNodeId,
       focusedGraphNodeType: s.focusedGraphNodeType,
       selectedMemoId: s.selectedMemoId,
@@ -500,5 +513,13 @@ describe('store → deriveContextSource integration', () => {
     useAppStore.getState().selectNote('note1');
     const result = deriveContextSource(inputFromStore());
     expect(result).toEqual({ type: 'note', noteId: 'note1' });
+  });
+
+  it('notes note→memo transition keeps memo as effective context', () => {
+    useAppStore.getState().switchView('notes');
+    useAppStore.getState().navigateTo({ type: 'note', noteId: 'note1' });
+    useAppStore.getState().navigateTo({ type: 'memo', memoId: 'memo1' });
+    const result = deriveContextSource(inputFromStore());
+    expect(result).toEqual({ type: 'memo', memoId: 'memo1' });
   });
 });

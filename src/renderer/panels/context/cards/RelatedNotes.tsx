@@ -9,6 +9,8 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, StickyNote, FileText } from 'lucide-react';
 import { useMemoList } from '../../../core/ipc/hooks/useMemos';
 import { useNoteList } from '../../../core/ipc/hooks/useNotes';
+import { useAppStore } from '../../../core/store';
+import { cancelPendingContextReveal, previewContextSource } from '../engine/revealContextSource';
 import type { Memo, NoteMeta, MemoFilter, NoteFilter } from '../../../../shared-types/models';
 
 interface RelatedNotesProps {
@@ -86,6 +88,7 @@ const noteTitleStyle: React.CSSProperties = {
 export const RelatedNotes = React.memo(function RelatedNotes({ paperIds, conceptIds }: RelatedNotesProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const navigateTo = useAppStore((s) => s.navigateTo);
 
   const memoFilter: MemoFilter = { limit: 5 };
   if (paperIds !== undefined) memoFilter.paperIds = paperIds;
@@ -116,18 +119,34 @@ export const RelatedNotes = React.memo(function RelatedNotes({ paperIds, concept
       {expanded && (
         <div style={listContainerStyle}>
           {memos.slice(0, 5).map((m) => (
-            <div key={m.id} style={memoRowStyle}>
+            <button
+              key={m.id}
+              type="button"
+              onMouseEnter={() => previewContextSource({ type: 'memo', memoId: m.id })}
+              onMouseLeave={cancelPendingContextReveal}
+              onClick={() => navigateTo({ type: 'memo', memoId: m.id })}
+              className="context-preview-trigger"
+              style={{ ...memoRowStyle, width: '100%', border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left', borderRadius: 6, transition: 'background-color 140ms ease, border-color 140ms ease' }}
+            >
               <StickyNote size={12} style={memoIconStyle} />
               <span style={memoTextStyle}>
                 {m.text}
               </span>
-            </div>
+            </button>
           ))}
           {notes?.slice(0, 3).map((n) => (
-            <div key={n.id} style={noteRowStyle}>
+            <button
+              key={n.id}
+              type="button"
+              onMouseEnter={() => previewContextSource({ type: 'note', noteId: n.id })}
+              onMouseLeave={cancelPendingContextReveal}
+              onClick={() => navigateTo({ type: 'note', noteId: n.id })}
+              className="context-preview-trigger"
+              style={{ ...noteRowStyle, width: '100%', border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left', borderRadius: 6, transition: 'background-color 140ms ease, border-color 140ms ease' }}
+            >
               <FileText size={12} style={noteIconStyle} />
               <span style={noteTitleStyle}>{n.title}</span>
-            </div>
+            </button>
           ))}
         </div>
       )}

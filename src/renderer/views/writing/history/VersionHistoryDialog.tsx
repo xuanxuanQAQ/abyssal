@@ -9,12 +9,14 @@
 import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import { useSectionVersions, useUpdateSection } from '../../../core/ipc/hooks/useArticles';
+import { useDraftVersions, useRestoreDraftVersion } from '../../../core/ipc/hooks/useDrafts';
 import { VersionTimeline } from './VersionTimeline';
 import { VersionDiff } from './VersionDiff';
 import type { SectionVersion } from '../../../../shared-types/models';
+import { buildDocumentProjection, parseArticleDocument, serializeArticleDocument } from '../../../../shared/writing/documentOutline';
 
 interface VersionHistoryDialogProps {
+  draftId: string;
   sectionId: string;
   currentContent: string;
   open: boolean;
@@ -22,14 +24,29 @@ interface VersionHistoryDialogProps {
 }
 
 export function VersionHistoryDialog({
+  draftId,
   sectionId,
   currentContent,
   open,
   onOpenChange,
 }: VersionHistoryDialogProps) {
   const { t } = useTranslation();
-  const { data: versions } = useSectionVersions(sectionId);
-  const updateSection = useUpdateSection();
+  const { data: versions } = useDraftVersions(draftId);
+  const restoreDraftVersion = useRestoreDraftVersion();
+
+  const sectionVersions: SectionVersion[] = (versions ?? []).map((version) => {
+    const projection = buildDocumentProjection(parseArticleDocument(version.documentJson));
+    const section = projection.flatSections.find((candidate) => candidate.id === sectionId);
+    return {
+      sectionId,
+      title: section?.title,
+      version: version.version,
+      content: section?.plainText ?? '',
+      documentJson: section ? serializeArticleDocument(section.bodyDocument) : null,
+      createdAt: version.createdAt,
+      source: version.source === 'duplicate' || version.source === 'ai-derive-draft' ? 'ai-generate' : version.source,
+    };
+  }).filter((version) => version.content.length > 0 || version.documentJson != null);
 
   const [selectedVersion, setSelectedVersion] = useState<SectionVersion | null>(
     null,
@@ -38,10 +55,10 @@ export function VersionHistoryDialog({
   const handleRestore = useCallback(() => {
     if (!selectedVersion) return;
 
-    updateSection.mutate(
+    restoreDraftVersion.mutate(
       {
-        sectionId,
-        patch: { content: selectedVersion.content },
+        draftId,
+        version: selectedVersion.version,
       },
       {
         onSuccess: () => {
@@ -50,7 +67,7 @@ export function VersionHistoryDialog({
         },
       },
     );
-  }, [selectedVersion, sectionId, updateSection, onOpenChange]);
+  }, [draftId, onOpenChange, restoreDraftVersion, selectedVersion]);
 
   const handleSelectVersion = useCallback((version: SectionVersion) => {
     setSelectedVersion(version);
@@ -126,7 +143,7 @@ export function VersionHistoryDialog({
               }}
             >
               <VersionTimeline
-                versions={versions ?? []}
+                versions={sectionVersions}
                 selectedVersion={selectedVersion}
                 onSelectVersion={handleSelectVersion}
               />
@@ -181,7 +198,7 @@ export function VersionHistoryDialog({
             </Dialog.Close>
             <button
               type="button"
-              disabled={!selectedVersion || updateSection.isPending}
+              disabled={!selectedVersion || restoreDraftVersion.isPending}
               onClick={handleRestore}
               style={{
                 padding: '6px 16px',
@@ -194,7 +211,7 @@ export function VersionHistoryDialog({
                 cursor: selectedVersion ? 'pointer' : 'not-allowed',
               }}
             >
-              {updateSection.isPending ? t('writing.history.restoring') : t('writing.history.restoreVersion')}
+              {restoreDraftVersion.isPending ? t('writing.history.restoring') : t('writing.history.restoreVersion')}
             </button>
           </div>
         </Dialog.Content>

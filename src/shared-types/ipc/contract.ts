@@ -13,9 +13,9 @@ import type {
   MappingAssignment, DefinitionUpdateResult, ConceptParentUpdateResult,
   HistoryEntry, HeatmapMatrix,
   Annotation, NewAnnotation,
-  ArticleOutline, SectionNode, SectionOrder, SectionContent, SectionPatch, SectionVersion,
-  FullDocumentContent, SectionSave, ArticleAsset,
-  Memo, NewMemo, MemoFilter, NoteMeta, NewNote, NoteFilter, SaveNoteResult,
+  ArticleOutline, ArticleWorkspaceSummary, DraftSummary, DraftOutline, DraftPatch, DraftVersion, DraftDocumentPayload, WritingContextRequest, SectionNode, SectionOrder, SectionContent, SectionPatch, SectionVersion,
+  FullDocumentContent, SectionSave, ArticleAsset, ArticleDocumentPayload,
+  Memo, NewMemo, MemoFilter, NoteMeta, NewNote, NoteFilter, SaveNoteContentResult,
   SuggestedConcept,
   Tag, PaperCounts, DiscoverRun,
   GraphData, RAGResult, RetrievalResult, WritingContext,
@@ -45,6 +45,13 @@ import type {
 import type {
   WorkspaceInfo, RecentWorkspaceEntry, CurrentWorkspaceInfo,
 } from '../models';
+
+import type {
+  CopilotOperationEnvelope, CopilotExecuteResult,
+  CopilotSessionSummary, CopilotSessionState,
+  CopilotOperationEvent, OperationStatusSnapshot,
+  ResumeOperationRequest,
+} from '../../copilot-runtime/types';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Invoke Contract — request/response channels
@@ -107,11 +114,12 @@ export interface IpcContract {
   // ── db:notes ──
   'db:notes:list':                    { args: [filter?: NoteFilter];                     result: NoteMeta[] };
   'db:notes:get':                     { args: [noteId: string];                          result: NoteMeta | null };
-  'db:notes:create':                  { args: [note: NewNote];                           result: { noteId: string; filePath: string } };
+  'db:notes:create':                  { args: [note: NewNote];                           result: { noteId: string } };
   'db:notes:updateMeta':              { args: [noteId: string, patch: Partial<NoteMeta>]; result: NoteMeta };
   'db:notes:delete':                  { args: [noteId: string];                          result: void };
   'db:notes:upgradeToConcept':        { args: [noteId: string, draft: ConceptDraft];     result: void };
-  'db:notes:onFileChanged':           { args: [noteId: string];                          result: void };
+  'db:notes:getContent':              { args: [noteId: string];                          result: string | null };
+  'db:notes:saveContent':             { args: [noteId: string, documentJson: string];    result: SaveNoteContentResult };
 
   // ── db:suggestedConcepts ──
   'db:suggestedConcepts:list':        { args: [];                                        result: SuggestedConcept[] };
@@ -136,6 +144,8 @@ export interface IpcContract {
   'db:articles:listOutlines':         { args: [];                                        result: ArticleOutline[] };
   'db:articles:create':               { args: [title: string];                           result: ArticleOutline };
   'db:articles:update':               { args: [articleId: string, patch: Partial<ArticleOutline>]; result: void };
+  'db:articles:getDocument':          { args: [articleId: string];                       result: ArticleDocumentPayload };
+  'db:articles:saveDocument':         { args: [articleId: string, documentJson: string, source?: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite']; result: void };
   'db:articles:getOutline':           { args: [articleId: string];                       result: ArticleOutline };
   'db:articles:updateOutlineOrder':   { args: [articleId: string, order: SectionOrder[]]; result: void };
   'db:articles:getSection':           { args: [sectionId: string];                       result: SectionContent };
@@ -149,6 +159,23 @@ export interface IpcContract {
   'db:articles:updateMetadata':        { args: [articleId: string, metadata: ArticleMetadata]; result: void };
   'db:articles:cleanupVersions':       { args: [articleId: string, keepCount: number];     result: { deleted: number } };
   'db:articles:getAllCitedPaperIds':   { args: [];                                        result: string[] };
+
+  // ── db:drafts ──
+  'db:drafts:listByArticle':           { args: [articleId: string];                       result: DraftSummary[] };
+  'db:drafts:get':                     { args: [draftId: string];                         result: DraftSummary | null };
+  'db:drafts:create':                  { args: [articleId: string, seed?: Partial<DraftPatch> & { title?: string; basedOnDraftId?: string | null; source?: DraftSummary['source'] }]; result: DraftSummary };
+  'db:drafts:update':                  { args: [draftId: string, patch: DraftPatch];      result: void };
+  'db:drafts:delete':                  { args: [draftId: string];                         result: void };
+  'db:drafts:getDocument':             { args: [draftId: string];                         result: DraftDocumentPayload };
+  'db:drafts:saveDocument':            { args: [draftId: string, documentJson: string, source?: DraftVersion['source']]; result: void };
+  'db:drafts:getOutline':              { args: [draftId: string];                         result: DraftOutline };
+  'db:drafts:updateOutlineOrder':      { args: [draftId: string, order: SectionOrder[]];  result: void };
+  'db:drafts:updateSection':           { args: [draftId: string, sectionId: string, patch: SectionPatch]; result: void };
+  'db:drafts:createSection':           { args: [draftId: string, parentId: string | null, sortIndex: number, title?: string]; result: SectionNode };
+  'db:drafts:deleteSection':           { args: [draftId: string, sectionId: string];      result: void };
+  'db:drafts:getVersions':             { args: [draftId: string];                         result: DraftVersion[] };
+  'db:drafts:restoreVersion':          { args: [draftId: string, version: number];        result: void };
+  'db:drafts:createFromVersion':       { args: [draftId: string, version: number, title: string]; result: DraftSummary };
 
   // ── db:assets ──
   'db:assets:upload':                  { args: [articleId: string, fileName: string, sourcePath: string]; result: ArticleAsset };
@@ -178,7 +205,7 @@ export interface IpcContract {
   // ── rag ──
   'rag:search':                       { args: [query: string, filter?: RAGFilter];       result: RAGResult[] };
   'rag:searchWithReport':             { args: [query: string, filter?: RAGFilter];       result: RetrievalResult };
-  'rag:getWritingContext':            { args: [sectionId: string];                       result: WritingContext };
+  'rag:getWritingContext':            { args: [request: WritingContextRequest | string];  result: WritingContext };
 
   // ── acquire ──
   'acquire:fulltext':                 { args: [paperId: string];                         result: string };
@@ -190,25 +217,33 @@ export interface IpcContract {
   'acquire:verifyCookies':            { args: [publisher: string];                       result: { valid: boolean; detail: string } };
   'acquire:clearSession':             { args: [];                                        result: void };
 
-  // ── pipeline ──
+  // ── copilot ──
+  'copilot:execute':                  { args: [envelope: CopilotOperationEnvelope];      result: CopilotExecuteResult };
+  'copilot:abort':                    { args: [operationId: string];                     result: void };
+  'copilot:resume':                   { args: [request: ResumeOperationRequest];         result: CopilotExecuteResult };
+  'copilot:getOperationStatus':       { args: [operationId: string];                     result: OperationStatusSnapshot | null };
+  'copilot:listSessions':             { args: [];                                        result: CopilotSessionSummary[] };
+  'copilot:getSession':               { args: [sessionId: string];                       result: CopilotSessionState | null };
+  'copilot:clearSession':             { args: [sessionId: string];                       result: void };
+
+  // ── pipeline (legacy → copilot:execute) ──
   'pipeline:start':                   { args: [workflow: WorkflowType, config?: WorkflowConfig]; result: string };
   'pipeline:cancel':                  { args: [taskId: string];                          result: void };
 
-  // ── chat ──
+  // ── chat (legacy → copilot:execute) ──
   'chat:send':                        { args: [message: string, context?: ChatContext, conversationKey?: string];  result: string };
   'chat:abort':                       { args: [conversationId?: string];                 result: void };
 
   // ── fs ──
   'fs:openPDF':                       { args: [paperId: string];                         result: { path: string; data: Uint8Array } };
   'fs:savePDFAnnotations':            { args: [paperId: string, annotations: PDFAnnotation[]]; result: void };
-  'fs:exportArticle':                 { args: [articleId: string, format: ExportFormat, citationStyle?: CitationStyle];  result: string };
+  'fs:exportArticle':                 { args: [articleId: string, format: ExportFormat, citationStyle?: CitationStyle, draftId?: string];  result: string };
   'fs:importFiles':                   { args: [paths: string[]];                         result: ImportResult };
   'fs:createSnapshot':                { args: [name: string];                            result: SnapshotInfo };
   'fs:restoreSnapshot':               { args: [snapshotId: string];                      result: void };
   'fs:listSnapshots':                 { args: [];                                        result: SnapshotInfo[] };
   'fs:cleanupSnapshots':              { args: [policy: CleanupPolicy];                   result: void };
-  'fs:readNoteFile':                  { args: [noteId: string];                          result: string };
-  'fs:saveNoteFile':                  { args: [noteId: string, content: string];         result: SaveNoteResult };
+
   'fs:selectImageFile':               { args: [];                                        result: { path: string; name: string } | null };
 
   // ── advisory ──
@@ -284,6 +319,8 @@ export interface IpcEventContract {
 export interface IpcPushContract {
   'push:workflowProgress':    PipelineProgressEvent;
   'push:agentStream':         AgentStreamEvent;
+  'push:copilotEvent':        CopilotOperationEvent;
+  'push:copilotSessionChanged': { sessionId: string; operationId?: string };
   'push:dbChanged':           { tables: string[]; operation: string };
   'push:settingsChanged':     { section: string; keys: string[] };
   'push:notification':        { type: string; title: string; message: string };
@@ -301,6 +338,8 @@ export interface IpcPushContract {
 
 export type AICommandPayload =
   | { command: 'navigate'; view: ViewType; target?: { paperId?: string; conceptId?: string; page?: number; noteId?: string; articleId?: string }; reason?: string }
+  | { command: 'apply-editor-patch'; patch: unknown }
+  | { command: 'persist-document'; articleId: string; sectionId?: string }
   | { command: 'highlightPassage'; paperId: string; page: number; text: string; persistent: boolean; rect?: { x: number; y: number; w: number; h: number } }
   | { command: 'suggest'; suggestion: { id: string; title: string; description: string; actions: Array<{ id: string; label: string; primary?: boolean }>; priority: number; dismissAfterMs: number } }
   | { command: 'focusEntity'; entityType: 'paper' | 'concept' | 'note' | 'article'; entityId: string; anchor?: { page?: number; sectionId?: string; text?: string } }

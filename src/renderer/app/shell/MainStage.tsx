@@ -149,12 +149,6 @@ export function MainStage() {
 
   const aliveViews = aliveRef.current;
 
-  console.log('[PDF-DBG][MainStage] render', {
-    activeView,
-    renderView,
-    aliveViews: [...aliveViews],
-  });
-
   return (
     <main
       role="tabpanel"

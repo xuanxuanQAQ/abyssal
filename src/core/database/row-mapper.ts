@@ -46,9 +46,12 @@ const COLUMN_TYPES: Record<string, 'json' | 'boolean'> = {
   linked_note_ids: 'json',
   linked_paper_ids: 'json',
   linked_concept_ids: 'json',
+  keywords: 'json',
   tags: 'json',
   edited_paragraphs: 'json',
+  evidence_gaps: 'json',
   metadata: 'json',
+  checkpoint: 'json',
 
   // Boolean 列（数据库中存储为 INTEGER 0/1）
   biblio_complete: 'boolean',

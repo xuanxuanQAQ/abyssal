@@ -13,6 +13,7 @@
 import type { AppContext } from '../app-context';
 import type { ChatContext } from '../../shared-types/ipc';
 import { typedHandler } from './register';
+import { clearCopilotSessionArtifacts } from './copilot-handler';
 
 // Active AbortController per conversation (for cancellation support)
 const activeAbortControllers = new Map<string, AbortController>();
@@ -20,6 +21,29 @@ const activeAbortControllers = new Map<string, AbortController>();
 /** Build a workspace-scoped key to isolate conversations per project */
 function scopedKey(workspaceRoot: string, contextKey: string): string {
   return `${workspaceRoot}::${contextKey}`;
+}
+
+export function registerChatPersistenceHandlers(ctx: AppContext): void {
+  const { logger } = ctx;
+
+  typedHandler('db:chat:saveMessage', logger, async (_e, record) => {
+    await ctx.dbProxy.saveChatMessage(record);
+  });
+
+  typedHandler('db:chat:getHistory', logger, async (_e, contextKey, opts?) => {
+    const records = await ctx.dbProxy.getChatHistory(contextKey, opts);
+    return records.reverse();
+  });
+
+  typedHandler('db:chat:deleteSession', logger, async (_e, contextKey) => {
+    await ctx.dbProxy.deleteChatSession(contextKey);
+    ctx.sessionOrchestrator?.clearConversation(contextKey);
+    clearCopilotSessionArtifacts(contextKey);
+  });
+
+  typedHandler('db:chat:listSessions', logger, async () => {
+    return ctx.dbProxy.listChatSessions();
+  });
 }
 
 export function registerAgentHandlers(ctx: AppContext): void {
@@ -103,26 +127,5 @@ export function registerAgentHandlers(ctx: AppContext): void {
     }
   });
 
-  // ─── Chat persistence ───
-  // saveMessage writes to SQLite via DbProxy so history survives restart.
-
-  typedHandler('db:chat:saveMessage', logger, async (_e, record) => {
-    await ctx.dbProxy.saveChatMessage(record);
-  });
-
-  typedHandler('db:chat:getHistory', logger, async (_e, contextKey, opts?) => {
-    // Read from SQLite — survives restart
-    const records = await ctx.dbProxy.getChatHistory(contextKey, opts);
-    // DB returns DESC order; reverse to chronological for frontend
-    return records.reverse();
-  });
-
-  typedHandler('db:chat:deleteSession', logger, async (_e, contextKey) => {
-    await ctx.dbProxy.deleteChatSession(contextKey);
-    ctx.sessionOrchestrator?.clearConversation(contextKey);
-  });
-
-  typedHandler('db:chat:listSessions', logger, async () => {
-    return ctx.dbProxy.listChatSessions();
-  });
+  registerChatPersistenceHandlers(ctx);
 }

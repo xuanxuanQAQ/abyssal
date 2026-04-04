@@ -1,4 +1,4 @@
-import type { TextExtractionResult } from '../types';
+import type { TextExtractionResult } from './types';
 
 export function deriveExtractionMethod(
   pageCount: number,

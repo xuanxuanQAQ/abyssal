@@ -18,10 +18,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { WorkflowOptions, WorkflowRunnerContext, WorkflowSubstep } from '../workflow-runner';
-import type { ProcessService } from '../../../core/process';
+import type { ProcessService, PdfEmbeddedMetadata, FirstPageMetadata, ExtractedReference } from '../../../core/process';
 import type { Logger } from '../../../core/infra/logger';
 import type { PaperMetadata } from '../../../core/types/paper';
-import type { PdfEmbeddedMetadata, FirstPageMetadata, ExtractedReference } from '../../../core/types';
 import type { ContentBlock } from '../../../core/dla/types';
 import { runFusionPipeline } from '../../../core/dla/fusion';
 import type { HydrateConfig, MetadataLookupService, EnrichService, LlmCallFn } from '../../../core/hydrate';

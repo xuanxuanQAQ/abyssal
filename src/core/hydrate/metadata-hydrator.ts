@@ -3,7 +3,7 @@
 // 遵循 fill-only 原则：已有值不覆盖。
 
 import type { PaperMetadata } from '../types/paper';
-import type { PdfEmbeddedMetadata, FirstPageMetadata } from '../types';
+import type { PdfEmbeddedMetadata, FirstPageMetadata } from '../process';
 import type { Logger } from '../infra/logger';
 import type { LlmCallFn, LlmExtractedMetadata } from './llm-metadata-extractor';
 import { extractMetadataWithLlm } from './llm-metadata-extractor';

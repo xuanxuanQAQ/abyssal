@@ -15,6 +15,7 @@ import * as fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type { AppContext } from '../app-context';
 import type { GlobalSearchResult } from '../../shared-types/models';
+import type { CitationStyle } from '../../shared-types/enums';
 import { typedHandler } from './register';
 import { asPaperId } from '../../core/types/common';
 import type { RelationGraphFilter } from '../../core/database/dao/relations';
@@ -88,8 +89,8 @@ export function registerSystemHandlers(ctx: AppContext): void {
     });
   });
 
-  typedHandler('fs:exportArticle', logger, async (_e, articleId, format, citationStyle?) => {
-    return await exportArticle(ctx, { articleId, format, citationStyle: citationStyle ?? 'APA' });
+  typedHandler('fs:exportArticle', logger, async (_e, articleId, format, citationStyle: CitationStyle | undefined, draftId?: string) => {
+    return await exportArticle(ctx, { articleId, draftId: draftId ?? undefined, format, citationStyle: citationStyle ?? 'APA' });
   });
 
   typedHandler('fs:selectImageFile', logger, async () => {
@@ -196,7 +197,7 @@ export function registerSystemHandlers(ctx: AppContext): void {
     return { imported, skipped, errors };
   }, { timeoutMs: 120_000 });
 
-  // fs:readNoteFile and fs:saveNoteFile are registered in notes-handler.ts
+  // db:notes:getContent and db:notes:saveContent are registered in notes-handler.ts
 
   // ── app ──
 

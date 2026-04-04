@@ -2,7 +2,7 @@
 // 通过 CARSI 登录获取 cookie 后，按标题搜索并下载 PDF
 // 适用于无 DOI 的中文论文
 
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import type { CookieJar } from '../../infra/cookie-jar';
 import type { Logger } from '../../infra/logger';

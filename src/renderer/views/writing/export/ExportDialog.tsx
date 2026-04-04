@@ -18,6 +18,7 @@ import type { ExportProgress } from '../../../../shared-types/models';
 
 interface ExportDialogProps {
   articleId: string;
+  draftId?: string | null | undefined;
   articleTitle: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,6 +46,7 @@ const CITATION_STYLES: Array<{ value: CitationStyle; label: string }> = [
 
 export function ExportDialog({
   articleId,
+  draftId,
   articleTitle,
   open,
   onOpenChange,
@@ -77,7 +79,7 @@ export function ExportDialog({
     setProgress(null);
 
     try {
-      const outputPath = await getAPI().fs.exportArticle(articleId, selectedFormat, citationStyle);
+      const outputPath = await getAPI().fs.exportArticle(articleId, selectedFormat, citationStyle, draftId ?? undefined);
       setExportedPath(outputPath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('writing.export.exportFailed');
@@ -87,7 +89,7 @@ export function ExportDialog({
       setExporting(false);
       setProgress(null);
     }
-  }, [articleId, selectedFormat, citationStyle]);
+  }, [articleId, citationStyle, draftId, selectedFormat]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {

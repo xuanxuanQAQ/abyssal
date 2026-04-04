@@ -77,11 +77,11 @@ export const ChatDock = React.memo(function ChatDock() {
 
   const accumulatorRef = useRef<ChunkAccumulator>(
     new ChunkAccumulator({
-      onFinalize: (_messageId, content) => {
-        const session = useChatStore.getState().sessions[sessionKey];
+      onFinalize: (_messageId, content, finalizedSessionKey) => {
+        const session = useChatStore.getState().sessions[finalizedSessionKey];
         const msg = session?.messages.find((m) => m.id === _messageId);
         if (msg) {
-          persistMessage({ ...msg, content, status: 'completed' }, sessionKey);
+          persistMessage({ ...msg, content, status: 'completed' }, finalizedSessionKey);
         }
       },
     })
@@ -169,7 +169,7 @@ export const ChatDock = React.memo(function ChatDock() {
 
         useChatStore.getState().addMessage(assistantMessage);
         useChatStore.getState().setChatStreaming(true);
-        accumulatorRef.current.bind(assistantMessage.id);
+        accumulatorRef.current.bind(assistantMessage.id, sessionKey);
 
         await getAPI().chat.send(text, chatContext, sessionKey);
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {

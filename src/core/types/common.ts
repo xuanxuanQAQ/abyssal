@@ -11,6 +11,8 @@ export type ConceptId = Brand<string, 'ConceptId'>;
 export type ChunkId = Brand<string, 'ChunkId'>;
 /** 文章 ID */
 export type ArticleId = Brand<string, 'ArticleId'>;
+/** 稿件 ID */
+export type DraftId = Brand<string, 'DraftId'>;
 /** 纲要节 ID */
 export type OutlineEntryId = Brand<string, 'OutlineEntryId'>;
 /** 碎片笔记 ID */
@@ -69,6 +71,11 @@ export function asChunkId(s: string): ChunkId {
 export function asArticleId(s: string): ArticleId {
   if (!s) throw new Error('Invalid ArticleId: empty string');
   return s as ArticleId;
+}
+
+export function asDraftId(s: string): DraftId {
+  if (!s) throw new Error('Invalid DraftId: empty string');
+  return s as DraftId;
 }
 
 export function asOutlineEntryId(s: string): OutlineEntryId {

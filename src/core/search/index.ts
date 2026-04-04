@@ -4,7 +4,7 @@
 // 全部函数无副作用（不写入数据库、不修改文件系统）。
 
 import type { PaperMetadata } from '../types/paper';
-import type { CitationDirection } from '../types';
+import type { CitationDirection } from './types';
 import type { AbyssalConfig } from '../types/config';
 import type { PaperId } from '../types/common';
 import type { Logger } from '../infra/logger';
@@ -19,6 +19,7 @@ import { detectBridgePapers } from './bridge-detection';
 
 // ─── 类型重导出 ───
 
+export type { CitationDirection } from './types';
 export type { SSSearchOptions } from './semantic-scholar';
 export type { OASearchOptions } from './openalex';
 export type { ArxivSearchOptions } from './arxiv';

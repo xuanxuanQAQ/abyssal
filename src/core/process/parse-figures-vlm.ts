@@ -2,7 +2,7 @@
 // §5.3-5.6: 渲染 PNG → VLM prompt → 解析 Markdown → FigureBlock
 
 import * as fs from 'node:fs';
-import type { FigureBlock, FigureCandidate } from '../types';
+import type { FigureBlock, FigureCandidate } from './types';
 import type { VisionCapable } from '../types/common';
 import { ProcessError } from '../types/errors';
 
@@ -16,7 +16,8 @@ async function getMupdf(): Promise<typeof import('mupdf')> {
     mupdfModule = await import('mupdf');
   } catch {
     try {
-      mupdfModule = await import('mupdf/dist/mupdf.js' as string);
+      const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
     } catch (err) {
       throw new ProcessError({
         message: `Failed to load mupdf.js: ${(err as Error).message}`,

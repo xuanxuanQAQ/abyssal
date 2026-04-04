@@ -79,35 +79,54 @@ export function registerWorkspaceHandlers(ctx: AppContext): void {
   // ── workspace:switch ──
 
   typedHandler('workspace:switch', logger, async (_e, workspacePath) => {
-    // Graceful shutdown of current DB proxy and lock (may be null in lobby mode)
-    try { await ctx.dbProxy?.close(); } catch { /* ignore */ }
-    ctx.lockHandle?.release();
-
     // Scaffold new workspace if needed
     if (!isWorkspace(workspacePath)) {
       scaffoldWorkspace({ rootDir: workspacePath });
     }
 
-    // Acquire lock + load config for new workspace
-    ctx.workspaceRoot = workspacePath;
-    ctx.lockHandle = acquireLock(workspacePath);
+    const previousWorkspaceRoot = ctx.workspaceRoot;
+    const previousLockHandle = ctx.lockHandle;
+    const previousDbProxy = ctx.dbProxy;
+    const previousConfig = ctx.config;
 
-    const globalConfig = loadGlobalConfig(app.getPath('userData'));
-    const newConfig = ConfigLoader.loadFromWorkspace(workspacePath, globalConfig);
-    ctx.configProvider.update(newConfig);
+    // Acquire lock + load config for new workspace without tearing down the old one first.
+    const newLockHandle = acquireLock(workspacePath);
 
-    // Create and start new DB proxy
-    const dbProcessPath = path.resolve(__dirname, '..', 'db-process', 'main.js');
-    const newProxy = createDbProxy({ dbProcessPath });
-    await newProxy.start({
-      workspaceRoot: workspacePath,
-      userDataPath: app.getPath('userData'),
-      skipVecExtension: false,
-    });
-    ctx.dbProxy = newProxy;
+    let newProxy: ReturnType<typeof createDbProxy> | null = null;
+    let newConfig = previousConfig;
+    try {
+      const globalConfig = loadGlobalConfig(app.getPath('userData'));
+      newConfig = ConfigLoader.loadFromWorkspace(workspacePath, globalConfig);
 
-    // Refresh framework state
-    await ctx.refreshFrameworkState();
+      // Create and start new DB proxy before switching the live context.
+      const dbProcessPath = path.resolve(__dirname, '..', 'db-process', 'main.js');
+      newProxy = createDbProxy({ dbProcessPath });
+      await newProxy.start({
+        workspaceRoot: workspacePath,
+        userDataPath: app.getPath('userData'),
+        skipVecExtension: false,
+      });
+
+      ctx.workspaceRoot = workspacePath;
+      ctx.lockHandle = newLockHandle;
+      ctx.configProvider.update(newConfig);
+      ctx.dbProxy = newProxy;
+
+      // Refresh framework state with the new context before releasing old resources.
+      await ctx.refreshFrameworkState();
+    } catch (err) {
+      try { await newProxy?.close(); } catch { /* ignore */ }
+      newLockHandle.release();
+      ctx.workspaceRoot = previousWorkspaceRoot;
+      ctx.lockHandle = previousLockHandle;
+      ctx.configProvider.update(previousConfig);
+      ctx.dbProxy = previousDbProxy;
+      throw err;
+    }
+
+    // Graceful shutdown of the previous DB proxy and lock after the new one is ready.
+    try { await previousDbProxy?.close(); } catch { /* ignore */ }
+    previousLockHandle?.release();
 
     // Touch recent list
     const mgr = new WorkspaceManager(app.getPath('userData'));

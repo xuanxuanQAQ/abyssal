@@ -6,7 +6,9 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { StickyNote, FileText, ExternalLink } from 'lucide-react';
 import { useMemo as useMemoHook } from '../../../core/ipc/hooks/useMemos';
-import { useNote, useNoteFileContent } from '../../../core/ipc/hooks/useNotes';
+import { useNote } from '../../../core/ipc/hooks/useNotes';
+import { useUpgradeMemoToNote } from '../../../core/ipc/hooks/useMemos';
+import { useAppStore } from '../../../core/store';
 
 interface NoteContextPaneProps {
   nodeId: string;
@@ -17,9 +19,18 @@ export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nod
   const { t } = useTranslation();
   const { data: memo, isLoading: memoLoading } = useMemoHook(nodeType === 'memo' ? nodeId : null);
   const { data: note, isLoading: noteLoading } = useNote(nodeType === 'note' ? nodeId : null);
-  const { data: noteContent } = useNoteFileContent(nodeType === 'note' ? nodeId : null);
+  const navigateTo = useAppStore((s) => s.navigateTo);
+  const upgradeMemoToNote = useUpgradeMemoToNote();
 
   const isLoading = nodeType === 'memo' ? memoLoading : noteLoading;
+
+  const handleOpen = () => {
+    if (nodeType === 'memo') {
+      navigateTo({ type: 'memo', memoId: nodeId });
+      return;
+    }
+    navigateTo({ type: 'note', noteId: nodeId });
+  };
 
   if (isLoading) {
     return (
@@ -82,14 +93,13 @@ export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nod
       {nodeType === 'note' && note && (
         <div>
           {/* Preview of note content */}
-          {noteContent ? (
+          {note.documentJson ? (
             <div style={{
               fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6,
               maxHeight: 200, overflow: 'auto', marginBottom: 12,
               whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             }}>
-              {noteContent.replace(/^---[\s\S]*?---\n?/, '').slice(0, 1000)}
-              {noteContent.length > 1000 && '...'}
+              {extractPreviewText(note.documentJson, 1000)}
             </div>
           ) : (
             <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
@@ -122,9 +132,49 @@ export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nod
           {t('notes.note.notFound')}
         </div>
       )}
+
+      {((nodeType === 'memo' && memo) || (nodeType === 'note' && note)) && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+          <button onClick={handleOpen} style={actionButtonStyle(false)}>
+            <ExternalLink size={13} /> {t('context.openInNotes', '打开完整笔记')}
+          </button>
+          {nodeType === 'memo' && memo && (
+            <button
+              onClick={() => upgradeMemoToNote.mutate(nodeId, {
+                onSuccess: (result) => navigateTo({ type: 'note', noteId: result.noteId }),
+              })}
+              disabled={upgradeMemoToNote.isPending}
+              style={actionButtonStyle(upgradeMemoToNote.isPending)}
+            >
+              {t('notes.memo.expandToNote')}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 });
+
+/** Extract plain text preview from ProseMirror JSON */
+function extractPlainText(docJson: string): string {
+  try {
+    const doc = JSON.parse(docJson);
+    const parts: string[] = [];
+    function walk(node: Record<string, unknown>) {
+      if (node.text) parts.push(node.text as string);
+      if (Array.isArray(node.content)) {
+        for (const child of node.content) walk(child as Record<string, unknown>);
+      }
+    }
+    walk(doc);
+    return parts.join(' ');
+  } catch { return ''; }
+}
+
+function extractPreviewText(docJson: string, maxLen: number): string {
+  const full = extractPlainText(docJson);
+  return full.length > maxLen ? full.slice(0, maxLen) + '...' : full;
+}
 
 function EntitySection({ label, ids, color }: { label: string; ids: string[]; color: string }) {
   return (
@@ -144,4 +194,19 @@ function EntitySection({ label, ids, color }: { label: string; ids: string[]; co
       </div>
     </div>
   );
+}
+
+function actionButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '6px 10px',
+    borderRadius: 6,
+    border: '1px solid var(--border-subtle)',
+    background: disabled ? 'var(--bg-surface-low)' : 'transparent',
+    color: disabled ? 'var(--text-muted)' : 'var(--text-secondary)',
+    cursor: disabled ? 'default' : 'pointer',
+    fontSize: 12,
+  };
 }

@@ -357,7 +357,17 @@ function serializeTable(node: ProseMirrorNode, lines: string[]): void {
  */
 export function parseFromMarkdown(markdown: string, schema: Schema): ProseMirrorNode {
   const jsonContent = markdownToJSONContent(markdown);
-  return nodeFromJSON(jsonContent, schema);
+  const doc = nodeFromJSON(jsonContent, schema);
+  if (doc) {
+    return doc;
+  }
+
+  const docType = schema.nodes.doc;
+  if (!docType) {
+    throw new Error('Schema must have a doc node type');
+  }
+
+  return docType.createAndFill() ?? docType.create();
 }
 
 /**
@@ -665,7 +675,7 @@ function parseInlineContent(text: string): JSONContent[] {
 /**
  * Convert JSONContent to a ProseMirror Node using the provided schema.
  */
-function nodeFromJSON(json: JSONContent, schema: Schema): ProseMirrorNode {
+function nodeFromJSON(json: JSONContent, schema: Schema): ProseMirrorNode | null {
   // Recursively build the ProseMirror node tree
   const nodeType = schema.nodes[json.type ?? 'doc'];
   if (!nodeType) {
@@ -674,12 +684,20 @@ function nodeFromJSON(json: JSONContent, schema: Schema): ProseMirrorNode {
     if (!paragraphType) {
       throw new Error('Schema must have a paragraph node type');
     }
-    return paragraphType.create(null, schema.text(json.text ?? ''));
+    const fallbackText = json.text ?? '';
+    if (fallbackText.length === 0) {
+      return paragraphType.create();
+    }
+    return paragraphType.create(null, schema.text(fallbackText));
   }
 
   // Text nodes must be created through schema.text, not NodeType.create.
   if (json.type === 'text') {
     const text = json.text ?? '';
+    if (text.length === 0) {
+      return null;
+    }
+
     const marks = (json.marks ?? []).map((markJson) => {
       const markSpec = markJson as { type: string; attrs?: Record<string, unknown> | undefined };
       const markType = schema.marks[markSpec.type];
@@ -702,7 +720,7 @@ function nodeFromJSON(json: JSONContent, schema: Schema): ProseMirrorNode {
   try {
     return nodeType.create(json.attrs ?? null, validChildren.length > 0 ? validChildren : undefined);
   } catch {
-    // If creation fails (e.g. invalid content), return empty node
-    return nodeType.create(json.attrs ?? null);
+    // If creation fails (e.g. invalid content), try to let the schema create a valid fallback.
+    return nodeType.createAndFill(json.attrs ?? null, validChildren.length > 0 ? validChildren : undefined);
   }
 }

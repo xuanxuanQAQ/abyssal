@@ -9,6 +9,7 @@ import { AnnotationList } from './AnnotationList';
 import { MemoQuickCreate } from '../../notes/memo/MemoQuickCreate';
 import { useMemoList } from '../../../core/ipc/hooks/useMemos';
 import { MemoCard } from '../../notes/memo/MemoCard';
+import { useEntityDisplayNameCache } from '../../notes/shared/entityDisplayNameCache';
 
 interface AnnotationAndMemoPanelProps {
   paperId: string;
@@ -18,6 +19,7 @@ export function AnnotationAndMemoPanel({ paperId }: AnnotationAndMemoPanelProps)
   const [tab, setTab] = useState<'annotations' | 'memos'>('annotations');
   const { data } = useMemoList({ paperIds: [paperId] });
   const memos = data?.pages.flat() ?? [];
+  const entityNameCache = useEntityDisplayNameCache();
 
   return (
     <Tabs.Root value={tab} onValueChange={(v) => setTab(v as 'annotations' | 'memos')} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -36,7 +38,7 @@ export function AnnotationAndMemoPanel({ paperId }: AnnotationAndMemoPanelProps)
 
       <Tabs.Content value="memos" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ flex: 1, overflow: 'auto', padding: '8px 8px 0' }}>
-          {memos.map((m) => <MemoCard key={m.id} memo={m} />)}
+          {memos.map((m) => <MemoCard key={m.id} memo={m} entityNameCache={entityNameCache} />)}
           {memos.length === 0 && (
             <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
               暂无关联笔记

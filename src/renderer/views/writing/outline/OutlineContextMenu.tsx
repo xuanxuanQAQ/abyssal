@@ -10,10 +10,10 @@ import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import {
-  useCreateSection,
-  useDeleteSection,
-  useUpdateSection,
-} from '../../../core/ipc/hooks/useArticles';
+  useCreateDraftSection,
+  useDeleteDraftSection,
+  useUpdateDraftSection,
+} from '../../../core/ipc/hooks/useDrafts';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import { useAppStore, type AppStoreState } from '../../../core/store';
 import type { SectionStatus } from '../../../../shared-types/enums';
@@ -24,6 +24,7 @@ interface OutlineContextMenuProps {
   parentId: string | null;
   sortIndex: number;
   articleId: string;
+  draftId: string;
   currentStatus: SectionStatus;
   children: React.ReactNode;
 }
@@ -69,63 +70,64 @@ export function OutlineContextMenu({
   parentId,
   sortIndex,
   articleId,
+  draftId,
   currentStatus,
   children,
 }: OutlineContextMenuProps) {
   const { t } = useTranslation();
-  const createSection = useCreateSection();
-  const deleteSection = useDeleteSection();
-  const updateSection = useUpdateSection();
+  const createSection = useCreateDraftSection();
+  const deleteSection = useDeleteDraftSection();
+  const updateSection = useUpdateDraftSection();
   const startPipeline = useStartPipeline();
   const selectSection = useAppStore((s: AppStoreState) => s.selectSection);
 
   const handleAIGenerate = useCallback(() => {
-    selectSection(sectionId);
-    startPipeline.mutate({ workflow: 'generate', config: { sectionId } });
-  }, [sectionId, selectSection, startPipeline]);
+    selectSection(sectionId, articleId, draftId);
+    startPipeline.mutate({ workflow: 'generate', config: { articleId, draftId, sectionId } });
+  }, [articleId, draftId, sectionId, selectSection, startPipeline]);
 
   const handleWritingInstructions = useCallback(() => {
-    selectSection(sectionId);
+    selectSection(sectionId, articleId, draftId);
     const instructions = window.prompt('写作指令 / Writing instructions:');
     if (instructions !== null) {
-      updateSection.mutate({ sectionId, patch: { writingInstructions: instructions } });
+      updateSection.mutate({ draftId, sectionId, patch: { writingInstructions: instructions } });
     }
-  }, [sectionId, selectSection, updateSection]);
+  }, [articleId, draftId, sectionId, selectSection, updateSection]);
 
   const handleAddChild = useCallback(() => {
     createSection.mutate({
-      articleId,
+      draftId,
       parentId: sectionId,
       sortIndex: 0,
     });
-  }, [articleId, sectionId, createSection]);
+  }, [draftId, sectionId, createSection]);
 
   const handleInsertAbove = useCallback(() => {
     createSection.mutate({
-      articleId,
+      draftId,
       parentId,
       sortIndex: sortIndex - 1,
     });
-  }, [articleId, parentId, sortIndex, createSection]);
+  }, [draftId, parentId, sortIndex, createSection]);
 
   const handleInsertBelow = useCallback(() => {
     createSection.mutate({
-      articleId,
+      draftId,
       parentId,
       sortIndex: sortIndex + 1,
     });
-  }, [articleId, parentId, sortIndex, createSection]);
+  }, [draftId, parentId, sortIndex, createSection]);
 
   const handleVersionHistory = useCallback(() => {
-    selectSection(sectionId);
-    window.dispatchEvent(new CustomEvent('abyssal:openVersionHistory', { detail: { sectionId } }));
-  }, [sectionId, selectSection]);
+    selectSection(sectionId, articleId, draftId);
+    window.dispatchEvent(new CustomEvent('abyssal:openVersionHistory', { detail: { sectionId, draftId } }));
+  }, [articleId, draftId, sectionId, selectSection]);
 
   const handleSetStatus = useCallback(
     (status: SectionStatus) => {
-      updateSection.mutate({ sectionId, patch: { status } });
+      updateSection.mutate({ draftId, sectionId, patch: { status } });
     },
-    [sectionId, updateSection],
+    [draftId, sectionId, updateSection],
   );
 
   const handleDelete = useCallback(() => {
@@ -134,9 +136,9 @@ export function OutlineContextMenu({
       t('writing.outline.deleteConfirm', { title: sectionTitle }),
     );
     if (confirmed) {
-      deleteSection.mutate({ sectionId, articleId });
+      deleteSection.mutate({ draftId, sectionId });
     }
-  }, [sectionId, articleId, sectionTitle, deleteSection]);
+  }, [draftId, sectionId, sectionTitle, deleteSection, t]);
 
   return (
     <ContextMenu.Root>

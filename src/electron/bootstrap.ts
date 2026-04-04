@@ -118,6 +118,33 @@ function parseArgs(): ParsedArgs {
   return { workspace, dev, logLevel };
 }
 
+function moveCorruptedWorkspaceConfigAside(workspaceRoot: string): boolean {
+  const fs = require('node:fs') as typeof import('node:fs');
+  const configPath = path.join(workspaceRoot, '.abyssal', 'config.toml');
+  if (!fs.existsSync(configPath)) {
+    return false;
+  }
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const stripped = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+    const toml = require('smol-toml') as typeof import('smol-toml');
+    toml.parse(stripped);
+    return false;
+  } catch {
+    try {
+      const corruptedPath = configPath + '.corrupted';
+      if (fs.existsSync(corruptedPath)) {
+        fs.rmSync(corruptedPath, { force: true });
+      }
+      fs.renameSync(configPath, corruptedPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 // ─── Step 2: Process exclusive lock ───
 
 async function step2_acquireLock(ctx: BootstrapContext): Promise<void> {
@@ -152,6 +179,12 @@ async function step3_loadConfig(ctx: BootstrapContext): Promise<void> {
 
   if (!isWorkspace(ctx.args.workspace)) {
     scaffoldWorkspace({ rootDir: ctx.args.workspace });
+  }
+
+  if (moveCorruptedWorkspaceConfigAside(ctx.args.workspace)) {
+    ctx.logger?.warn('Recovered corrupted local workspace config', {
+      workspace: ctx.args.workspace,
+    });
   }
 
   try {
@@ -669,13 +702,6 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
       await dbProxy.updatePaper(id as any, fields as any);
     },
     pushManager: pushManager as any,
-    writeNoteFile: async (noteId: string, content: string) => {
-      const fsp = await import('node:fs/promises');
-      const notesDir = path.join(ctx.args.workspace, 'notes');
-      await fsp.mkdir(notesDir, { recursive: true });
-      const absPath = path.join(notesDir, `${noteId}.md`);
-      await fsp.writeFile(absPath, content, 'utf-8');
-    },
     confirmWrite: null, // Set up after IPC registration
     configProvider: {
       config: configProvider.config as any,
@@ -1157,4 +1183,10 @@ export async function bootstrap(): Promise<AppContext> {
     return null!;
   }
 }
+
+export const __testing__ = {
+  parseArgs: () => parseArgs(),
+  step2_acquireLock: async (ctx: unknown) => step2_acquireLock(ctx as BootstrapContext),
+  step3_loadConfig: async (ctx: unknown) => step3_loadConfig(ctx as BootstrapContext),
+};
 

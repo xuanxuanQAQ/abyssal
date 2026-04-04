@@ -1,7 +1,7 @@
 // ═══ Level 2: arXiv PDF ═══
 // §6.4: 直链下载 arXiv PDF
 
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';

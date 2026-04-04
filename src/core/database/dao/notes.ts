@@ -1,13 +1,8 @@
 // ═══ 结构化笔记管理 ═══
-// §6: createNote / onNoteFileChanged / upgradeFromMemo / upgradeToTentativeConcept
+// §6: createNote / saveNoteContent / upgradeFromMemo / upgradeToTentativeConcept
 //
-// 文件系统安全协议 (§6.1/6.3 改进)：
-//   调用方（orchestrator）必须遵循 temp file 两阶段提交：
-//     1. 写内容到 workspace/notes/.tmp_{uuid}.md
-//     2. 调用 createNote() 写入数据库（使用最终 filePath，非 .tmp）
-//     3. 数据库提交成功后 → fs.renameSync(.tmp → 最终路径)
-//     4. 数据库回滚 → 删除 .tmp 文件
-//   下次启动时清理残留 .tmp_* 文件（由 orchestrator 负责）。
+// 笔记内容以 ProseMirror JSON 格式存储在 document_json 列中。
+// 文件系统不再参与笔记存储。
 
 import type Database from 'better-sqlite3';
 import type { NoteId, PaperId, ConceptId, MemoId } from '../../types/common';
@@ -16,14 +11,6 @@ import type { TextChunk } from '../../types/chunk';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 import { insertChunksBatch, deleteChunksByPrefix } from './chunks';
-
-/** 生成笔记文件的临时文件名前缀 */
-export const NOTE_TEMP_PREFIX = '.tmp_';
-
-/** 检查文件名是否为临时文件（用于启动时清理） */
-export function isTempNoteFile(fileName: string): boolean {
-  return fileName.startsWith(NOTE_TEMP_PREFIX);
-}
 
 // ─── §6.1 createNote ───
 
@@ -39,8 +26,8 @@ export function createNote(
     db.prepare(`
       INSERT INTO research_notes (
         id, file_path, title, linked_paper_ids, linked_concept_ids,
-        tags, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        tags, document_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       note.id,
       note.filePath,
@@ -48,6 +35,7 @@ export function createNote(
       JSON.stringify(note.linkedPaperIds),
       JSON.stringify(note.linkedConceptIds),
       JSON.stringify(note.tags),
+      note.documentJson ?? null,
       timestamp,
       timestamp,
     );
@@ -58,44 +46,30 @@ export function createNote(
   });
 }
 
-// ─── §6.2 onNoteFileChanged ───
+// ─── §6.2 saveNoteContent ───
 
-export function onNoteFileChanged(
+export function saveNoteContent(
   db: Database.Database,
   noteId: NoteId,
-  frontmatter: {
-    title: string;
-    linkedPaperIds: PaperId[];
-    linkedConceptIds: ConceptId[];
-    tags: string[];
-  },
-  newChunks: TextChunk[],
-  newEmbeddings: (Float32Array | null)[],
+  documentJson: string,
+  chunks: TextChunk[],
+  embeddings: (Float32Array | null)[],
 ): void {
   const timestamp = now();
 
   writeTransaction(db, () => {
-    // 更新 research_notes 元数据
     db.prepare(`
       UPDATE research_notes
-      SET title = ?, linked_paper_ids = ?, linked_concept_ids = ?,
-          tags = ?, updated_at = ?
+      SET document_json = ?, updated_at = ?
       WHERE id = ?
-    `).run(
-      frontmatter.title,
-      JSON.stringify(frontmatter.linkedPaperIds),
-      JSON.stringify(frontmatter.linkedConceptIds),
-      JSON.stringify(frontmatter.tags),
-      timestamp,
-      noteId,
-    );
+    `).run(documentJson, timestamp, noteId);
 
     // 删除旧 chunk + vec
     deleteChunksByPrefix(db, `note__${noteId}__`);
 
     // 写入新 chunk + vec
-    if (newChunks.length > 0) {
-      insertChunksBatch(db, newChunks, newEmbeddings);
+    if (chunks.length > 0) {
+      insertChunksBatch(db, chunks, embeddings);
     }
   });
 }
@@ -245,17 +219,6 @@ export function getNote(
   const row = db
     .prepare('SELECT * FROM research_notes WHERE id = ?')
     .get(id) as Record<string, unknown> | undefined;
-  if (!row) return null;
-  return fromRow<ResearchNote>(row);
-}
-
-export function getNoteByFilePath(
-  db: Database.Database,
-  filePath: string,
-): ResearchNote | null {
-  const row = db
-    .prepare('SELECT * FROM research_notes WHERE file_path = ?')
-    .get(filePath) as Record<string, unknown> | undefined;
   if (!row) return null;
   return fromRow<ResearchNote>(row);
 }

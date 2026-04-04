@@ -1,14 +1,13 @@
 /**
  * NoteEditor — 结构化笔记编辑器（§3.3）
  *
- * Uses Tiptap for rich-text editing with markdown serialization.
- * Now includes metadata editing panel (title, tags, linked papers/concepts).
- * frontmatter 容错解析：解析失败时仍保存文件内容，显示黄色警告条。
+ * Uses Tiptap for rich-text editing with ProseMirror JSON storage in DB.
+ * Includes metadata editing panel (title, tags, linked papers/concepts).
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, AlertTriangle, ChevronDown, ChevronUp, Plus, X, Tag, FileText, Lightbulb } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Plus, X, Tag, FileText, Lightbulb } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -17,23 +16,14 @@ import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import Placeholder from '@tiptap/extension-placeholder';
-import { useNote, useNoteFileContent, useSaveNoteFile, useUpdateNoteMeta } from '../../../core/ipc/hooks/useNotes';
+import { useNote, useNoteContent, useSaveNoteContent, useUpdateNoteMeta } from '../../../core/ipc/hooks/useNotes';
 import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
 import { usePaperList } from '../../../core/ipc/hooks/usePapers';
-import { parseFromMarkdown, serializeToMarkdown } from '../../writing/editor/extensions/markdownSerializer';
+import { mathExtension } from '../../writing/editor/extensions/mathExtension';
 
 interface NoteEditorProps {
   noteId: string;
   onBack: () => void;
-}
-
-// Frontmatter regex: --- ... --- followed by body
-const FM_REGEX = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
-
-function stripFrontmatter(content: string): { frontmatter: string; body: string } {
-  const match = content.match(FM_REGEX);
-  if (!match) return { frontmatter: '', body: content };
-  return { frontmatter: match[0], body: content.slice(match[0].length) };
 }
 
 function createNoteExtensions(placeholder: string) {
@@ -49,6 +39,7 @@ function createNoteExtensions(placeholder: string) {
     Highlight,
     Subscript,
     Superscript,
+    ...mathExtension,
     Placeholder.configure({ placeholder }),
   ];
 }
@@ -56,11 +47,9 @@ function createNoteExtensions(placeholder: string) {
 export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
   const { t } = useTranslation();
   const { data: noteMeta } = useNote(noteId);
-  const { data: initialContent, isLoading } = useNoteFileContent(noteId);
-  const saveMutation = useSaveNoteFile();
+  const { data: documentJson, isLoading } = useNoteContent(noteId);
+  const saveMutation = useSaveNoteContent();
   const updateMetaMutation = useUpdateNoteMeta();
-  const [frontmatterError, setFrontmatterError] = useState<string | null>(null);
-  const frontmatterRef = useRef('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const contentInitialized = useRef(false);
 
@@ -92,23 +81,11 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
       clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         if (ed.isDestroyed) return;
-        const markdown = serializeToMarkdown(ed.state.doc);
-        const fullContent = frontmatterRef.current + markdown;
-        saveMutation.mutate(
-          { noteId, content: fullContent },
-          {
-            onSuccess: (result) => {
-              if (!result.frontmatterValid) {
-                setFrontmatterError(result.frontmatterError ?? t('notes.note.frontmatterError'));
-              } else {
-                setFrontmatterError(null);
-              }
-            },
-          },
-        );
+        const json = JSON.stringify(ed.getJSON());
+        saveMutation.mutate({ noteId, documentJson: json });
       }, 1500);
     },
-    [noteId, saveMutation, t],
+    [noteId, saveMutation],
   );
 
   const editor = useEditor({
@@ -122,28 +99,26 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
 
   // Initialize editor content when data loads
   useEffect(() => {
-    if (initialContent !== undefined && editor && !contentInitialized.current) {
+    if (documentJson !== undefined && editor && !contentInitialized.current) {
       contentInitialized.current = true;
-      const { frontmatter, body } = stripFrontmatter(initialContent);
-      frontmatterRef.current = frontmatter;
 
-      if (!body.trim()) {
-        editor.commands.setContent('<p></p>', { emitUpdate: false });
-      } else if (/<(p|h[1-6]|div|ul|ol|li|blockquote|pre)\b/i.test(body)) {
-        // Legacy HTML content (from previous saves) — load as HTML
-        editor.commands.setContent(body, { emitUpdate: false });
+      if (documentJson) {
+        try {
+          const json = JSON.parse(documentJson);
+          editor.commands.setContent(json, { emitUpdate: false });
+        } catch (e) {
+          console.error('Failed to parse note document JSON', e);
+          editor.commands.setContent('<p></p>', { emitUpdate: false });
+        }
       } else {
-        // Markdown content (from AI or new format) — parse to ProseMirror
-        const doc = parseFromMarkdown(body, editor.state.schema);
-        editor.commands.setContent(doc.toJSON(), { emitUpdate: false });
+        editor.commands.setContent('<p></p>', { emitUpdate: false });
       }
 
-      // Focus at end after content is set
       requestAnimationFrame(() => {
         editor.commands.focus('end');
       });
     }
-  }, [initialContent, editor]);
+  }, [documentJson, editor]);
 
   // Reset on noteId change
   useEffect(() => {
@@ -263,17 +238,6 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
           {metaOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
       </div>
-
-      {/* Frontmatter warning */}
-      {frontmatterError && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-          backgroundColor: '#FEF3C7', color: '#92400E', fontSize: 12,
-        }}>
-          <AlertTriangle size={14} />
-          {t('notes.note.frontmatterError')}
-        </div>
-      )}
 
       {/* ── Metadata editing panel ── */}
       {metaOpen && (

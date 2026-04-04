@@ -43,6 +43,7 @@ export const en = {
     reject: 'Reject',
     expand: 'Expand',
     collapse: 'Collapse',
+    moreActions: 'More actions',
     time: {
       justNow: 'just now',
       minutesAgo: '{{count}} min ago',
@@ -340,6 +341,7 @@ export const en = {
       keywords: 'Keywords',
       addKeyword: 'Add keyword...',
       relatedNotes: 'Related Notes',
+      moreRelatedItems: '{{count}} more',
       relatedPaperStats: 'Related Paper Stats',
       evolutionTimeline: 'Evolution Timeline',
       merge: 'Merge',
@@ -601,6 +603,7 @@ export const en = {
     },
     filter: {
       searchPlaceholder: 'Search notes...',
+      advanced: 'Advanced filters',
       clearAll: 'Clear all filters',
       papers: 'Papers',
       concepts: 'Concepts',

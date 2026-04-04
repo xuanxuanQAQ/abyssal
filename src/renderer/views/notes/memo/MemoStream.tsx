@@ -13,6 +13,7 @@ import { MemoCard } from './MemoCard';
 import { MemoQuickCreate } from './MemoQuickCreate';
 import type { MemoFilter } from '../../../../shared-types/models';
 import { useMemoList } from '../../../core/ipc/hooks/useMemos';
+import { useEntityDisplayNameCache } from '../shared/entityDisplayNameCache';
 
 interface MemoStreamProps {
   filter?: MemoFilter;
@@ -21,6 +22,7 @@ interface MemoStreamProps {
 export function MemoStream({ filter = {} }: MemoStreamProps) {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useMemoList(filter);
   const allMemos = data?.pages.flat() ?? [];
+  const entityNameCache = useEntityDisplayNameCache();
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -60,7 +62,7 @@ export function MemoStream({ filter = {} }: MemoStreamProps) {
                 ref={virtualizer.measureElement}
                 data-index={virtualItem.index}
               >
-                <MemoCard memo={memo} />
+                <MemoCard memo={memo} entityNameCache={entityNameCache} />
               </div>
             );
           })}

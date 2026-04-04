@@ -84,11 +84,10 @@ export function createMockDB() {
 
     // ── 笔记 ──
     createNote: vi.fn(),
-    onNoteFileChanged: vi.fn(),
+    saveNoteContent: vi.fn(),
     linkMemoToNote: vi.fn(),
     linkNoteToConcept: vi.fn(),
     getNote: vi.fn().mockReturnValue(null),
-    getNoteByFilePath: vi.fn().mockReturnValue(null),
     getAllNotes: vi.fn().mockReturnValue([]),
     deleteNote: vi.fn().mockReturnValue(1),
 

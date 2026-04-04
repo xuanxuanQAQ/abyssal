@@ -1,7 +1,7 @@
 // ═══ Level 4: Institutional Proxy ═══
 // §6.6: 通过机构代理下载
 
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';

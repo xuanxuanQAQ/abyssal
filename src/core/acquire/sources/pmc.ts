@@ -7,7 +7,7 @@
 
 import * as fs from 'node:fs';
 import * as zlib from 'node:zlib';
-import type { AcquireAttempt } from '../../types';
+import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';

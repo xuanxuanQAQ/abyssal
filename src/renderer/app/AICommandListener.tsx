@@ -24,6 +24,16 @@ export function AICommandListener() {
 
   const handleCommand = useCallback((payload: AICommandPayload) => {
     switch (payload.command) {
+      case 'apply-editor-patch': {
+        window.dispatchEvent(new CustomEvent('ai:applyEditorPatch', { detail: payload }));
+        break;
+      }
+
+      case 'persist-document': {
+        window.dispatchEvent(new CustomEvent('ai:persistDocument', { detail: payload }));
+        break;
+      }
+
       case 'navigate': {
         switchView(payload.view);
         if (payload.target?.paperId) selectPaper(payload.target.paperId);

@@ -123,6 +123,28 @@ describe('ContextBudgetManager', () => {
     }
   });
 
+  it('drops LOW sources before trimming HIGH sources under severe pressure', () => {
+    const cbm = makeCBM();
+    const result = cbm.allocate(makeRequest({
+      modelContextWindow: 20_000,
+      taskType: 'article',
+      sources: [
+        { sourceType: 'writing_instruction', estimatedTokens: 500, priority: 'ABSOLUTE', content: null },
+        { sourceType: 'synthesis_fragments', estimatedTokens: 7_000, priority: 'HIGH', content: null },
+        { sourceType: 'rag_passages', estimatedTokens: 5_000, priority: 'MEDIUM', content: null },
+        { sourceType: 'preceding_context', estimatedTokens: 6_000, priority: 'LOW', content: null },
+      ],
+    }));
+
+    const highAlloc = result.sourceAllocations.get('synthesis_fragments');
+    const lowAlloc = result.sourceAllocations.get('preceding_context');
+
+    expect(highAlloc?.included).toBe(true);
+    expect(lowAlloc?.included).toBe(false);
+    expect(lowAlloc?.budgetTokens).toBe(0);
+    expect(highAlloc?.budgetTokens).toBeGreaterThan(0);
+  });
+
   // ─── Maturity-aware adjustment ───
 
   it('increases ragTopK by 1.5x for tentative concepts', () => {

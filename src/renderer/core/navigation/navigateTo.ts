@@ -89,9 +89,11 @@ export function applyNavigation(
       break;
     case 'note':
       partial.selectedNoteId = target.noteId;
+      partial.selectedMemoId = null;
       break;
     case 'memo':
       partial.selectedMemoId = target.memoId;
+      partial.selectedNoteId = null;
       break;
   }
 

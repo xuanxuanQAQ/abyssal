@@ -11,12 +11,13 @@ import { Trash2, Check, X, Loader2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { NoteMeta } from '../../../../shared-types/models';
 import { useDeleteNote } from '../../../core/ipc/hooks/useNotes';
-import { usePaperList } from '../../../core/ipc/hooks/usePapers';
-import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
+import { cancelPendingContextReveal, previewContextSource } from '../../../panels/context/engine/revealContextSource';
+import type { EntityDisplayNameCache } from '../shared/entityDisplayNameCache';
 
 interface NoteCardProps {
   note: NoteMeta;
   onClick: () => void;
+  entityNameCache: EntityDisplayNameCache;
 }
 
 function formatRelativeTime(isoDate: string, t: TFunction): string {
@@ -30,27 +31,11 @@ function formatRelativeTime(isoDate: string, t: TFunction): string {
   return t('common.daysAgo', { count: days });
 }
 
-export function NoteCard({ note, onClick }: NoteCardProps) {
+export function NoteCard({ note, onClick, entityNameCache }: NoteCardProps) {
   const { t } = useTranslation();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const deleteMutation = useDeleteNote();
   const isDeleting = deleteMutation.isPending;
-
-  // Resolve IDs to display names
-  const { data: papers } = usePaperList();
-  const { data: concepts } = useConceptList();
-  const paperName = (pid: string) => {
-    const p = (papers ?? []).find((pp) => ((pp as unknown as Record<string, unknown>)['id'] as string) === pid);
-    if (!p) return pid.slice(0, 10);
-    const title = (p as unknown as Record<string, unknown>)['title'] as string;
-    return title ? title.slice(0, 30) : pid.slice(0, 10);
-  };
-  const conceptName = (cid: string) => {
-    const c = (concepts ?? []).find((cc) => ((cc as unknown as Record<string, unknown>)['id'] as string) === cid);
-    if (!c) return cid.slice(0, 10);
-    const cr = c as unknown as Record<string, unknown>;
-    return ((cr['nameEn'] ?? cr['name_en'] ?? cid) as string).slice(0, 30);
-  };
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -68,8 +53,16 @@ export function NoteCard({ note, onClick }: NoteCardProps) {
         opacity: isDeleting ? 0.4 : 1,
         display: 'flex', flexDirection: 'column', gap: 8,
       }}
-      onMouseEnter={(e) => { if (!isDeleting) (e.currentTarget).style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'; }}
-      onMouseLeave={(e) => { (e.currentTarget).style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)'; }}
+      onMouseEnter={(e) => {
+        previewContextSource({ type: 'note', noteId: note.id });
+        if (!isDeleting) {
+          e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
+        }
+      }}
+      onMouseLeave={(e) => {
+        cancelPendingContextReveal();
+        (e.currentTarget).style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)';
+      }}
     >
       {/* Title */}
       <div style={{
@@ -84,12 +77,12 @@ export function NoteCard({ note, onClick }: NoteCardProps) {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {note.linkedPaperIds.slice(0, 3).map((pid) => (
             <span key={pid} style={tagStyle('var(--color-paper-tag, #3B82F6)')}>
-              {paperName(pid)}
+              {entityNameCache.getPaperName(pid)}
             </span>
           ))}
           {note.linkedConceptIds.slice(0, 3).map((cid) => (
             <span key={cid} style={tagStyle('var(--color-concept-tag, #10B981)')}>
-              {conceptName(cid)}
+              {entityNameCache.getConceptName(cid)}
             </span>
           ))}
           {note.tags.slice(0, 3).map((tag) => (

@@ -14,28 +14,34 @@ import type { Editor } from '@tiptap/react';
 import { useAppStore } from '../../../core/store';
 import { useEditorStore } from '../../../core/store/useEditorStore';
 import { useAIOperations } from '../ai/useAIOperations';
+import { useEditorCommandBridge } from '../ai/useEditorCommandBridge';
 import { EditorToolbar } from './EditorToolbar';
 import { TiptapEditor } from './TiptapEditor';
 import { FloatingToolbar } from './FloatingToolbar';
-import { assembleDocument, disassembleDocument, contentHash } from './documentAssembler';
 import { useDocumentAutoSave } from '../hooks/useDocumentAutoSave';
 import { useImageUpload } from './ImageUploadHandler';
 import { getAPI } from '../../../core/ipc/bridge';
-import type { FullDocumentContent } from '../../../../shared-types/models';
+import { contentHash } from '../../../../shared/writing/documentOutline';
 
 interface UnifiedEditorProps {
   articleId: string;
+  draftId: string;
+  outlineStructureKey: string;
+  onDocumentJsonChange?: ((json: JSONContent | null) => void) | undefined;
 }
 
-export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
+export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocumentJsonChange }: UnifiedEditorProps) {
   const selectedSectionId = useAppStore((s) => s.selectedSectionId);
+  const selectSection = useAppStore((s) => s.selectSection);
   const aiGenerating = useEditorStore((s) => s.aiGenerating);
   const unsavedChanges = useEditorStore((s) => s.unsavedChanges);
+  const setLiveDocumentState = useEditorStore((s) => s.setLiveDocumentState);
+  const clearLiveDocumentState = useEditorStore((s) => s.clearLiveDocumentState);
 
   const [documentJson, setDocumentJson] = useState<JSONContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const loadedArticleRef = useRef<string | null>(null);
+  const loadedDocumentKeyRef = useRef<string | null>(null);
 
   const handleEditorReady = useCallback((ed: Editor) => {
     setEditor(ed);
@@ -44,38 +50,48 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
   // ── Auto-save ──
   const { scheduleAutoSave, flushSave, resetHashes } = useDocumentAutoSave({
     editor,
+    draftId,
+  });
+
+  useEditorCommandBridge({
+    editor,
     articleId,
+    persistDocument: flushSave,
   });
 
   // ── Load full document ──
   useEffect(() => {
-    if (!articleId || articleId === loadedArticleRef.current) return;
+    if (!draftId) return;
+
+    const documentKey = `${draftId}:${outlineStructureKey}`;
+    if (documentKey === loadedDocumentKeyRef.current) return;
 
     let cancelled = false;
 
     async function loadDocument() {
       setLoading(true);
       try {
-        const doc: FullDocumentContent = await (getAPI() as any).db.articles.getFullDocument(articleId);
+        const payload = await getAPI().db.drafts.getDocument(draftId);
         if (cancelled) return;
 
-        const assembled = assembleDocument(doc.sections);
-        setDocumentJson(assembled);
+        const nextDocumentJson = payload.documentJson;
+        const parsed = JSON.parse(nextDocumentJson) as JSONContent;
+        const currentDocumentJson = editor && !editor.isDestroyed
+          ? JSON.stringify(editor.getJSON())
+          : null;
 
-        // Initialize content hashes for change detection
-        const hashes = new Map<string, string>();
-        for (const section of doc.sections) {
-          if (section.documentJson) {
-            try {
-              const parsed = JSON.parse(section.documentJson);
-              hashes.set(section.sectionId, contentHash(parsed));
-            } catch {
-              hashes.set(section.sectionId, '');
-            }
-          }
+        if (currentDocumentJson !== nextDocumentJson || loadedDocumentKeyRef.current !== documentKey) {
+          setDocumentJson(parsed);
+          onDocumentJsonChange?.(parsed);
         }
-        resetHashes(hashes);
-        loadedArticleRef.current = articleId;
+        resetHashes(nextDocumentJson);
+        setLiveDocumentState({
+          articleId,
+          draftId,
+          documentJson: nextDocumentJson,
+          documentHash: contentHash(parsed),
+        });
+        loadedDocumentKeyRef.current = documentKey;
       } catch (err) {
         console.error('Failed to load document:', err);
       } finally {
@@ -85,7 +101,13 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
 
     loadDocument();
     return () => { cancelled = true; };
-  }, [articleId, resetHashes]);
+  }, [articleId, draftId, outlineStructureKey, resetHashes, editor, onDocumentJsonChange, setLiveDocumentState]);
+
+  useEffect(() => {
+    return () => {
+      clearLiveDocumentState();
+    };
+  }, [clearLiveDocumentState]);
 
   // ── Scroll to section ──
   const scrollToSection = useCallback(
@@ -95,7 +117,9 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
       let targetPos: number | null = null;
       editor.state.doc.descendants((node, pos) => {
         if (
-          node.type.name === 'section' &&
+          node.type.name === 'heading' &&
+          Number(node.attrs.level ?? 0) >= 1 &&
+          Number(node.attrs.level ?? 0) <= 3 &&
           node.attrs.sectionId === sectionId
         ) {
           targetPos = pos;
@@ -126,23 +150,32 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
   }, [selectedSectionId, scrollToSection, editor]);
 
   // ── Find which section the cursor is in ──
-  const currentSectionId = useMemo(() => {
+  const currentSectionId = useMemo<string | null>(() => {
     if (!editor) return null;
-    const { $from } = editor.state.selection;
+    const selectionPos = editor.state.selection.from;
+    let activeSectionId: string | null = null;
 
-    // Walk up to find enclosing section node
-    for (let depth = $from.depth; depth >= 0; depth--) {
-      const node = $from.node(depth);
-      if (node.type.name === 'section') {
-        return node.attrs.sectionId as string;
+    editor.state.doc.descendants((node, pos) => {
+      if (pos > selectionPos) return false;
+      if (
+        node.type.name === 'heading' &&
+        Number(node.attrs.level ?? 0) >= 1 &&
+        Number(node.attrs.level ?? 0) <= 3 &&
+        typeof node.attrs.sectionId === 'string'
+      ) {
+        activeSectionId = node.attrs.sectionId as string;
       }
-    }
-    return null;
+      return true;
+    });
+
+    return activeSectionId;
   }, [editor, editor?.state.selection]);
 
   // ── AI Operations ──
   const aiOps = useAIOperations({
     editor,
+    articleId,
+    draftId,
     sectionId: currentSectionId,
   });
 
@@ -161,17 +194,24 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
   );
 
   const handleJsonUpdate = useCallback(
-    (_json: object) => {
-      // JSON update is used by auto-save via editor.getJSON()
+    (json: object) => {
+      const typedJson = json as JSONContent;
+      setLiveDocumentState({
+        articleId,
+        draftId,
+        documentJson: typedJson,
+        documentHash: contentHash(typedJson),
+      });
+      onDocumentJsonChange?.(typedJson);
     },
-    [],
+    [articleId, draftId, onDocumentJsonChange, setLiveDocumentState],
   );
 
   const handleAIGenerate = useCallback(() => aiOps.generate(), [aiOps]);
   const handleAIRewrite = useCallback(() => aiOps.rewrite(), [aiOps]);
   const handleAIExpand = useCallback(() => aiOps.expand(), [aiOps]);
   const handleAICancel = useCallback(() => aiOps.cancel(), [aiOps]);
-  const handleAICompress = useCallback(() => aiOps.rewrite(), [aiOps]);
+  const handleAICompress = useCallback(() => aiOps.compress(), [aiOps]);
 
   const handleInsertCitation = useCallback(() => {
     editor?.chain().focus().insertContent('[@').run();
@@ -179,7 +219,16 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
 
   const handleInsertMath = useCallback(() => {
     if (!editor) return;
-    const mathNodeType = editor.schema.nodes.mathInline;
+    const { selection } = editor.state;
+    const isCollapsed = selection.from === selection.to;
+    const parent = selection.$from.parent;
+    const isEmptyParagraph = parent.type.name === 'paragraph' && parent.textContent.length === 0;
+    const insertBlock = isCollapsed && isEmptyParagraph;
+
+    const mathNodeType = insertBlock
+      ? editor.schema.nodes.mathBlock
+      : editor.schema.nodes.mathInline;
+
     if (mathNodeType) {
       editor.chain().focus().command(({ tr, dispatch }) => {
         if (dispatch) {
@@ -204,34 +253,45 @@ export function UnifiedEditor({ articleId }: UnifiedEditorProps) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      {/* ── Title bar ── */}
-      <div style={{ padding: '12px 24px 4px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          {currentSectionId ? `当前节: ${currentSectionId.slice(0, 8)}…` : '全文编辑模式'}
-        </span>
-        {unsavedChanges && (
-          <span style={{
-            fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
-            whiteSpace: 'nowrap', flexShrink: 0, userSelect: 'none',
-          }} title="有未保存的更改">
-            ● 未保存
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, height: '100%', overflow: 'hidden' }}>
+      <div
+        style={{
+          flexShrink: 0,
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+          background: 'linear-gradient(180deg, var(--paper-surface) 0%, var(--paper-surface-muted) 100%)',
+          borderBottom: '1px solid var(--border-subtle)',
+        }}
+      >
+        {/* ── Title bar ── */}
+        <div style={{ padding: '12px 24px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            {currentSectionId ? `当前节: ${currentSectionId.slice(0, 8)}…` : '全文编辑模式'}
           </span>
-        )}
-      </div>
+          {unsavedChanges && (
+            <span style={{
+              fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+              whiteSpace: 'nowrap', flexShrink: 0, userSelect: 'none',
+            }} title="有未保存的更改">
+              ● 未保存
+            </span>
+          )}
+        </div>
 
-      {/* ── Toolbar ── */}
-      <EditorToolbar
-        editor={editor}
-        aiGenerating={aiGenerating}
-        onAIGenerate={handleAIGenerate}
-        onAIRewrite={handleAIRewrite}
-        onAIExpand={handleAIExpand}
-        onAICancel={handleAICancel}
-        onInsertCitation={handleInsertCitation}
-        onInsertMath={handleInsertMath}
-        onInsertImage={handleInsertImage}
-      />
+        {/* ── Toolbar ── */}
+        <EditorToolbar
+          editor={editor}
+          aiGenerating={aiGenerating}
+          onAIGenerate={handleAIGenerate}
+          onAIRewrite={handleAIRewrite}
+          onAIExpand={handleAIExpand}
+          onAICancel={handleAICancel}
+          onInsertCitation={handleInsertCitation}
+          onInsertMath={handleInsertMath}
+          onInsertImage={handleInsertImage}
+        />
+      </div>
 
       {/* ── Editor ── */}
       <TiptapEditor

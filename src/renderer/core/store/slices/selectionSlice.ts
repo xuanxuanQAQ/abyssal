@@ -36,7 +36,10 @@ export interface SelectionSlice {
   selectedSectionId: string | null;
   /** 选中节时附带的 articleId（用于 ContextSource 派生） */
   selectedArticleId: string | null;
+  /** 选中节时附带的 draftId（用于写作上下文派生） */
+  selectedDraftId: string | null;
   focusedGraphNodeId: string | null;
+  focusedGraphNodeType: 'paper' | 'concept' | 'memo' | 'note' | null;
   /** v2.0 选中碎片笔记 ID */
   selectedMemoId: string | null;
   /** v2.0 选中结构化笔记 ID */
@@ -49,7 +52,7 @@ export interface SelectionSlice {
   deselectAllPapers: () => void;
   selectConcept: (id: string | null) => void;
   selectMapping: (id: string | null, paperId?: string, conceptId?: string) => void;
-  selectSection: (id: string | null, articleId?: string) => void;
+  selectSection: (id: string | null, articleId?: string, draftId?: string) => void;
   focusGraphNode: (id: string | null, nodeType?: 'paper' | 'concept' | 'memo' | 'note') => void;
   /** v2.0 选中碎片笔记 */
   selectMemo: (id: string | null) => void;
@@ -85,7 +88,9 @@ export const createSelectionSlice: StateCreator<
   selectedMappingConceptId: null,
   selectedSectionId: null,
   selectedArticleId: null,
+  selectedDraftId: null,
   focusedGraphNodeId: null,
+  focusedGraphNodeType: null,
   selectedMemoId: null,
   selectedNoteId: null,
 
@@ -174,11 +179,12 @@ export const createSelectionSlice: StateCreator<
       state.selectedMappingConceptId = id ? (conceptId ?? null) : null;
     }),
 
-  selectSection: (id, articleId) =>
+  selectSection: (id, articleId, draftId) =>
     set((state) => {
       state.selectedSectionId = id;
       // 清空 section 时同步清空 articleId；设置 section 时必须提供 articleId
       state.selectedArticleId = id ? (articleId ?? state.selectedArticleId) : null;
+      state.selectedDraftId = id ? (draftId ?? state.selectedDraftId) : null;
     }),
 
   focusGraphNode: (id, nodeType) =>
@@ -191,11 +197,17 @@ export const createSelectionSlice: StateCreator<
   selectMemo: (id) =>
     set((state) => {
       state.selectedMemoId = id;
+      if (id) {
+        state.selectedNoteId = null;
+      }
     }),
 
   selectNote: (id) =>
     set((state) => {
       state.selectedNoteId = id;
+      if (id) {
+        state.selectedMemoId = null;
+      }
     }),
 
   clearSelection: () =>
@@ -211,6 +223,7 @@ export const createSelectionSlice: StateCreator<
       state.selectedMappingConceptId = null;
       state.selectedSectionId = null;
       state.selectedArticleId = null;
+      state.selectedDraftId = null;
       state.focusedGraphNodeId = null;
       state.selectedMemoId = null;
       state.selectedNoteId = null;

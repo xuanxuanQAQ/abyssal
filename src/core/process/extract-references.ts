@@ -1,7 +1,7 @@
 // ═══ 参考文献提取 ═══
 // §3: 区域定位 + 条目分割 + DOI/年份正则
 
-import type { ExtractedReference } from '../types';
+import type { ExtractedReference } from './types';
 import type { Logger } from '../infra/logger';
 import type { DocumentStructure } from '../dla/types';
 

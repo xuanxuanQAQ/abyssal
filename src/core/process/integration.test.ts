@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { extractSections } from './extract-sections';
 import { chunkText } from './chunk-text';
-import type { StyledLine } from '../types';
+import type { StyledLine } from './types';
 
 function makeStyled(text: string, fontSize = 12, isBold = false, pageIndex = 0): StyledLine {
   return { text, fontSize, isBold, pageIndex };

@@ -37,7 +37,7 @@ export const ChatSessionHistory = React.memo(function ChatSessionHistory({
       const list = await getAPI().db.chat.listSessions();
       // 按最后消息时间排序（最新优先）
       const sorted = list
-        .filter((s) => s.messageCount > 0 && s.contextSourceKey !== 'workspace')
+        .filter((s) => s.messageCount > 0)
         .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
       setSessions(sorted);
     } catch (error) {

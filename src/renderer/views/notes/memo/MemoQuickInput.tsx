@@ -10,11 +10,13 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Send, X } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
 import { useCreateMemo } from '../../../core/ipc/hooks/useMemos';
+import { revealContextSource } from '../../../panels/context/engine/revealContextSource';
 
 export function MemoQuickInput() {
   const { t } = useTranslation();
   const open = useAppStore((s) => s.memoQuickInputOpen);
-  const setOpen = useAppStore((s) => s.setMemoQuickInputOpen);
+  const closeMemoQuickInput = useAppStore((s) => s.closeMemoQuickInput);
+  const quickInputContext = useAppStore((s) => s.memoQuickInputContext);
   const activeView = useAppStore((s) => s.activeView);
   const selectedPaperId = useAppStore((s) => s.selectedPaperId);
   const selectedConceptId = useAppStore((s) => s.selectedConceptId);
@@ -25,17 +27,20 @@ export function MemoQuickInput() {
   const createMemo = useCreateMemo();
 
   // Auto-derive associations from current view context
-  const paperIds: string[] = selectedPaperId && ['reader', 'library'].includes(activeView) ? [selectedPaperId] : [];
-  const conceptIds: string[] = selectedConceptId && activeView === 'analysis' ? [selectedConceptId] : [];
+  const derivedPaperIds: string[] = selectedPaperId && ['reader', 'library'].includes(activeView) ? [selectedPaperId] : [];
+  const derivedConceptIds: string[] = selectedConceptId && activeView === 'analysis' ? [selectedConceptId] : [];
+  const paperIds = quickInputContext.paperIds.length > 0 ? quickInputContext.paperIds : derivedPaperIds;
+  const conceptIds = quickInputContext.conceptIds.length > 0 ? quickInputContext.conceptIds : derivedConceptIds;
+  const outlineId = quickInputContext.outlineId ?? selectedSectionId;
 
   useEffect(() => {
     if (open) {
-      setText('');
+      setText(quickInputContext.initialText);
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [open]);
+  }, [open, quickInputContext.initialText]);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed) return;
     const newMemo: import('../../../../shared-types/models').NewMemo = {
@@ -43,10 +48,16 @@ export function MemoQuickInput() {
       paperIds,
       conceptIds,
     };
-    if (selectedSectionId != null) newMemo.outlineId = selectedSectionId;
-    createMemo.mutate(newMemo);
-    setOpen(false);
-  }, [text, paperIds, conceptIds, selectedSectionId, createMemo, setOpen]);
+    if (outlineId != null) newMemo.outlineId = outlineId;
+    const created = await createMemo.mutateAsync(newMemo);
+    revealContextSource({ type: 'memo', memoId: created.id }, { temporaryMs: 4000 });
+    if (quickInputContext.keepOpenOnSubmit) {
+      setText('');
+      textareaRef.current?.focus();
+      return;
+    }
+    closeMemoQuickInput();
+  }, [text, paperIds, conceptIds, outlineId, createMemo, quickInputContext.keepOpenOnSubmit, closeMemoQuickInput]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -59,7 +70,7 @@ export function MemoQuickInput() {
   );
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) closeMemoQuickInput(); }}>
       <Dialog.Portal>
         <Dialog.Overlay style={{
           position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.3)', zIndex: 1100,

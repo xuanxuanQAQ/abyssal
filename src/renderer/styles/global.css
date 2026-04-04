@@ -1261,6 +1261,15 @@ body.is-dragging [data-drag-inert] {
   background: color-mix(in srgb, var(--bg-hover) 90%, transparent);
 }
 
+.context-preview-trigger {
+  transition: background-color 140ms var(--easing-default), border-color 140ms var(--easing-default), transform 140ms var(--easing-default);
+}
+
+.context-preview-trigger:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent-color) 16%, var(--border-subtle)) !important;
+}
+
 .library-sidebar-stage,
 .reader-thumbnails-shell,
 .reader-annotations-shell,
@@ -1855,8 +1864,92 @@ body.is-dragging [data-drag-inert] {
   line-height: 1.7;
   color: var(--text-primary);
   cursor: text;
+  width: 100%;
+  min-height: calc(100vh - 220px);
+  padding-bottom: 16px;
 }
 
 .tiptap-editor-content:focus {
   outline: none;
+}
+
+.math-block-editor {
+  display: block;
+  margin: 10px 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.math-block-preview {
+  min-height: 28px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  margin-bottom: 0;
+  overflow-x: auto;
+}
+
+.math-block-editor.is-editing {
+  cursor: default;
+  outline: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.math-block-placeholder {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.math-block-latex-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.math-block-latex-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.math-inline-node {
+  display: inline-flex;
+  align-items: baseline;
+  cursor: pointer;
+}
+
+.math-inline-render {
+  display: inline;
+}
+
+.math-inline-input {
+  min-width: 120px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.math-inline-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.math-inline-placeholder {
+  color: var(--text-muted);
+  font-size: 12px;
 }

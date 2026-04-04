@@ -36,6 +36,7 @@ import { reverseExtractCitations } from './citation/citation-reverse-extractor';
 import { buildProtectionBlock, verifyProtection } from './paragraph-protection/protection-verifier';
 import { resetForNewVersion } from './paragraph-protection/edit-tracker';
 import { generateSectionSummary, formatPrecedingContext } from './section-summary/deterministic-summary';
+import { buildDocumentProjection, parseArticleDocument } from '../../../shared/writing/documentOutline';
 
 const ARTICLE_STAGE_WORKFLOWS = {
   section: 'article.section',
@@ -53,6 +54,11 @@ export interface ArticleServices {
     getOutline: (articleId: string) => Promise<Array<Record<string, unknown>>>;
     getSectionDrafts: (outlineEntryId: string) => Promise<Array<Record<string, unknown>>>;
     addSectionDraft: (outlineEntryId: string, content: string, llmBackend: string) => Promise<number>;
+    getDraft: (draftId: string) => Promise<Record<string, unknown> | null>;
+    getDraftSections: (draftId: string) => Promise<Array<Record<string, unknown>>>;
+    getDraftDocument: (draftId: string) => Promise<{ draftId: string; articleId: string; documentJson: string; updatedAt: string }>;
+    updateDraftSectionContent: (draftId: string, sectionId: string, content: string, documentJson?: string | null, source?: string) => Promise<void>;
+    updateDraftSectionMeta: (draftId: string, sectionId: string, patch: Record<string, unknown>) => Promise<number>;
     markEditedParagraphs: (outlineEntryId: string, version: number, indices: number[]) => Promise<void>;
     updateOutlineEntry: (id: string, updates: Record<string, unknown>) => Promise<void>;
   };
@@ -82,7 +88,7 @@ export function createArticleWorkflow(services: ArticleServices) {
     runner.reportProgress({ currentItem: outlineEntryId, currentStage: 'reading_outline' });
 
     try {
-      await generateSection(outlineEntryId, services, runner);
+      await generateSection(outlineEntryId, (options as Record<string, unknown>)['draftId'] as string | undefined, services, runner);
       runner.reportComplete(outlineEntryId);
     } catch (error) {
       runner.reportFailed(outlineEntryId, 'article', error as Error);
@@ -92,6 +98,7 @@ export function createArticleWorkflow(services: ArticleServices) {
 
 async function generateSection(
   outlineEntryId: string,
+  draftId: string | undefined,
   services: ArticleServices,
   runner: WorkflowRunnerContext,
 ): Promise<void> {
@@ -101,65 +108,118 @@ async function generateSection(
   const sectionModel = llmClient.resolveModel(sectionWorkflowId);
 
   // ══ Step 1: Outline context read (§3.2) ══
-  const entry = await dbProxy.getOutlineEntry(outlineEntryId);
-  if (!entry) throw new Error(`Outline entry not found: ${outlineEntryId}`);
-
-  const articleId = entry['articleId'] as string ?? entry['article_id'] as string;
-  const article = await dbProxy.getArticle(articleId);
-  if (!article) throw new Error(`Article not found: ${articleId}`);
-
-  const current = {
-    title: (entry['title'] as string) ?? '',
-    thesis: (entry['coreArgument'] as string ?? entry['core_argument'] as string) ?? '',
-    writingInstruction: (entry['writingInstruction'] as string ?? entry['writing_instruction'] as string) ?? '',
-    conceptIds: parseJsonArray(entry['conceptIds'] ?? entry['concept_ids']),
-    paperIds: parseJsonArray(entry['paperIds'] ?? entry['paper_ids']),
-    seq: (entry['sortOrder'] as number ?? entry['sort_order'] as number) ?? 0,
+  let articleId = '';
+  let article: Record<string, unknown> | null = null;
+  let current = {
+    title: '',
+    thesis: '',
+    writingInstruction: '',
+    conceptIds: [] as string[],
+    paperIds: [] as string[],
+    seq: 0,
   };
-
-  const allOutlineEntries = await dbProxy.getOutline(articleId);
-
-  // Preceding sections (completed)
-  const precedingSections = allOutlineEntries
-    .filter((o) => {
-      const seq = (o['sortOrder'] as number ?? o['sort_order'] as number) ?? 0;
-      const status = (o['status'] as string) ?? 'pending';
-      return seq < current.seq && status !== 'pending';
-    })
-    .sort((a, b) => ((a['sortOrder'] ?? a['sort_order']) as number) - ((b['sortOrder'] ?? b['sort_order']) as number));
-
-  // Load preceding section content for summaries
-  const precedingWithContent: Array<{ title: string; seq: number; content: string }> = [];
-  for (const ps of precedingSections) {
-    const psId = (ps['id'] as string);
-    let content = '';
-    const drafts = await dbProxy.getSectionDrafts(psId);
-    if (drafts.length > 0) {
-      const latest = drafts.sort((a, b) => (b['version'] as number) - (a['version'] as number))[0]!;
-      content = (latest['content'] as string) ?? '';
-    }
-    precedingWithContent.push({
-      title: (ps['title'] as string) ?? '',
-      seq: (ps['sortOrder'] as number ?? ps['sort_order'] as number) ?? 0,
-      content,
-    });
-  }
-
-  // Following sections (title preview only)
-  const followingSections = allOutlineEntries
-    .filter((o) => {
-      const seq = (o['sortOrder'] as number ?? o['sort_order'] as number) ?? 0;
-      return seq > current.seq;
-    })
-    .map((o) => ({
-      title: (o['title'] as string) ?? '',
-      seq: (o['sortOrder'] as number ?? o['sort_order'] as number) ?? 0,
-    }));
-
-  // Load current draft (for rewrite/protection)
+  let precedingWithContent: Array<{ title: string; seq: number; content: string }> = [];
+  let followingSections: Array<{ title: string; seq: number }> = [];
   let currentDraftContent = '';
   let editedParagraphs: number[] = [];
-  {
+
+  if (draftId) {
+    const draft = await dbProxy.getDraft(draftId);
+    if (!draft) throw new Error(`Draft not found: ${draftId}`);
+
+    articleId = (draft['articleId'] as string) ?? (draft['article_id'] as string) ?? '';
+    article = await dbProxy.getArticle(articleId);
+    if (!article) throw new Error(`Article not found: ${articleId}`);
+
+    const draftSections = await dbProxy.getDraftSections(draftId);
+    const currentIndex = draftSections.findIndex((section) => (section['sectionId'] as string ?? section['section_id'] as string) === outlineEntryId);
+    if (currentIndex < 0) throw new Error(`Draft section not found: ${outlineEntryId}`);
+
+    const activeSection = draftSections[currentIndex]!;
+    current = {
+      title: (activeSection['title'] as string) ?? '',
+      thesis: '',
+      writingInstruction: (activeSection['writingInstruction'] as string ?? activeSection['writing_instruction'] as string) ?? '',
+      conceptIds: parseJsonArray(activeSection['conceptIds'] ?? activeSection['concept_ids']),
+      paperIds: parseJsonArray(activeSection['paperIds'] ?? activeSection['paper_ids']),
+      seq: currentIndex,
+    };
+
+    const draftDocument = await dbProxy.getDraftDocument(draftId);
+    const projectedSections = buildDocumentProjection(parseArticleDocument(draftDocument.documentJson)).flatSections;
+    const projectedMap = new Map(projectedSections.map((section) => [section.id, section]));
+
+    precedingWithContent = draftSections
+      .slice(0, currentIndex)
+      .filter((section) => ((section['status'] as string) ?? 'pending') !== 'pending')
+      .map((section, index) => {
+        const sectionId = (section['sectionId'] as string ?? section['section_id'] as string) ?? '';
+        const projected = projectedMap.get(sectionId);
+        return {
+          title: (section['title'] as string) ?? '',
+          seq: index,
+          content: projected?.plainText ?? '',
+        };
+      });
+
+    followingSections = draftSections.slice(currentIndex + 1).map((section, index) => ({
+      title: (section['title'] as string) ?? '',
+      seq: currentIndex + index + 1,
+    }));
+
+    currentDraftContent = projectedMap.get(outlineEntryId)?.plainText ?? '';
+  } else {
+    const entry = await dbProxy.getOutlineEntry(outlineEntryId);
+    if (!entry) throw new Error(`Outline entry not found: ${outlineEntryId}`);
+
+    articleId = entry['articleId'] as string ?? entry['article_id'] as string;
+    article = await dbProxy.getArticle(articleId);
+    if (!article) throw new Error(`Article not found: ${articleId}`);
+
+    current = {
+      title: (entry['title'] as string) ?? '',
+      thesis: (entry['coreArgument'] as string ?? entry['core_argument'] as string) ?? '',
+      writingInstruction: (entry['writingInstruction'] as string ?? entry['writing_instruction'] as string) ?? '',
+      conceptIds: parseJsonArray(entry['conceptIds'] ?? entry['concept_ids']),
+      paperIds: parseJsonArray(entry['paperIds'] ?? entry['paper_ids']),
+      seq: (entry['sortOrder'] as number ?? entry['sort_order'] as number) ?? 0,
+    };
+
+    const allOutlineEntries = await dbProxy.getOutline(articleId);
+
+    const precedingSections = allOutlineEntries
+      .filter((o) => {
+        const seq = (o['sortOrder'] as number ?? o['sort_order'] as number) ?? 0;
+        const status = (o['status'] as string) ?? 'pending';
+        return seq < current.seq && status !== 'pending';
+      })
+      .sort((a, b) => ((a['sortOrder'] ?? a['sort_order']) as number) - ((b['sortOrder'] ?? b['sort_order']) as number));
+
+    for (const ps of precedingSections) {
+      const psId = (ps['id'] as string);
+      let content = '';
+      const drafts = await dbProxy.getSectionDrafts(psId);
+      if (drafts.length > 0) {
+        const latest = drafts.sort((a, b) => (b['version'] as number) - (a['version'] as number))[0]!;
+        content = (latest['content'] as string) ?? '';
+      }
+      precedingWithContent.push({
+        title: (ps['title'] as string) ?? '',
+        seq: (ps['sortOrder'] as number ?? ps['sort_order'] as number) ?? 0,
+        content,
+      });
+    }
+
+    followingSections = allOutlineEntries
+      .filter((o) => {
+        const seq = (o['sortOrder'] as number ?? o['sort_order'] as number) ?? 0;
+        return seq > current.seq;
+      })
+      .map((o) => ({
+        title: (o['title'] as string) ?? '',
+        seq: (o['sortOrder'] as number ?? o['sort_order'] as number) ?? 0,
+      }));
+
     const drafts = await dbProxy.getSectionDrafts(outlineEntryId);
     if (drafts.length > 0) {
       const latest = drafts.sort((a, b) => (b['version'] as number) - (a['version'] as number))[0]!;
@@ -168,6 +228,8 @@ async function generateSection(
       editedParagraphs = (Array.isArray(rawEdited) ? rawEdited : parseJsonArray(rawEdited)).map(Number);
     }
   }
+
+  if (!article) throw new Error(`Article not found: ${articleId}`);
 
   // ══ Step 2: Memo + note collection with dedup (§3.3) ══
   runner.reportProgress({ currentStage: 'collecting_notes' });
@@ -360,13 +422,21 @@ async function generateSection(
   // QualityReport is persisted alongside the draft for UI display
 
   // ══ Step 12: Section draft write (version + 1) ══
-  const version = await dbProxy.addSectionDraft(outlineEntryId, finalContent, result.model);
+  if (draftId) {
+    await dbProxy.updateDraftSectionContent(draftId, outlineEntryId, finalContent, null, 'ai-generate');
+    await dbProxy.updateDraftSectionMeta(draftId, outlineEntryId, {
+      status: 'drafted',
+      aiModel: result.model,
+      evidenceStatus: hasEvidenceDeficiency(qualityReport) ? 'insufficient' : 'sufficient',
+      evidenceGaps,
+    });
+  } else {
+    const version = await dbProxy.addSectionDraft(outlineEntryId, finalContent, result.model);
 
-  // Reset editedParagraphs for new AI-generated version
-  // (restored paragraphs keep their indices)
-  const newEditedParagraphs = resetForNewVersion(restoredIndices.length > 0 ? restoredIndices : undefined);
-  if (newEditedParagraphs.length > 0) {
-    await dbProxy.markEditedParagraphs(outlineEntryId, version, newEditedParagraphs);
+    const newEditedParagraphs = resetForNewVersion(restoredIndices.length > 0 ? restoredIndices : undefined);
+    if (newEditedParagraphs.length > 0) {
+      await dbProxy.markEditedParagraphs(outlineEntryId, version, newEditedParagraphs);
+    }
   }
 
   // Write quality report
@@ -381,7 +451,9 @@ async function generateSection(
   }
 
   // ══ Step 13: Outline status update ══
-  await dbProxy.updateOutlineEntry(outlineEntryId, { status: 'drafted' });
+  if (!draftId) {
+    await dbProxy.updateOutlineEntry(outlineEntryId, { status: 'drafted' });
+  }
 
   // ══ Step 14: Preceding section summary (§3.6) ══
   // Summary is generated deterministically when needed by the next section.

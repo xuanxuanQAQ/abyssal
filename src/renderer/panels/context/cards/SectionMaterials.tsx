@@ -10,10 +10,11 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { RAGResultCard } from './RAGResultCard';
-import type { WritingContext } from '../../../../shared-types/models';
+import type { WritingContext, WritingContextRequest } from '../../../../shared-types/models';
+import { buildWritingContextQueryKey } from '../../../core/ipc/hooks/useRAG';
 
 interface SectionMaterialsProps {
-  sectionId: string;
+  request: WritingContextRequest;
   sectionTitle?: string;
   writingContext: WritingContext;
 }
@@ -89,7 +90,7 @@ const privateKBTextStyle: React.CSSProperties = {
 };
 
 export const SectionMaterials = React.memo(function SectionMaterials({
-  sectionId,
+  request,
   sectionTitle,
   writingContext,
 }: SectionMaterialsProps) {
@@ -98,7 +99,7 @@ export const SectionMaterials = React.memo(function SectionMaterials({
 
   const handleRefresh = () => {
     queryClient.invalidateQueries({
-      queryKey: ['rag', 'writingContext', sectionId],
+      queryKey: buildWritingContextQueryKey(request),
     });
   };
 
