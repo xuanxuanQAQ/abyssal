@@ -22,9 +22,10 @@ export function KeywordEditor({ conceptId, keywords }: KeywordEditorProps) {
   const handleAdd = useCallback(() => {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
+    const normalized = trimmed.toLowerCase();
 
     // Validate: no duplicates
-    if (keywords.includes(trimmed)) {
+    if (keywords.some((keyword) => keyword.toLowerCase() === normalized)) {
       setError(t('analysis.concepts.keywordDuplicate'));
       return;
     }

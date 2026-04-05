@@ -1,6 +1,85 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preprocessImage } from '../../src/dla-process/preprocess';
 import { postprocessDetections } from '../../src/dla-process/postprocess';
+
+const processHarness = vi.hoisted(() => ({
+  handlers: new Map<string, (...args: any[]) => unknown>(),
+  sent: [] as unknown[],
+  failMupdf: false,
+  initSessionMock: vi.fn(),
+  detectPageMock: vi.fn(),
+  destroySessionMock: vi.fn(),
+}));
+
+vi.mock('../../src/dla-process/inference-engine', () => ({
+  initSession: (...args: unknown[]) => processHarness.initSessionMock(...args),
+  detectPage: (...args: unknown[]) => processHarness.detectPageMock(...args),
+  destroySession: (...args: unknown[]) => processHarness.destroySessionMock(...args),
+}));
+
+vi.mock('mupdf', () => {
+  return {
+    Document: {
+      openDocument: () => {
+        if (processHarness.failMupdf) {
+          throw new Error('mocked open failure');
+        }
+
+        return {
+          loadPage: () => ({
+            getBounds: () => [0, 0, 100, 200],
+            toPixmap: () => ({
+              getWidth: () => 100,
+              getHeight: () => 200,
+              getPixels: () => new Uint8Array(100 * 200 * 3),
+              destroy: () => {},
+            }),
+            destroy: () => {},
+          }),
+          destroy: () => {},
+        };
+      },
+    },
+    Matrix: {
+      scale: () => ({ sx: 1, sy: 1 }),
+    },
+    ColorSpace: {
+      DeviceRGB: 'rgb',
+    },
+  };
+});
+
+async function loadProcessMain() {
+  vi.resetModules();
+  processHarness.handlers.clear();
+  processHarness.sent = [];
+
+  const onSpy = vi.spyOn(process, 'on').mockImplementation(((event: string, handler: (...args: any[]) => unknown) => {
+    processHarness.handlers.set(event, handler);
+    return process;
+  }) as typeof process.on);
+  const sendSpy = vi.spyOn(process, 'send').mockImplementation(((message: unknown) => {
+    processHarness.sent.push(message);
+    return true;
+  }) as NonNullable<typeof process.send>);
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((() => undefined) as unknown) as typeof process.exit);
+  const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  const module = await import('../../src/dla-process/main');
+
+  return {
+    messageHandler: processHarness.handlers.get('message')!,
+    testing: module.__testing__,
+    restore: () => {
+      onSpy.mockRestore();
+      sendSpy.mockRestore();
+      exitSpy.mockRestore();
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    },
+  };
+}
 
 describe('DLA preprocess/postprocess contracts', () => {
   it('preprocesses RGBA pixels into NCHW tensor with letterbox padding', () => {
@@ -83,5 +162,177 @@ describe('DLA preprocess/postprocess contracts', () => {
       pageIndex: 2,
     });
     expect(blocks[0]?.confidence).toBeCloseTo(0.8, 5);
+  });
+});
+
+describe('DLA subprocess message protocol', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    processHarness.handlers.clear();
+    processHarness.sent = [];
+    processHarness.failMupdf = false;
+    processHarness.initSessionMock.mockResolvedValue(undefined);
+    processHarness.destroySessionMock.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    processHarness.handlers.clear();
+    processHarness.sent = [];
+  });
+
+  it('returns a lifecycle success envelope when model init succeeds', async () => {
+    const main = await loadProcessMain();
+    try {
+      await main.messageHandler({
+        type: 'lifecycle',
+        action: 'init',
+        payload: { modelPath: 'model.onnx', executionProvider: 'cpu' },
+      });
+
+      expect(processHarness.initSessionMock).toHaveBeenCalledWith('model.onnx', 'cpu');
+      expect(processHarness.sent).toContainEqual({ type: 'lifecycle', action: 'init', success: true });
+    } finally {
+      main.restore();
+    }
+  });
+
+  it('returns a lifecycle failure envelope when model init throws', async () => {
+    processHarness.initSessionMock.mockRejectedValueOnce(new Error('model load failed'));
+    const main = await loadProcessMain();
+    try {
+      await main.messageHandler({
+        type: 'lifecycle',
+        action: 'init',
+        payload: { modelPath: 'broken.onnx', executionProvider: 'cpu' },
+      });
+
+      expect(processHarness.sent).toContainEqual({
+        type: 'lifecycle',
+        action: 'init',
+        success: false,
+        error: 'model load failed',
+      });
+    } finally {
+      main.restore();
+    }
+  });
+
+  it('streams detect results, per-page errors, and progress envelopes after initialization', async () => {
+    processHarness.detectPageMock.mockImplementation(async (_image: unknown, pageIndex: number) => {
+      if (pageIndex === 1) {
+        throw new Error('page inference failed');
+      }
+      return {
+        blocks: [{ type: 'text', bbox: { x: 0, y: 0, w: 0.5, h: 0.5 }, confidence: 0.9, pageIndex }],
+        inferenceMs: 12,
+      };
+    });
+
+    const main = await loadProcessMain();
+    try {
+      await main.messageHandler({
+        type: 'lifecycle',
+        action: 'init',
+        payload: { modelPath: 'model.onnx', executionProvider: 'cpu' },
+      });
+      processHarness.sent = [];
+
+      await main.messageHandler({
+        id: 'detect-1',
+        type: 'detect',
+        pdfPath: 'c:/Users/xuanxuan/Desktop/abyssal/package.json',
+        pageIndices: [0, 1],
+        targetSize: 512,
+      });
+
+      expect(processHarness.sent).toEqual([
+        {
+          id: 'detect-1',
+          type: 'detect:result',
+          pageIndex: 0,
+          blocks: [{ type: 'text', bbox: { x: 0, y: 0, w: 0.5, h: 0.5 }, confidence: 0.9, pageIndex: 0 }],
+          inferenceMs: 12,
+        },
+        { id: 'detect-1', type: 'detect:progress', completed: 1, total: 2 },
+        { id: 'detect-1', type: 'detect:error', message: 'page inference failed', pageIndex: 1 },
+        { id: 'detect-1', type: 'detect:progress', completed: 2, total: 2 },
+      ]);
+    } finally {
+      main.restore();
+    }
+  });
+
+  it('returns a detect error envelope when opening the PDF fails', async () => {
+    processHarness.failMupdf = true;
+    const main = await loadProcessMain();
+    try {
+      await main.messageHandler({
+        type: 'lifecycle',
+        action: 'init',
+        payload: { modelPath: 'model.onnx', executionProvider: 'cpu' },
+      });
+      processHarness.sent = [];
+
+      await main.messageHandler({
+        id: 'detect-2',
+        type: 'detect',
+        pdfPath: 'c:/Users/xuanxuan/Desktop/abyssal/package.json',
+        pageIndices: [0],
+      });
+
+      expect(processHarness.sent).toEqual([
+        {
+          id: 'detect-2',
+          type: 'detect:error',
+          message: 'Failed to open PDF: mocked open failure',
+        },
+      ]);
+    } finally {
+      main.restore();
+    }
+  });
+
+  it('returns a detect error envelope when both primary and fallback mupdf imports fail', async () => {
+    const main = await loadProcessMain();
+    const primaryImport = vi.fn(async () => {
+      throw new Error('primary load failed');
+    });
+    const fallbackImport = vi.fn(async (_specifier: string) => {
+      throw new Error('fallback load failed');
+    });
+
+    main.testing.setMupdfImporters({
+      primary: primaryImport,
+      fallback: fallbackImport,
+    });
+
+    try {
+      await main.messageHandler({
+        type: 'lifecycle',
+        action: 'init',
+        payload: { modelPath: 'model.onnx', executionProvider: 'cpu' },
+      });
+      processHarness.sent = [];
+
+      await main.messageHandler({
+        id: 'detect-3',
+        type: 'detect',
+        pdfPath: 'c:/Users/xuanxuan/Desktop/abyssal/package.json',
+        pageIndices: [0],
+      });
+
+      expect(primaryImport).toHaveBeenCalledTimes(1);
+      expect(fallbackImport).toHaveBeenCalledWith('mupdf/dist/mupdf.js');
+      expect(processHarness.sent).toEqual([
+        {
+          id: 'detect-3',
+          type: 'detect:error',
+          message: 'Failed to load mupdf: fallback load failed',
+        },
+      ]);
+    } finally {
+      main.testing.resetMupdfImporters();
+      main.restore();
+    }
   });
 });

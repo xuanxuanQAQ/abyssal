@@ -25,19 +25,22 @@ export function filePathToPdfJsUrl(filePath: string): string {
 export class PDFDocumentManager {
   private document: PDFDocumentProxy | null = null;
   private loadingTask: { promise: Promise<PDFDocumentProxy>; destroy(): Promise<void> } | null = null;
+  private loadGeneration = 0;
   /** §5.4: Track in-flight page render tasks for cancellation on destroy. */
   private activeRenderTasks: Set<{ cancel(): void }> = new Set();
 
   async loadDocument(source: PDFDocumentSource): Promise<PDFDocumentProxy> {
     // Cancel previous document if switching PDFs without explicit destroy
-    if (this.document) {
+    if (this.document || this.loadingTask) {
       await this.destroy();
     }
+
+    const generation = ++this.loadGeneration;
 
     const pdfjsLib = await import('pdfjs-dist');
     ensureWorkerInitialized(pdfjsLib);
 
-    this.loadingTask = pdfjsLib.getDocument({
+    const loadingTask = pdfjsLib.getDocument({
       ...(source.kind === 'data'
         ? { data: source.data }
         : { url: filePathToPdfJsUrl(source.path) }),
@@ -46,10 +49,18 @@ export class PDFDocumentManager {
       standardFontDataUrl: STANDARD_FONT_URL,
       wasmUrl: WASM_URL,
     });
+    this.loadingTask = loadingTask;
 
-    const doc = await this.loadingTask.promise;
+    const doc = await loadingTask.promise;
+    if (generation !== this.loadGeneration) {
+      await doc.destroy();
+      return doc;
+    }
+
     this.document = doc;
-    this.loadingTask = null;
+    if (this.loadingTask === loadingTask) {
+      this.loadingTask = null;
+    }
     return doc;
   }
 

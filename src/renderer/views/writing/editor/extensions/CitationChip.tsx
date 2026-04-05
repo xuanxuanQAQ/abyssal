@@ -7,12 +7,14 @@
  * - Hover 500ms → show CitationHoverCard
  */
 
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useState, useRef, useMemo } from 'react';
 import { NodeViewWrapper } from '@tiptap/react';
 import type { NodeViewProps } from '@tiptap/react';
 import { NodeSelection } from '@tiptap/pm/state';
 import { CitationHoverCard } from './CitationHoverCard';
 import { useAppStore } from '../../../../core/store';
+import { usePaper } from '../../../../core/ipc/hooks/usePapers';
+import { buildCitationDisplayText } from './citationPaperMeta';
 
 const chipStyle: React.CSSProperties = {
   display: 'inline',
@@ -32,7 +34,10 @@ export function CitationChip({ node, editor, getPos }: NodeViewProps): React.Rea
   const navigateTo = useAppStore((s) => s.navigateTo);
 
   const paperId = (node.attrs.paperId as string) ?? '';
-  const displayText = (node.attrs.displayText as string) ?? paperId;
+  const { data: paper } = usePaper(paperId);
+
+  // Derive a richer display label from paper metadata when available
+  const displayText = useMemo(() => buildCitationDisplayText(paper, paperId), [paper, paperId]);
 
   const handleClick = useCallback(
     (event: React.MouseEvent) => {

@@ -2,7 +2,7 @@
  * CreateConceptDialog — 从建议创建概念（§2.3）
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
@@ -14,43 +14,65 @@ interface CreateConceptDialogProps {
   onOpenChange: (open: boolean) => void;
   suggestedId?: string;
   prefillNameEn?: string;
+  prefillNameZh?: string;
   prefillDefinition?: string;
   prefillKeywords?: string[];
+  onCreated?: (conceptId: string) => void;
 }
 
 export function CreateConceptDialog({
   open, onOpenChange, suggestedId,
-  prefillNameEn, prefillDefinition, prefillKeywords,
+  prefillNameEn, prefillNameZh, prefillDefinition, prefillKeywords,
+  onCreated,
 }: CreateConceptDialogProps) {
   const { t } = useTranslation();
   const [nameEn, setNameEn] = useState(prefillNameEn ?? '');
-  const [nameZh, setNameZh] = useState('');
+  const [nameZh, setNameZh] = useState(prefillNameZh ?? '');
   const [definition, setDefinition] = useState(prefillDefinition ?? '');
   const [keywordsStr, setKeywordsStr] = useState((prefillKeywords ?? []).join(', '));
 
   const createConcept = useCreateConcept();
   const acceptSuggestion = useAcceptSuggestedConcept();
 
+  useEffect(() => {
+    if (!open) return;
+    setNameEn(prefillNameEn ?? '');
+    setNameZh(prefillNameZh ?? '');
+    setDefinition(prefillDefinition ?? '');
+    setKeywordsStr((prefillKeywords ?? []).join(', '));
+  }, [open, prefillNameEn, prefillNameZh, prefillDefinition, prefillKeywords]);
+
   const handleCreate = useCallback(() => {
-    if (!nameEn.trim()) return;
+    const resolvedNameEn = nameEn.trim() || nameZh.trim();
+    const resolvedNameZh = nameZh.trim() || nameEn.trim();
+    if (!resolvedNameEn && !resolvedNameZh) return;
+
     const draft = {
-      nameEn: nameEn.trim(),
-      nameZh: nameZh.trim(),
+      nameEn: resolvedNameEn,
+      nameZh: resolvedNameZh,
       definition: definition.trim(),
-      keywords: keywordsStr.split(',').map((k) => k.trim()).filter(Boolean),
+      keywords: Array.from(new Set(keywordsStr.split(',').map((k) => k.trim()).filter(Boolean))),
       parentId: null,
     };
 
     if (suggestedId) {
       acceptSuggestion.mutate({ suggestedId, draft }, {
-        onSuccess: () => onOpenChange(false),
+        onSuccess: (created) => {
+          onCreated?.(created.id);
+          onOpenChange(false);
+        },
       });
     } else {
       createConcept.mutate(draft, {
-        onSuccess: () => onOpenChange(false),
+        onSuccess: (created) => {
+          if (created?.id) {
+            onCreated?.(created.id);
+          }
+          onOpenChange(false);
+        },
       });
     }
-  }, [nameEn, nameZh, definition, keywordsStr, suggestedId, createConcept, acceptSuggestion, onOpenChange]);
+  }, [nameEn, nameZh, definition, keywordsStr, suggestedId, createConcept, acceptSuggestion, onOpenChange, onCreated]);
 
   const isPending = createConcept.isPending || acceptSuggestion.isPending;
 
@@ -66,6 +88,9 @@ export function CreateConceptDialog({
           <Dialog.Title style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
             {t('analysis.concepts.create.title')}
           </Dialog.Title>
+          <Dialog.Description style={srOnlyStyle}>
+            {`${t('analysis.concepts.create.nameEn')} / ${t('analysis.concepts.create.nameZh')} / ${t('analysis.concepts.create.definition')} / ${t('analysis.concepts.create.keywordsHint')}`}
+          </Dialog.Description>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <InputField label={t('analysis.concepts.create.nameEn')} value={nameEn} onChange={setNameEn} autoFocus />
@@ -81,7 +106,7 @@ export function CreateConceptDialog({
             <Dialog.Close asChild>
               <button style={cancelBtnStyle}>{t('common.cancel')}</button>
             </Dialog.Close>
-            <button onClick={handleCreate} disabled={!nameEn.trim() || isPending} style={{ ...primaryBtnStyle, opacity: nameEn.trim() ? 1 : 0.5 }}>
+            <button onClick={handleCreate} disabled={!(nameEn.trim() || nameZh.trim()) || isPending} style={{ ...primaryBtnStyle, opacity: (nameEn.trim() || nameZh.trim()) ? 1 : 0.5 }}>
               {isPending ? t('analysis.concepts.create.creating') : t('analysis.concepts.create.createTentative')}
             </button>
           </div>
@@ -114,6 +139,17 @@ const inputStyle: React.CSSProperties = {
 };
 const textareaStyle: React.CSSProperties = {
   ...inputStyle, resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit',
+};
+const srOnlyStyle: React.CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
 };
 const cancelBtnStyle: React.CSSProperties = {
   padding: '6px 16px', border: '1px solid var(--border-subtle)', borderRadius: 4,

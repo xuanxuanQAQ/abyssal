@@ -211,8 +211,7 @@ describe('ExecutionCoordinator', () => {
 
   describe('execute — recipe resolution failure → fallback to chat', () => {
     it('falls back to chat when no recipe matches', async () => {
-      // Mock resolve to return 'no_match' instead of using real RecipeRegistry
-      // (RecipeRegistry returns 'deferred_to_user' for 0 matches which triggers clarification)
+      // Mock resolve to return 'no_match' — zero candidates trigger direct fallback
       const mockRegistry = {
         resolve: vi.fn().mockReturnValue({ selected: null, resolution: 'no_match', candidates: [] }),
         register: vi.fn(),

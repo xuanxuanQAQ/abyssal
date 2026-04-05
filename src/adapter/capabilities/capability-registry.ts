@@ -2,7 +2,7 @@
  * CapabilityRegistry — central registry for all domain capabilities.
  *
  * Manages capability registration, discovery, and execution.
- * Bridges capabilities to LLM tool definitions for the AgentLoop.
+ * Bridges capabilities to LLM tool definitions for the CopilotRuntime.
  */
 
 import type {

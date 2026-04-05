@@ -8,7 +8,12 @@
 import React from 'react';
 import { ROW_HEADER_WIDTH, COLUMN_HEADER_HEIGHT } from './layoutConstants';
 
-export function CornerCell() {
+interface CornerCellProps {
+  width?: number;
+  height?: number;
+}
+
+export function CornerCell({ width, height }: CornerCellProps) {
   return (
     <div
       style={{
@@ -16,11 +21,11 @@ export function CornerCell() {
         top: 0,
         left: 0,
         zIndex: 3,
-        width: ROW_HEADER_WIDTH,
-        height: COLUMN_HEADER_HEIGHT,
+        width: width ?? ROW_HEADER_WIDTH,
+        height: height ?? COLUMN_HEADER_HEIGHT,
         display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'flex-end',
+        alignItems: 'center',
+        justifyContent: 'center',
         padding: '8px 12px',
         backgroundColor: 'var(--bg-surface)',
         borderRight: '1px solid var(--border-subtle)',
@@ -32,6 +37,8 @@ export function CornerCell() {
         style={{
           fontSize: 11,
           color: 'var(--text-muted)',
+          fontWeight: 600,
+          letterSpacing: 0.3,
           userSelect: 'none',
           whiteSpace: 'nowrap',
         }}

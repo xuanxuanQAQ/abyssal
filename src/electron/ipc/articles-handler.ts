@@ -12,6 +12,7 @@ import { asArticleId, asDraftId, asOutlineEntryId } from '../../core/types/commo
 import type { Article, Draft, OutlineEntry, SectionDraft } from '../../core/types/article';
 import {
   deleteSectionFromDocument,
+  extractCitedPaperIdsFromDocument,
   insertSectionInDocument,
   parseArticleDocument,
   renameSectionInDocument,
@@ -268,7 +269,7 @@ export function registerArticlesHandlers(ctx: AppContext): void {
     await ctx.dbProxy.createDraft({
       id,
       articleId: asArticleId(articleId),
-      title: seed?.title ?? `稿件 ${new Date().toLocaleString('zh-CN')}`,
+      title: seed?.title ?? `变体 ${new Date().toLocaleString('zh-CN')}`,
       status: seed?.status ?? 'drafting',
       documentJson: baseDraft?.documentJson ?? article.documentJson ?? '{"type":"doc","content":[{"type":"paragraph"}]}',
       basedOnDraftId: basedOnDraftId ? asDraftId(basedOnDraftId) : null,
@@ -481,6 +482,12 @@ export function registerArticlesHandlers(ctx: AppContext): void {
     ctx.pushManager?.enqueueDbChange(['articles'], 'update');
   });
 
+  // ── db:articles:delete ──
+  typedHandler('db:articles:delete', logger, async (_e, articleId) => {
+    await ctx.dbProxy.deleteArticle(asArticleId(articleId));
+    ctx.pushManager?.enqueueDbChange(['articles', 'article_drafts', 'outlines'], 'delete');
+  });
+
   // ── db:articles:getDocument ──
   typedHandler('db:articles:getDocument', logger, async (_e, articleId) => {
     return await ctx.dbProxy.getArticleDocument(asArticleId(articleId));
@@ -566,7 +573,9 @@ export function registerArticlesHandlers(ctx: AppContext): void {
         content: match.content,
         documentJson: match.documentJson,
         version: match.version,
-        citedPaperIds: [],
+        citedPaperIds: match.documentJson
+          ? extractCitedPaperIdsFromDocument(parseArticleDocument(match.documentJson))
+          : [],
       } satisfies SectionContent;
     }
 

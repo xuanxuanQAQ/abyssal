@@ -1,10 +1,9 @@
 /**
- * NotesView — dual-layer notes system (v2.0)
+ * NotesView  笔记系统主视图
  *
- * Left: NotesFilterSidebar (200px, multi-dimensional filter)
- * Right: Tab switching between MemoStream and NoteCardGrid/Editor
- *
- * See spec: section 6.1
+ * 碎片笔记（流式快速记录）与研究笔记（结构化长篇）。
+ * 左侧筛选栏收窄范围，右侧按 tab 切换内容。
+ * 研究笔记点击后全幅切换为编辑器，返回回到列表。
  */
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
@@ -15,10 +14,11 @@ import { MemoStream } from './memo/MemoStream';
 import { NoteCardGrid } from './note/NoteCardGrid';
 import { NoteEditor } from './note/NoteEditor';
 import { NotesFilterSidebar } from './NotesFilterSidebar';
-import type { MemoFilter } from '../../../shared-types/models';
+import type { MemoFilter, NoteFilter } from '../../../shared-types/models';
 import { useConceptList } from '../../core/ipc/hooks/useConcepts';
 import { usePaperList } from '../../core/ipc/hooks/usePapers';
 import { useMemoList } from '../../core/ipc/hooks/useMemos';
+import { useNoteList } from '../../core/ipc/hooks/useNotes';
 import { useAppStore } from '../../core/store';
 
 export function NotesView() {
@@ -29,45 +29,51 @@ export function NotesView() {
   const selectedNoteId = useAppStore((s) => s.selectedNoteId);
   const selectedMemoId = useAppStore((s) => s.selectedMemoId);
   const selectNote = useAppStore((s) => s.selectNote);
+  const openMemoQuickInput = useAppStore((s) => s.openMemoQuickInput);
 
-  // Load concepts for filter sidebar
   const { data: concepts } = useConceptList();
   const conceptList = useMemo(
     () => (concepts ?? []).map((c) => {
       const cr = c as unknown as Record<string, unknown>;
-      return {
-        id: (cr['id'] as string) ?? '',
-        nameEn: (cr['nameEn'] ?? cr['name_en'] ?? cr['id']) as string,
-      };
+      return { id: (cr['id'] as string) ?? '', nameEn: (cr['nameEn'] ?? cr['name_en'] ?? cr['id']) as string };
     }),
     [concepts],
   );
 
-  // Load papers for filter sidebar
   const { data: papers } = usePaperList();
   const paperList = useMemo(
     () => (papers ?? []).map((p) => {
       const pr = p as unknown as Record<string, unknown>;
-      return {
-        id: (pr['id'] as string) ?? '',
-        title: ((pr['title'] as string) ?? '').slice(0, 80) || ((pr['id'] as string) ?? ''),
-      };
+      return { id: (pr['id'] as string) ?? '', title: ((pr['title'] as string) ?? '').slice(0, 80) || ((pr['id'] as string) ?? '') };
     }),
     [papers],
   );
 
-  // Aggregate tags from memo data for tag cloud
   const { data: memoData } = useMemoList({});
+  const noteFilter = useMemo<NoteFilter>(() => {
+    const nf: NoteFilter = {};
+    if (filter.conceptIds?.length) nf.conceptIds = filter.conceptIds;
+    if (filter.paperIds?.length) nf.paperIds = filter.paperIds;
+    if (filter.tags?.length) nf.tags = filter.tags;
+    if (filter.searchText?.trim()) nf.searchText = filter.searchText.trim();
+    return nf;
+  }, [filter]);
+  const { data: noteData } = useNoteList(noteFilter);
+
   const allTags = useMemo(() => {
     const tagSet = new Set<string>();
     for (const page of memoData?.pages ?? []) {
       for (const memo of (page as unknown as Array<Record<string, unknown>>)) {
-        const tags = (memo['tags'] as string[]) ?? [];
-        tags.forEach((t) => tagSet.add(t));
+        ((memo['tags'] as string[]) ?? []).forEach((tag) => tagSet.add(tag));
       }
     }
     return Array.from(tagSet).sort();
   }, [memoData]);
+
+  const loadedMemoCount = useMemo(
+    () => memoData?.pages.reduce((sum, page) => sum + page.length, 0) ?? 0,
+    [memoData],
+  );
 
   useEffect(() => {
     if (selectedNoteId) {
@@ -83,7 +89,6 @@ export function NotesView() {
 
   const handleOpenNote = useCallback((noteId: string) => {
     selectNote(noteId);
-    setActiveTab('notes');
     setEditingNoteId(noteId);
   }, [selectNote]);
 
@@ -92,9 +97,12 @@ export function NotesView() {
     selectNote(null);
   }, [selectNote]);
 
+  const handleQuickMemo = useCallback(() => {
+    openMemoQuickInput({ sourceView: 'notes' });
+  }, [openMemoQuickInput]);
+
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-      {/* Filter Sidebar */}
+    <div style={{ display: 'flex', width: '100%', height: '100%', background: 'var(--bg-base)' }}>
       <NotesFilterSidebar
         filter={filter}
         onFilterChange={setFilter}
@@ -103,8 +111,7 @@ export function NotesView() {
         allTags={allTags}
       />
 
-      {/* Main content area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         <Tabs.Root
           value={activeTab}
           onValueChange={(v) => {
@@ -114,23 +121,35 @@ export function NotesView() {
           }}
           style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
         >
-          <Tabs.List style={{
-            display: 'flex', alignItems: 'stretch', height: 36,
-            borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
-          }}>
-            <Tabs.Trigger value="memos" style={tabTriggerStyle(activeTab === 'memos')}>
-              <StickyNote size={14} style={{ marginRight: 4 }} /> {t('notes.tabs.memos')}
-            </Tabs.Trigger>
-            <Tabs.Trigger value="notes" style={tabTriggerStyle(activeTab === 'notes')}>
-              <FileText size={14} style={{ marginRight: 4 }} /> {t('notes.tabs.researchNotes')}
-            </Tabs.Trigger>
-          </Tabs.List>
+          {/* Tab bar */}
+          <div style={topBarStyle}>
+            <Tabs.List style={tabListStyle}>
+              <Tabs.Trigger value="memos" style={tabStyle(activeTab === 'memos')}>
+                <StickyNote size={14} />
+                {t('notes.tabs.memos')}
+                <span style={countStyle(activeTab === 'memos')}>{loadedMemoCount}</span>
+              </Tabs.Trigger>
+              <Tabs.Trigger value="notes" style={tabStyle(activeTab === 'notes')}>
+                <FileText size={14} />
+                {t('notes.tabs.researchNotes')}
+                <span style={countStyle(activeTab === 'notes')}>{noteData?.length ?? 0}</span>
+              </Tabs.Trigger>
+            </Tabs.List>
 
-          <Tabs.Content value="memos" style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+            {activeTab === 'memos' && (
+              <button type="button" onClick={handleQuickMemo} style={actionBtnStyle}>
+                <StickyNote size={13} />
+                {t('notes.workspace.quickMemo', '快速记录')}
+              </button>
+            )}
+          </div>
+
+          {/* Content */}
+          <Tabs.Content value="memos" style={contentStyle}>
             <MemoStream filter={filter} />
           </Tabs.Content>
 
-          <Tabs.Content value="notes" style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+          <Tabs.Content value="notes" style={contentStyle}>
             {editingNoteId ? (
               <NoteEditor noteId={editingNoteId} onBack={handleBackFromNote} />
             ) : (
@@ -143,12 +162,72 @@ export function NotesView() {
   );
 }
 
-function tabTriggerStyle(active: boolean): React.CSSProperties {
+//  Styles 
+
+const topBarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '6px 12px',
+  borderBottom: '1px solid var(--border-subtle)',
+  background: 'var(--bg-surface)',
+  flexShrink: 0,
+};
+
+const tabListStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+};
+
+function tabStyle(active: boolean): React.CSSProperties {
   return {
-    padding: '8px 16px', background: 'none', border: 'none',
-    borderBottom: active ? '2px solid var(--accent-color)' : '2px solid transparent',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 10px',
+    border: 'none',
+    borderRadius: 6,
+    background: active ? 'color-mix(in srgb, var(--accent-color) 10%, transparent)' : 'transparent',
     color: active ? 'var(--accent-color)' : 'var(--text-secondary)',
-    cursor: 'pointer', fontWeight: active ? 600 : 400, fontSize: 13, lineHeight: '20px',
-    display: 'flex', alignItems: 'center',
+    fontSize: 13,
+    fontWeight: active ? 600 : 500,
+    cursor: 'pointer',
   };
 }
+
+function countStyle(active: boolean): React.CSSProperties {
+  return {
+    fontSize: 11,
+    fontWeight: 600,
+    minWidth: 18,
+    height: 18,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    padding: '0 5px',
+    background: active ? 'color-mix(in srgb, var(--accent-color) 14%, transparent)' : 'var(--bg-surface-high, rgba(0,0,0,0.04))',
+    color: active ? 'var(--accent-color)' : 'var(--text-muted)',
+  };
+}
+
+const actionBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '5px 10px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: 'pointer',
+};
+
+const contentStyle: React.CSSProperties = {
+  flex: 1,
+  overflow: 'hidden',
+  minHeight: 0,
+};

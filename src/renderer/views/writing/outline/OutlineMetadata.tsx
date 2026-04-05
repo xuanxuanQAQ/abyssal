@@ -13,18 +13,13 @@ import { useTranslation } from 'react-i18next';
 import type { DraftOutline, SectionNode } from '../../../../shared-types/models';
 import type { CitationStyle } from '../../../../shared-types/enums';
 import { useUpdateDraft } from '../../../core/ipc/hooks/useDrafts';
+import { ARTICLE_STYLES, ARTICLE_STYLE_LABELS } from '../../../../core/types/article';
 
 interface OutlineMetadataProps {
   draft: DraftOutline;
 }
 
-const WRITING_STYLES = [
-  'academic',
-  'narrative',
-  'analytical',
-  'descriptive',
-  'argumentative',
-] as const;
+const ROUTE_STYLE_OPTIONS = ARTICLE_STYLES.map((v) => ({ value: v, label: ARTICLE_STYLE_LABELS[v] }));
 
 const CITATION_STYLES: CitationStyle[] = [
   'GB/T 7714',
@@ -144,7 +139,7 @@ export function OutlineMetadata({ draft }: OutlineMetadataProps) {
 
   return (
     <div style={panelStyle}>
-      {/* Writing style */}
+      {/* Route style */}
       <div style={rowStyle}>
         <span style={labelStyle}>{t('writing.metadata.writingStyle')}</span>
         <select
@@ -153,9 +148,9 @@ export function OutlineMetadata({ draft }: OutlineMetadataProps) {
           onChange={handleWritingStyleChange}
         >
           <option value="">--</option>
-          {WRITING_STYLES.map((ws) => (
-            <option key={ws} value={ws}>
-              {ws}
+          {ROUTE_STYLE_OPTIONS.map((rs) => (
+            <option key={rs.value} value={rs.value}>
+              {rs.label}
             </option>
           ))}
         </select>

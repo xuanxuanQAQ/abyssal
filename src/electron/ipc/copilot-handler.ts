@@ -2,28 +2,23 @@
  * IPC handler: copilot namespace
  *
  * Routes copilot:execute, copilot:abort, copilot:resume, and session queries
- * to the CopilotRuntime. Also provides legacy compatibility for chat:send
- * and pipeline:start by translating them to copilot:execute envelopes.
+ * to the CopilotRuntime.
  */
 
 import type { AppContext } from '../app-context';
 import type { ChatContext } from '../../shared-types/ipc';
-import type { WorkflowType } from '../../shared-types/enums';
 import { typedHandler } from './register';
 import { CopilotRuntime, type CopilotRuntimeDeps } from '../../copilot-runtime/runtime';
 import type {
   CopilotOperationEnvelope,
-  CopilotOperation,
-  CopilotSurface,
-  CopilotIntent,
-  OutputTarget,
   ContextSnapshot,
   ResumeOperationRequest,
 } from '../../copilot-runtime/types';
 import { ToolCallingGovernor } from '../../adapter/orchestrator/tool-calling-governor';
+import { classifyPromptGate, type PromptGateType } from '../../adapter/orchestrator/prompt-injection-gating';
 import { asArticleId } from '../../core/types/common';
 import { buildChatSystemPrompt } from '../chat-system-prompt';
-import * as crypto from 'node:crypto';
+import type { SystemPromptBundle, SystemPromptInteractionMode } from '../../adapter/agent-loop/system-prompt-builder';
 
 let runtimeInstance: CopilotRuntime | null = null;
 
@@ -38,17 +33,6 @@ const pendingAssistantText = new Map<string, string>();
 const operationMeta = new Map<string, { sessionId: string; userPrompt: string }>();
 // Maps legacy conversation/session ids returned to the renderer → latest operation id
 const sessionToOperation = new Map<string, string>();
-
-function getLatestOperationIdForSession(sessionId: string): string | null {
-  const entries = Array.from(operationMeta.entries());
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const [operationId, meta] = entries[index]!;
-    if (meta.sessionId === sessionId) {
-      return operationId;
-    }
-  }
-  return null;
-}
 
 function resolveSessionIdForOperation(operationId: string): string {
   const meta = operationMeta.get(operationId);
@@ -163,13 +147,21 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
     },
     agent: {
       llmClient: ctx.llmClient,
-      capabilities: ctx.capabilityRegistry!,
-      session: ctx.session!,
-      eventBus: ctx.eventBus!,
+      capabilities: ctx.capabilityRegistry ?? (() => { throw new Error('capabilityRegistry not initialized'); })(),
+      session: ctx.session ?? (() => { throw new Error('session not initialized'); })(),
+      eventBus: ctx.eventBus ?? (() => { throw new Error('eventBus not initialized'); })(),
       governor: new ToolCallingGovernor(),
       buildSystemPrompt: async (operation) => {
         const chatContext = snapshotToChatContext(operation.context);
-        return buildChatSystemPrompt(ctx, chatContext);
+        const gate = classifyPromptGate({
+          userMessage: operation.prompt,
+          chatContext,
+          hasRecentSelection: operation.context.selection !== null,
+        });
+        return buildChatSystemPrompt(ctx, chatContext, {
+          bundles: toSystemPromptBundles(gate.bundles),
+          interactionMode: toInteractionMode(gate.type),
+        });
       },
     },
     retrieval: {
@@ -237,13 +229,6 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
     if (event.type === 'model.delta' && event.channel === 'chat') {
       const prev = pendingAssistantText.get(event.operationId) ?? '';
       pendingAssistantText.set(event.operationId, prev + event.text);
-
-      // Legacy agentStream for backward compat
-      ctx.pushManager?.pushAgentStream({
-        type: 'text_delta',
-        conversationId: event.operationId,
-        delta: event.text,
-      } as never);
     }
 
     if (event.type === 'operation.clarification_required') {
@@ -273,13 +258,6 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
       if (meta && assistantText) {
         pushTurn(meta.sessionId, 'assistant', assistantText);
       }
-
-      ctx.pushManager?.pushAgentStream({
-        type: 'done',
-        conversationId: event.operationId,
-        fullText: assistantText,
-        usage: { inputTokens: 0, outputTokens: 0 },
-      } as never);
 
       // Cleanup
       pendingAssistantText.delete(event.operationId);
@@ -389,190 +367,9 @@ export function registerCopilotHandlers(ctx: AppContext): void {
     sessionToOperation.delete(sessionId as string);
     runtime.clearSession(sessionId as string);
   });
-
-  // ── Legacy: chat:send → copilot:execute ──
-  typedHandler('chat:send', logger, async (_e, message, context?, conversationKey?) => {
-    const chatCtx = context as ChatContext | undefined;
-    const conversationId = conversationKey as string ?? chatCtx?.conversationKey ?? 'workspace';
-    await hydrateConversationCache(ctx, conversationId, message as string);
-
-    const envelope: CopilotOperationEnvelope = {
-      operation: {
-        id: crypto.randomUUID(),
-        sessionId: conversationId,
-        surface: 'chat' as CopilotSurface,
-        intent: 'ask' as CopilotIntent,
-        prompt: message as string,
-        context: legacyChatContextToSnapshot(chatCtx),
-        outputTarget: { type: 'chat-message' } as OutputTarget,
-      },
-    };
-
-    try {
-      const runtime = getRuntime(ctx);
-      // Track user prompt for conversation cache (legacy path)
-      pushTurn(conversationId, 'user', message as string);
-      operationMeta.set(envelope.operation.id, { sessionId: conversationId, userPrompt: message as string });
-      const result = await runtime.execute(envelope);
-      syncOperationMeta(envelope.operation.id, result.operationId, conversationId, message as string);
-      bindSessionToOperation(result.sessionId, result.operationId);
-      return result.sessionId;
-    } catch (err) {
-      const errorMessage = (err as Error).message ?? 'Unknown agent error';
-      logger.warn('Agent loop error (legacy path)', { conversationId, error: errorMessage });
-      ctx.pushManager?.pushAgentStream({
-        type: 'error',
-        conversationId,
-        code: 'AGENT_ERROR',
-        message: errorMessage,
-      } as never);
-      return conversationId;
-    }
-  });
-
-  // ── Legacy: chat:abort → copilot:abort ──
-  typedHandler('chat:abort', logger, async (_e, conversationId?) => {
-    if (conversationId) {
-      const runtime = getRuntime(ctx);
-      const operationId = sessionToOperation.get(conversationId as string)
-        ?? getLatestOperationIdForSession(conversationId as string)
-        ?? runtime.getSession(conversationId as string)?.activeOperationId
-        ?? runtime.getSession(conversationId as string)?.pendingClarification?.operationId
-        ?? null;
-      if (operationId) {
-        runtime.abort(operationId);
-      }
-    }
-  });
-
-  // ── Legacy: pipeline:start → copilot:execute ──
-  typedHandler('pipeline:start', logger, async (_e, workflowType, config?) => {
-    const resolvedType = (workflowType as string) === 'generate' ? 'article' : workflowType as string;
-    const wfConfig = config as Record<string, unknown> | undefined;
-
-    const envelope: CopilotOperationEnvelope = {
-      operation: {
-        id: crypto.randomUUID(),
-        sessionId: 'workspace',
-        surface: 'editor-toolbar' as CopilotSurface,
-        intent: legacyWorkflowToIntent(resolvedType as WorkflowType),
-        prompt: '',
-        context: legacyWorkflowContextSnapshot(wfConfig),
-        outputTarget: legacyWorkflowToTarget(resolvedType as WorkflowType, wfConfig),
-      },
-    };
-
-    const runtime = getRuntime(ctx);
-    const result = await runtime.execute(envelope);
-    return result.operationId;
-  });
-
-  // ── Legacy: pipeline:cancel ──
-  typedHandler('pipeline:cancel', logger, async (_e, taskId) => {
-    const runtime = getRuntime(ctx);
-    runtime.abort(taskId as string);
-  });
 }
 
-// ─── Legacy translation helpers ───
-
-function legacyChatContextToSnapshot(chatCtx?: ChatContext): ContextSnapshot {
-  return {
-    activeView: chatCtx?.activeView ?? 'library',
-    workspaceId: '',
-    article: null,
-    selection: chatCtx?.selectedQuote
-      ? {
-          kind: 'reader' as const,
-          paperId: chatCtx.selectedPaperId ?? '',
-          selectedText: chatCtx.selectedQuote,
-          ...(chatCtx.pdfPage != null ? { pdfPage: chatCtx.pdfPage } : {}),
-          ...(chatCtx.imageClips ? { imageClips: chatCtx.imageClips } : {}),
-        }
-      : null,
-    focusEntities: {
-      paperIds: chatCtx?.selectedPaperId
-        ? [chatCtx.selectedPaperId, ...(chatCtx.selectedPaperIds ?? [])]
-        : chatCtx?.selectedPaperIds ?? [],
-      conceptIds: chatCtx?.selectedConceptId ? [chatCtx.selectedConceptId] : [],
-    },
-    conversation: { recentTurns: [] },
-    retrieval: { evidence: [] },
-    writing: null,
-    budget: { policy: 'standard', tokenBudget: 6000, includedLayers: ['surface', 'working'] },
-    frozenAt: Date.now(),
-  };
-}
-
-function legacyWorkflowToIntent(workflow: WorkflowType): CopilotIntent {
-  switch (workflow) {
-    case 'article':
-    case 'generate':
-      return 'generate-section';
-    case 'analyze':
-      return 'review-argument';
-    case 'discover':
-    case 'acquire':
-    case 'process':
-    case 'synthesize':
-    case 'bibliography':
-      return 'run-workflow';
-    default:
-      return 'run-workflow';
-  }
-}
-
-function legacyWorkflowToTarget(
-  workflow: WorkflowType,
-  config?: Record<string, unknown>,
-): OutputTarget {
-  if (workflow === 'article' || workflow === 'generate') {
-    return {
-      type: 'section-replace',
-      articleId: (config?.articleId as string) ?? '',
-      sectionId: (config?.sectionId as string) ?? (config?.outlineEntryId as string) ?? '',
-    };
-  }
-  return { type: 'workflow', workflow, ...(config ? { config } : {}) };
-}
-
-function legacyWorkflowContextSnapshot(config?: Record<string, unknown>): ContextSnapshot {
-  const articleId = (config?.articleId as string) ?? '';
-  const sectionId = (config?.sectionId as string) ?? (config?.outlineEntryId as string) ?? null;
-  return {
-    activeView: 'writing',
-    workspaceId: '',
-    article: sectionId
-      ? {
-          articleId,
-          sectionId,
-        }
-      : null,
-    selection: config?.selectedText
-      ? {
-          kind: 'editor',
-          articleId,
-          sectionId: ((config?.sectionId as string) ?? (config?.outlineEntryId as string) ?? ''),
-          selectedText: config.selectedText as string,
-          from: 0,
-          to: 0,
-        }
-      : null,
-    focusEntities: { paperIds: [], conceptIds: [] },
-    conversation: { recentTurns: [] },
-    retrieval: { evidence: [] },
-    writing: sectionId
-      ? {
-          editorId: 'main',
-          articleId,
-          sectionId,
-          unsavedChanges: false,
-        }
-      : null,
-    budget: { policy: 'standard', tokenBudget: 6000, includedLayers: ['surface', 'working'] },
-    frozenAt: Date.now(),
-  };
-}
+// ─── Helpers ───
 
 function snapshotToChatContext(snapshot: ContextSnapshot): ChatContext {
   const paperIds = snapshot.focusEntities.paperIds;
@@ -591,4 +388,22 @@ function snapshotToChatContext(snapshot: ContextSnapshot): ChatContext {
       ? { pdfPage: snapshot.selection.pdfPage }
       : {}),
   };
+}
+
+function toSystemPromptBundles(bundles: string[]): SystemPromptBundle[] {
+  return bundles.filter((bundle): bundle is SystemPromptBundle => (
+    bundle === 'project_meta' || bundle === 'active_focus' || bundle === 'capability_hints'
+  ));
+}
+
+function toInteractionMode(type: PromptGateType): SystemPromptInteractionMode {
+  switch (type) {
+    case 'greeting':
+    case 'smalltalk':
+      return 'greeting';
+    case 'assistant-profile':
+      return 'assistant_profile';
+    default:
+      return 'default';
+  }
 }

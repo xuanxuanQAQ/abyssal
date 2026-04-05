@@ -1,11 +1,10 @@
 /**
  * PanelSlice — 面板状态
  *
- * ContextPanel、Library Sidebar、Reader 缩略图/标注列表、
- * Writing OutlineTree 的开合与尺寸。
+ * ContextPanel、Library Sidebar、Reader 缩略图/标注列表的开合状态，
+ * 以及 ContextPanel 的尺寸偏好。
  *
  * ContextPanel 尺寸使用百分比（react-resizable-panels 原生模式）。
- * 二级面板（LibrarySidebar/ReaderThumbs/OutlineTree）使用像素制。
  *
  * §2.4 钉住/偷看机制字段
  * §3.5 ProactiveTips 字段
@@ -35,18 +34,12 @@ export interface PanelSlice {
   // ── §3.5 AI 主动提示 ──
   proactiveTips: ProactiveTip[];
 
-  // ── Library Sidebar（像素制）──
+  // ── Library Sidebar ──
   librarySidebarOpen: boolean;
-  librarySidebarWidth: number;    // 默认 230px, min 160, max 320
 
   // ── Reader panels ──
   readerThumbsOpen: boolean;
-  readerThumbsWidth: number;      // 默认 80px, min 60, max 120
   readerAnnotationListOpen: boolean;
-
-  // ── Writing OutlineTree（像素制）──
-  outlineTreeOpen: boolean;
-  outlineTreeWidth: number;       // 默认 220px, min 160, max 360
 
   // ── Actions ──
   toggleContextPanel: () => void;
@@ -66,12 +59,8 @@ export interface PanelSlice {
   removeProactiveTip: (tipId: string) => void;
 
   toggleLibrarySidebar: () => void;
-  setLibrarySidebarWidth: (width: number) => void;
   toggleReaderThumbs: () => void;
-  setReaderThumbsWidth: (width: number) => void;
   toggleReaderAnnotationList: () => void;
-  toggleOutlineTree: () => void;
-  setOutlineTreeWidth: (width: number) => void;
 }
 
 export const createPanelSlice: StateCreator<
@@ -95,16 +84,10 @@ export const createPanelSlice: StateCreator<
 
   // ── Library Sidebar ──
   librarySidebarOpen: true,
-  librarySidebarWidth: 230,     // §2.4
 
   // ── Reader panels ──
   readerThumbsOpen: true,
-  readerThumbsWidth: 80,        // §2.4
   readerAnnotationListOpen: true,
-
-  // ── Writing OutlineTree ──
-  outlineTreeOpen: true,
-  outlineTreeWidth: 220,        // §2.4
 
   // ── Actions ──
   toggleContextPanel: () =>
@@ -176,33 +159,13 @@ export const createPanelSlice: StateCreator<
       state.librarySidebarOpen = !state.librarySidebarOpen;
     }),
 
-  setLibrarySidebarWidth: (width) =>
-    set((state) => {
-      state.librarySidebarWidth = Math.max(160, Math.min(320, width));
-    }),
-
   toggleReaderThumbs: () =>
     set((state) => {
       state.readerThumbsOpen = !state.readerThumbsOpen;
     }),
 
-  setReaderThumbsWidth: (width) =>
-    set((state) => {
-      state.readerThumbsWidth = Math.max(60, Math.min(120, width));
-    }),
-
   toggleReaderAnnotationList: () =>
     set((state) => {
       state.readerAnnotationListOpen = !state.readerAnnotationListOpen;
-    }),
-
-  toggleOutlineTree: () =>
-    set((state) => {
-      state.outlineTreeOpen = !state.outlineTreeOpen;
-    }),
-
-  setOutlineTreeWidth: (width) =>
-    set((state) => {
-      state.outlineTreeWidth = Math.max(160, Math.min(360, width));
     }),
 });

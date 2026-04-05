@@ -1,7 +1,6 @@
 [project]
 name = ""
 description = ""
-mode = "anchored"                            # anchored / unanchored
 
 [acquire]
 unpaywall = true
@@ -50,11 +49,11 @@ output_default = "zh"
 default_provider = "claude"                  # claude / openai / deepseek
 default_model = "claude-sonnet-4-20250514"
 
-[llm.discovery]
+[llm.discover]
 provider = "deepseek"
 model = "deepseek-chat"
 
-[llm.analysis]
+[llm.analyze]
 provider = "claude"
 model = "claude-opus-4-20250901"
 

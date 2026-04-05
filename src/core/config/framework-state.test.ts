@@ -3,7 +3,6 @@ import {
   computeFrameworkState,
   deriveFrameworkState,
   computeConceptStats,
-  effectiveMode,
 } from './framework-state';
 
 // ─── helpers ───
@@ -146,35 +145,5 @@ describe('computeFrameworkState', () => {
     ];
     // 3 tentative (all non-deprecated) → early_exploration
     expect(computeFrameworkState(concepts)).toBe('early_exploration');
-  });
-});
-
-// ─── effectiveMode ───
-
-describe('effectiveMode', () => {
-  it('unanchored config → always unanchored regardless of state', () => {
-    expect(effectiveMode('unanchored', 'zero_concepts')).toBe('unanchored');
-    expect(effectiveMode('unanchored', 'early_exploration')).toBe('unanchored');
-    expect(effectiveMode('unanchored', 'framework_mature')).toBe('unanchored');
-  });
-
-  it('anchored config + zero_concepts → unanchored_natural', () => {
-    expect(effectiveMode('anchored', 'zero_concepts')).toBe('unanchored_natural');
-  });
-
-  it('anchored config + non-zero state → anchored', () => {
-    expect(effectiveMode('anchored', 'early_exploration')).toBe('anchored');
-    expect(effectiveMode('anchored', 'framework_forming')).toBe('anchored');
-    expect(effectiveMode('anchored', 'framework_mature')).toBe('anchored');
-  });
-
-  it('auto config + zero_concepts → unanchored_natural', () => {
-    expect(effectiveMode('auto', 'zero_concepts')).toBe('unanchored_natural');
-  });
-
-  it('auto config + non-zero state → anchored', () => {
-    expect(effectiveMode('auto', 'early_exploration')).toBe('anchored');
-    expect(effectiveMode('auto', 'framework_forming')).toBe('anchored');
-    expect(effectiveMode('auto', 'framework_mature')).toBe('anchored');
   });
 });

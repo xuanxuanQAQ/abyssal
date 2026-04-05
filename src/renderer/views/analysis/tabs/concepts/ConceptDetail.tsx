@@ -16,7 +16,7 @@ import { ConceptSplitWizard } from '../../concept-editor/ConceptSplitWizard';
 import { useUpdateMaturity } from '../../../../core/ipc/hooks/useConcepts';
 import { useAppStore } from '../../../../core/store';
 import { cancelPendingContextReveal, previewContextSource } from '../../../../panels/context/engine/revealContextSource';
-import { RELATION_LABELS_ZH, RELATION_COLORS } from '../../shared/relationTheme';
+import { RELATION_LABELS_EN, RELATION_LABELS_ZH, RELATION_COLORS } from '../../shared/relationTheme';
 import type { RelationType } from '../../../../../shared-types/enums';
 
 interface ConceptDetailProps {
@@ -24,7 +24,7 @@ interface ConceptDetailProps {
 }
 
 export function ConceptDetail({ conceptId }: ConceptDetailProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { data: concepts } = useConceptList();
   const concept = concepts?.find((c) => c.id === conceptId);
   const updateMaturity = useUpdateMaturity();
@@ -33,6 +33,31 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
 
   const [mergeOpen, setMergeOpen] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
+  const relationLabels = i18n.language.toLowerCase().startsWith('zh') ? RELATION_LABELS_ZH : RELATION_LABELS_EN;
+
+  // Keep hook ordering stable even when the concept list is still loading.
+  const { relationDist, mappingCount, reviewedCount, avgConfidence } = useMemo(() => {
+    const dist: Record<string, number> = { ...(stats?.relationDistribution ?? {}) };
+    let reviewed = stats?.reviewedCount ?? 0;
+    let totalConf = 0;
+    if (mappings) {
+      for (const m of mappings) {
+        if (!(m.relationType in dist)) {
+          dist[m.relationType] = (dist[m.relationType] ?? 0) + 1;
+        }
+        if (stats?.reviewedCount == null && (m as any).adjudicationStatus && (m as any).adjudicationStatus !== 'pending') {
+          reviewed++;
+        }
+        totalConf += (m as any).confidence ?? 0;
+      }
+    }
+    return {
+      relationDist: dist,
+      mappingCount: stats?.mappingCount ?? mappings?.length ?? 0,
+      reviewedCount: reviewed,
+      avgConfidence: stats?.avgConfidence ?? (mappings && mappings.length > 0 ? totalConf / mappings.length : 0),
+    };
+  }, [mappings, stats?.avgConfidence, stats?.mappingCount, stats?.relationDistribution, stats?.reviewedCount]);
 
   if (!concept) {
     return (
@@ -41,26 +66,6 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
       </div>
     );
   }
-
-  // Compute relation type distribution from mappings (memoized)
-  const { relationDist, mappingCount, reviewedCount, avgConfidence } = useMemo(() => {
-    const dist: Record<string, number> = {};
-    let reviewed = 0;
-    let totalConf = 0;
-    if (mappings) {
-      for (const m of mappings) {
-        dist[m.relationType] = (dist[m.relationType] ?? 0) + 1;
-        if ((m as any).adjudicationStatus && (m as any).adjudicationStatus !== 'pending') reviewed++;
-        totalConf += (m as any).confidence ?? 0;
-      }
-    }
-    return {
-      relationDist: dist,
-      mappingCount: stats?.mappingCount ?? mappings?.length ?? 0,
-      reviewedCount: reviewed,
-      avgConfidence: mappings && mappings.length > 0 ? totalConf / mappings.length : 0,
-    };
-  }, [mappings, stats?.mappingCount]);
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: 20 }}>
@@ -202,7 +207,7 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
                       backgroundColor: RELATION_COLORS[rel] ?? 'var(--text-muted)',
                     }}
                   />
-                  {RELATION_LABELS_ZH[rel] ?? rel} {count}
+                  {relationLabels[rel] ?? rel} {count}
                 </span>
               ))}
             </div>
@@ -291,9 +296,14 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
   // We use getAPI directly for getByEntity since there's no dedicated hook
   const [memos, setMemos] = React.useState<Array<{ id: string; content: string }>>([]);
   const [notes, setNotes] = React.useState<Array<{ id: string; title: string }>>([]);
+  const [loadState, setLoadState] = React.useState<'loading' | 'ready' | 'error'>('loading');
 
   React.useEffect(() => {
     let cancelled = false;
+    setLoadState('loading');
+    setMemos([]);
+    setNotes([]);
+
     const loadRelated = async () => {
       try {
         // Use IPC bridge to get memos and notes for this concept
@@ -316,9 +326,12 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
               title: n.title ?? n.name ?? 'Untitled',
             })),
           );
+          setLoadState('ready');
         }
       } catch {
-        // Silent failure for related data
+        if (!cancelled) {
+          setLoadState('error');
+        }
       }
     };
     void loadRelated();
@@ -326,6 +339,22 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
       cancelled = true;
     };
   }, [conceptId]);
+
+  if (loadState === 'loading') {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+        {t('analysis.concepts.relatedNotesLoading')}
+      </div>
+    );
+  }
+
+  if (loadState === 'error') {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--danger, #e53e3e)' }}>
+        {t('analysis.concepts.relatedNotesLoadError')}
+      </div>
+    );
+  }
 
   const previewNotes = notes.slice(0, 2);
   const previewMemos = memos.slice(0, 2);

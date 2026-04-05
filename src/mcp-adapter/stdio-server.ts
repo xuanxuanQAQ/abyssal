@@ -198,6 +198,7 @@ async function main(): Promise<void> {
     processService,
     ragService,
     bibliographyService,
+    configProvider,
     logger,
     readOnly: cliArgs.readOnly,
     startTime,

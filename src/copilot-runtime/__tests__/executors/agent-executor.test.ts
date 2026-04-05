@@ -306,5 +306,21 @@ describe('AgentExecutor', () => {
       const callArgs = (deps.llmClient.completeStream as any).mock.calls[0][0];
       expect(callArgs.tools).toBeUndefined();
     });
+
+    it('does not pass tools for plain greetings', async () => {
+      const deps = makeMockDeps({
+        capabilities: {
+          toToolDefinitions: vi.fn().mockReturnValue([{ name: 'search', description: 'Search', inputSchema: {} }]),
+          execute: vi.fn(),
+        } as any,
+      });
+
+      const executor = new AgentExecutor(deps);
+      await executor.execute(makeOperation({ id: 'op-hello', prompt: '你好' }), makeStep('chat'), emitter);
+
+      const callArgs = (deps.llmClient.completeStream as any).mock.calls[0][0];
+      expect(callArgs.tools).toBeUndefined();
+      expect(deps.capabilities.toToolDefinitions).not.toHaveBeenCalled();
+    });
   });
 });

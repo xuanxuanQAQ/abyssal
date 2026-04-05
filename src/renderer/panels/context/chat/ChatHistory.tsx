@@ -24,6 +24,7 @@ interface ChatHistoryProps {
   fullyLoaded: boolean;
   onLoadMore: () => void;
   onRetry?: (messageId: string) => void;
+  onClarificationSelect?: (messageId: string, optionId: string) => void;
   bottomInset?: number;
 }
 
@@ -33,6 +34,7 @@ export const ChatHistory = React.memo(function ChatHistory({
   fullyLoaded,
   onLoadMore,
   onRetry,
+  onClarificationSelect,
   bottomInset = 112,
 }: ChatHistoryProps) {
   const { t } = useTranslation();
@@ -127,7 +129,12 @@ export const ChatHistory = React.memo(function ChatHistory({
                     paddingBottom: 16,
                   }}
                 >
-                  <ChatBubble message={msg} onRetry={onRetry} showAssistantLabel={msg.id === firstAssistantId} />
+                  <ChatBubble
+                    message={msg}
+                    onRetry={onRetry}
+                    onClarificationSelect={onClarificationSelect}
+                    showAssistantLabel={msg.id === firstAssistantId}
+                  />
                 </div>
               );
             })}
@@ -135,7 +142,13 @@ export const ChatHistory = React.memo(function ChatHistory({
         ) : (
           <div className="chat-history-stack" style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 0 24px' }}>
             {messages.map((msg) => (
-              <ChatBubble key={msg.id} message={msg} onRetry={onRetry} showAssistantLabel={msg.id === firstAssistantId} />
+              <ChatBubble
+                key={msg.id}
+                message={msg}
+                onRetry={onRetry}
+                onClarificationSelect={onClarificationSelect}
+                showAssistantLabel={msg.id === firstAssistantId}
+              />
             ))}
           </div>
         )}

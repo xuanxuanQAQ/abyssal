@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import type { PaperId, NoteId, MemoId } from '../types/common';
 import type { PathResolver } from '../infra/path-resolver';
 import type { Logger } from '../infra/logger';
+import { isInternalDbNoteFilePath } from '../database/note-file-path';
 
 // ─── §4.2 FilesystemIntegrityReport ───
 
@@ -127,6 +128,7 @@ export function checkFilesystemIntegrity(
   ).all() as Array<{ id: string; file_path: string }>;
 
   for (const row of noteRows) {
+    if (isInternalDbNoteFilePath(row.file_path)) continue;
     try {
       if (!fs.existsSync(resolver.resolveNote(row.file_path))) {
         missingNoteFiles.push(row.id as NoteId);
@@ -147,7 +149,8 @@ export function checkFilesystemIntegrity(
 
   const validNoteFiles = new Set(
     (db.prepare('SELECT file_path FROM research_notes').all() as Array<{ file_path: string }>)
-      .map((r) => r.file_path),
+      .map((r) => r.file_path)
+      .filter((filePath) => !isInternalDbNoteFilePath(filePath)),
   );
 
   const orphanedPdfs = scanOrphansWithSet(
@@ -187,6 +190,7 @@ export function checkFilesystemIntegrity(
   ).all() as Array<{ id: string; file_path: string; updated_at: string }>;
 
   for (const row of noteMetaRows) {
+    if (isInternalDbNoteFilePath(row.file_path)) continue;
     try {
       const absPath = resolver.resolveNote(row.file_path);
       if (!fs.existsSync(absPath)) continue;

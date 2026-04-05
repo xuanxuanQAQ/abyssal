@@ -22,6 +22,7 @@ import { TableHeader } from './TableHeader';
 import { VirtualizedBody } from './VirtualizedBody';
 import { BatchActionBar } from './BatchActionBar';
 import { SkeletonRows } from './SkeletonRows';
+import { useHotkey } from '../../../core/hooks/useHotkey';
 import type { Paper } from '../../../../shared-types/models';
 import type { PaperFilter } from '../../../../shared-types/ipc';
 
@@ -102,19 +103,9 @@ export function PaperTable({ papers, isLoading, filter }: PaperTableProps) {
 
   const selection = usePaperSelection(sortedPapers);
 
-  // Ctrl+A 快捷键
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-        const activeEl = document.activeElement;
-        if (activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA') return;
-        e.preventDefault();
-        selection.selectAllPapers();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [selection.selectAllPapers]);
+  useHotkey('Ctrl+A', () => {
+    selection.selectAllPapers();
+  });
 
   return (
     <div

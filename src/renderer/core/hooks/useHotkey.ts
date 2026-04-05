@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react';
+import { useViewActive } from '../context/ViewActiveContext';
 
 /**
  * 解析快捷键字符串为匹配条件
@@ -133,6 +134,7 @@ export function useHotkey(
     preventDefault = true,
     stopPropagation = false,
   } = options;
+  const viewActive = useViewActive();
 
   const callbackRef = useRef(callback);
   callbackRef.current = callback;
@@ -147,6 +149,7 @@ export function useHotkey(
   const handler = useCallback(
     (event: KeyboardEvent) => {
       if (!enabled) return;
+      if (!viewActive) return;
 
       const parsed = parsedRef.current;
       if (!matchesHotkey(event, parsed)) return;
@@ -165,7 +168,7 @@ export function useHotkey(
 
       callbackRef.current(event);
     },
-    [enabled, preventDefault, stopPropagation]
+    [enabled, preventDefault, stopPropagation, viewActive]
   );
 
   useEffect(() => {
@@ -193,6 +196,7 @@ export function useHotkeys(
     preventDefault = true,
     stopPropagation = false,
   } = options;
+  const viewActive = useViewActive();
 
   const bindingsRef = useRef(bindings);
   bindingsRef.current = bindings;
@@ -209,6 +213,7 @@ export function useHotkeys(
   const handler = useCallback(
     (event: KeyboardEvent) => {
       if (!enabled) return;
+      if (!viewActive) return;
 
       for (const { parsed, key } of parsedBindingsRef.current) {
         if (!matchesHotkey(event, parsed)) continue;
@@ -224,7 +229,7 @@ export function useHotkeys(
         return; // 只执行第一个匹配
       }
     },
-    [enabled, preventDefault, stopPropagation]
+    [enabled, preventDefault, stopPropagation, viewActive]
   );
 
   useEffect(() => {

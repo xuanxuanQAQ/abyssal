@@ -34,6 +34,7 @@ interface MatrixCanvasProps {
   onClick: (e: React.MouseEvent<HTMLCanvasElement>) => void;
   onDoubleClick: (e: React.MouseEvent<HTMLCanvasElement>) => void;
   onContextMenu: (e: React.MouseEvent<HTMLCanvasElement>) => void;
+  pointerEvents?: React.CSSProperties['pointerEvents'];
 }
 
 /**
@@ -63,6 +64,7 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
   onClick,
   onDoubleClick,
   onContextMenu,
+  pointerEvents = 'auto',
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const anchorScrollLeftRef = useRef(0);
@@ -279,7 +281,7 @@ const MatrixCanvas: React.FC<MatrixCanvasProps> = ({
         height: canvasHeight,
         transform: `translate(${translateX}px, ${translateY}px)`,
         willChange: 'transform',
-        pointerEvents: 'auto',
+        pointerEvents,
         imageRendering: 'pixelated',
       }}
       onMouseMove={onMouseMove}

@@ -1,7 +1,9 @@
 /**
  * ThemeContext — 颜色方案、强调色、字号
  *
- * 持久化到 localStorage，低频变更。
+ * 主存储为 config 系统（appearance section），通过 IPC 读写。
+ * localStorage 仅作为启动闪屏防护（避免白屏闪烁），以 IPC 值为准。
+ * 监听 push:settingsChanged 以响应外部变更（如 AI 修改主题）。
  */
 
 import React, {
@@ -12,6 +14,7 @@ import React, {
   useEffect,
   type ReactNode,
 } from 'react';
+import { getAPI } from '../ipc/bridge';
 
 type ColorScheme = 'light' | 'dark' | 'system';
 type FontSize = 'sm' | 'base' | 'lg';
@@ -34,17 +37,20 @@ interface StoredTheme {
   fontSize: FontSize;
 }
 
-function loadTheme(): StoredTheme {
+const DEFAULT_THEME: StoredTheme = { colorScheme: 'system', accentColor: '#3B82F6', fontSize: 'base' };
+
+/** 快速加载 localStorage 防止启动白屏闪烁 */
+function loadThemeFromStorage(): StoredTheme {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw) as StoredTheme;
   } catch {
     // ignore
   }
-  return { colorScheme: 'system', accentColor: '#3B82F6', fontSize: 'base' };
+  return DEFAULT_THEME;
 }
 
-function saveTheme(theme: StoredTheme): void {
+function saveThemeToStorage(theme: StoredTheme): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(theme));
 }
 
@@ -61,10 +67,46 @@ function getSystemScheme(): 'light' | 'dark' {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<StoredTheme>(loadTheme);
+  // 初始值从 localStorage 快速加载（防闪烁），后续由 IPC 覆盖
+  const [theme, setTheme] = useState<StoredTheme>(loadThemeFromStorage);
 
   const resolvedScheme =
     theme.colorScheme === 'system' ? getSystemScheme() : theme.colorScheme;
+
+  // 启动后从 config 系统加载真实值
+  useEffect(() => {
+    getAPI().settings.getAll().then((data) => {
+      if (data?.appearance) {
+        const remote: StoredTheme = {
+          colorScheme: data.appearance.colorScheme ?? DEFAULT_THEME.colorScheme,
+          accentColor: data.appearance.accentColor ?? DEFAULT_THEME.accentColor,
+          fontSize: data.appearance.fontSize ?? DEFAULT_THEME.fontSize,
+        };
+        setTheme(remote);
+        saveThemeToStorage(remote);
+      }
+    }).catch(() => { /* stub mode — keep localStorage value */ });
+  }, []);
+
+  // 监听 push:settingsChanged（AI 或其他来源修改了 appearance）
+  useEffect(() => {
+    const api = getAPI();
+    const unsub = api.on.settingsChanged((event: { section: string; keys: string[] }) => {
+      if (event.section !== 'appearance') return;
+      api.settings.getAll().then((data) => {
+        if (data?.appearance) {
+          const remote: StoredTheme = {
+            colorScheme: data.appearance.colorScheme ?? DEFAULT_THEME.colorScheme,
+            accentColor: data.appearance.accentColor ?? DEFAULT_THEME.accentColor,
+            fontSize: data.appearance.fontSize ?? DEFAULT_THEME.fontSize,
+          };
+          setTheme(remote);
+          saveThemeToStorage(remote);
+        }
+      }).catch(() => {});
+    });
+    return unsub;
+  }, []);
 
   // 监听系统主题变化
   useEffect(() => {
@@ -75,9 +117,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => mql.removeEventListener('change', handler);
   }, [theme.colorScheme]);
 
-  // 持久化
+  // localStorage 缓存（下次启动防闪烁）
   useEffect(() => {
-    saveTheme(theme);
+    saveThemeToStorage(theme);
   }, [theme]);
 
   // 应用到 document
@@ -90,19 +132,33 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.dataset['fontSize'] = theme.fontSize;
   }, [resolvedScheme, theme.accentColor, theme.fontSize]);
 
+  /** 写入 config 系统并更新本地状态 */
+  const persistToConfig = useCallback((patch: Partial<StoredTheme>) => {
+    getAPI().settings.updateSection('appearance', patch).catch(() => {});
+  }, []);
+
   const setColorScheme = useCallback(
-    (scheme: ColorScheme) => setTheme((t) => ({ ...t, colorScheme: scheme })),
-    []
+    (scheme: ColorScheme) => {
+      setTheme((t) => ({ ...t, colorScheme: scheme }));
+      persistToConfig({ colorScheme: scheme });
+    },
+    [persistToConfig]
   );
 
   const setAccentColor = useCallback(
-    (color: string) => setTheme((t) => ({ ...t, accentColor: color })),
-    []
+    (color: string) => {
+      setTheme((t) => ({ ...t, accentColor: color }));
+      persistToConfig({ accentColor: color });
+    },
+    [persistToConfig]
   );
 
   const setFontSize = useCallback(
-    (size: FontSize) => setTheme((t) => ({ ...t, fontSize: size })),
-    []
+    (size: FontSize) => {
+      setTheme((t) => ({ ...t, fontSize: size }));
+      persistToConfig({ fontSize: size });
+    },
+    [persistToConfig]
   );
 
   return (

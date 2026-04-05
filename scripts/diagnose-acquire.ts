@@ -533,7 +533,7 @@ function printPipelineResult(r: any, duration: number) {
 
 function buildMinimalConfig() {
   return {
-    project: { name: 'diagnose', description: '', mode: 'anchored' },
+    project: { name: 'diagnose', description: '' },
     acquire: {
       enabledSources: ['unpaywall', 'arxiv', 'pmc'],
       enableScihub: false,

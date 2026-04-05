@@ -5,10 +5,11 @@
 
 import { asConceptId } from '../../../core/types/common';
 import type { DbProxyInstance } from '../../../db-process/db-proxy';
+import type { ConceptDraft } from '../../../shared-types/models';
 
-export function deriveConceptId(nameEn: string): string {
+export function deriveConceptId(nameSeed: string): string {
   return (
-    nameEn
+    nameSeed
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_|_$/g, '')
@@ -18,21 +19,30 @@ export function deriveConceptId(nameEn: string): string {
 
 export async function createConceptFromDraft(
   dbProxy: DbProxyInstance,
-  draft: Record<string, unknown>,
+  draft: ConceptDraft | Record<string, unknown>,
   fallbackDefinition?: string,
 ): Promise<string> {
-  const conceptId = asConceptId(deriveConceptId((draft['nameEn'] as string) ?? ''));
+  const nameEn = typeof draft['nameEn'] === 'string' ? draft['nameEn'].trim() : '';
+  const nameZh = typeof draft['nameZh'] === 'string' ? draft['nameZh'].trim() : '';
+  const conceptId = asConceptId(deriveConceptId(nameEn || nameZh));
+  const definition = typeof draft['definition'] === 'string'
+    ? draft['definition']
+    : fallbackDefinition ?? '';
+  const searchKeywords = Array.isArray(draft['keywords'])
+    ? draft['keywords'].filter((keyword): keyword is string => typeof keyword === 'string')
+    : [];
+  const parentId = typeof draft['parentId'] === 'string' ? draft['parentId'] : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (dbProxy as any).addConcept({
     id: conceptId,
-    nameZh: (draft['nameZh'] as string) ?? '',
-    nameEn: (draft['nameEn'] as string) ?? '',
+    nameZh,
+    nameEn,
     layer: 'domain',
-    definition: (draft['definition'] as string) ?? fallbackDefinition ?? '',
-    searchKeywords: (draft['keywords'] as string[]) ?? [],
+    definition,
+    searchKeywords,
     maturity: 'tentative',
-    parentId: (draft['parentId'] as string) ?? null,
+    parentId,
     history: [],
     deprecated: false,
     deprecatedAt: null,

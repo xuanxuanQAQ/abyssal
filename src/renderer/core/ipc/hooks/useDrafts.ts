@@ -91,6 +91,18 @@ export function useUpdateDraft() {
   });
 }
 
+export function useDeleteDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (draftId: string) => getAPI().db.drafts.delete(draftId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['drafts'] });
+      queryClient.invalidateQueries({ queryKey: ['articles', 'outlines'] });
+    },
+    onError: (err) => handleError(err),
+  });
+}
+
 export function useUpdateDraftOutlineOrder() {
   const queryClient = useQueryClient();
   return useMutation({

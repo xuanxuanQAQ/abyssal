@@ -2,9 +2,9 @@
  * useCopilotRuntime — unified frontend hook for Copilot Runtime operations.
  *
  * Replaces direct usage of:
- *   - getAPI().chat.send() (→ copilot:execute)
+ *   - legacy chat execution entry points (→ copilot:execute)
  *   - getAPI().pipeline.start() (→ copilot:execute)
- *   - push:agentStream (→ push:copilotEvent)
+ *   - legacy chat push channels (→ copilotEvent)
  *
  * Provides: execute, abort, resume, event subscription, and operation state.
  */

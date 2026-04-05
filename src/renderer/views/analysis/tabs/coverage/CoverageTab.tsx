@@ -5,24 +5,26 @@
  * ConceptCoverageBar components.
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CompletenessScore } from './CompletenessScore';
 import { ConceptCoverageBar } from './ConceptCoverageBar';
 import { useCoverageData } from './useCoverageData';
-import { useAppStore } from '../../../../core/store';
+import { getAPI } from '../../../../core/ipc/bridge';
 
 export function CoverageTab() {
   const { t } = useTranslation();
   const { completeness, concepts, isLoading } = useCoverageData();
-  const switchView = useAppStore((s) => s.switchView);
-  const setLibrarySearchQuery = useAppStore((s) => s.setLibrarySearchQuery);
+  const [discoveringConceptId, setDiscoveringConceptId] = useState<string | null>(null);
 
-  const handleSearchRelated = useCallback((conceptName: string, _conceptId: string) => {
-    // Navigate to library with concept name as search query to trigger discovery
-    setLibrarySearchQuery(conceptName);
-    switchView('library');
-  }, [switchView, setLibrarySearchQuery]);
+  const handleTriggerDiscover = useCallback(async (conceptId: string) => {
+    setDiscoveringConceptId(conceptId);
+    try {
+      await getAPI().pipeline.start('discover', { conceptIds: [conceptId] });
+    } finally {
+      setDiscoveringConceptId((current) => (current === conceptId ? null : current));
+    }
+  }, []);
 
   if (isLoading) {
     return (
@@ -85,7 +87,8 @@ export function CoverageTab() {
               pending={c.pending}
               excluded={c.excluded}
               total={c.total}
-              onSearchRelated={() => handleSearchRelated(c.conceptName, c.conceptId)}
+              isDiscovering={discoveringConceptId === c.conceptId}
+              onSearchRelated={() => void handleTriggerDiscover(c.conceptId)}
             />
           ))}
         </div>

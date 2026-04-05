@@ -65,7 +65,6 @@ import { EventBus } from '../core/event-bus';
 import { ResearchSession } from '../core/session';
 import { createCapabilityRegistry, type CapabilityServices } from '../adapter/capabilities';
 import { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
-import { buildChatSystemPrompt } from './chat-system-prompt';
 import { testApiKeyDirect, testConfiguredApiKey } from '../core/infra/api-key-diagnostics';
 
 // ─── ParsedArgs ───
@@ -517,7 +516,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   const reconCache = new ReconCache(reconCacheDb, logger);
   acquireModule.setReconCache(reconCache);
 
-  // ── Layer 5: WorkflowRunner + AgentLoop + AdvisoryAgent ──
+  // ── Layer 5: WorkflowRunner + AdvisoryAgent ──
   const workflowRunner = new WorkflowRunner(logger, pushManager);
 
   // Register all workflows
@@ -618,6 +617,10 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
       frameworkState: () => ctx.appContext!.frameworkState,
       workspacePath: ctx.args.workspace,
       outputLanguage: configProvider.config.language.defaultOutputLanguage,
+      analysisConfig: {
+        autoSuggestConcepts: config.analysis.autoSuggestConcepts,
+        autoSuggestThreshold: config.concepts.autoSuggestThreshold,
+      },
       ragService: ragService ? {
         retrieve: async (query: string, options?: { paperId?: string; topK?: number }) => {
           const result = await ragService!.retrieve({
@@ -736,9 +739,6 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
       session: researchSession,
       capabilities: capabilityRegistry,
       llmClient,
-      pushManager,
-      buildSystemPrompt: async (chatContext) => buildChatSystemPrompt(ctx.appContext!, chatContext),
-      maxRounds: 15,
       proactiveEnabled: (configProvider.config as any).ai?.proactiveSuggestions ?? false,
       logger: (msg, data) => logger.debug(msg, data as Record<string, unknown>),
     });
@@ -889,7 +889,6 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
 
   logger.info('Core modules instantiated', {
     workflows: Array.from(workflowRunner.activeWorkflowMap.keys()).length === 0 ? 'all registered' : 'active',
-    agentLoop: !!ctx.appContext.agentLoop,
     advisoryAgent: true,
     dla: !!ctx.appContext.dlaProxy,
   });
@@ -913,9 +912,40 @@ async function step8_createWindow(ctx: BootstrapContext): Promise<void> {
   ctx.appContext!.pushManager!.setWindow(mainWindow);
 }
 
-// ─── Step 9: Framework state evaluation ───
+// ─── Step 9: Concept sync + Framework state evaluation ───
 
 async function step9_evaluateFrameworkState(ctx: BootstrapContext): Promise<void> {
+  // §6: Sync concepts.yaml → DB before evaluating framework state.
+  // Ensures DB reflects the latest YAML definitions.
+  try {
+    const fs = require('node:fs') as typeof import('node:fs');
+    const conceptsPath = path.join(ctx.args.workspace, 'config', 'concepts.yaml');
+    const altPath = path.join(ctx.args.workspace, '.abyssal', 'concepts.yaml');
+    const loadPath = fs.existsSync(conceptsPath)
+      ? conceptsPath
+      : fs.existsSync(altPath)
+        ? altPath
+        : null;
+
+    if (loadPath) {
+      const { loadConceptsYaml } = await import('../core/config/concepts-loader');
+      const concepts = loadConceptsYaml(loadPath);
+      if (concepts.length > 0) {
+        const syncReport = await ctx.dbProxy!.syncConceptsFromYaml(concepts);
+        ctx.logger!.info('Concept sync from YAML', {
+          added: (syncReport as any).added?.length ?? 0,
+          modified: (syncReport as any).modified?.length ?? 0,
+          deprecated: (syncReport as any).deprecated?.length ?? 0,
+          unchanged: (syncReport as any).unchanged?.length ?? 0,
+        });
+      }
+    }
+  } catch (err) {
+    ctx.logger!.warn('Concept sync from YAML failed (non-fatal)', {
+      error: (err as Error).message,
+    });
+  }
+
   try {
     await ctx.appContext!.refreshFrameworkState();
     ctx.frameworkState = ctx.appContext!.frameworkState;
@@ -1041,7 +1071,6 @@ async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
     llmClient: null,
     contextBudgetManager: null,
     orchestrator: null,
-    agentLoop: null,
     advisoryAgent: null,
     activeWorkflows: new Map(),
     mainWindow: null,

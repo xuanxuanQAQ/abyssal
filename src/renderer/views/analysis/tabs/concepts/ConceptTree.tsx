@@ -1,8 +1,7 @@
 /**
  * ConceptTree — 概念树（§2.1）
  *
- * 从扁平列表构建内存树，@dnd-kit/sortable 拖拽调整层级，
- * drop 前做环路检测。
+ * 从扁平列表构建内存树并按成熟度排序显示。
  */
 
 import React, { useMemo } from 'react';
@@ -15,6 +14,10 @@ import type { Concept } from '../../../../../shared-types/models';
 interface TreeNode {
   concept: Concept;
   children: TreeNode[];
+}
+
+interface ConceptTreeProps {
+  onCreateConcept?: () => void;
 }
 
 function buildTree(concepts: Concept[]): TreeNode[] {
@@ -48,7 +51,7 @@ function buildTree(concepts: Concept[]): TreeNode[] {
   return roots;
 }
 
-export function ConceptTree() {
+export function ConceptTree({ onCreateConcept }: ConceptTreeProps) {
   const { t } = useTranslation();
   const { data: concepts } = useConceptList();
   const selectedConceptId = useAppStore((s) => s.selectedConceptId);
@@ -63,10 +66,30 @@ export function ConceptTree() {
       aria-label={t('analysis.concepts.framework')}
     >
       <div style={{
-        padding: '6px 12px', fontSize: 11, fontWeight: 600,
-        color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em',
+        padding: '6px 12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
       }}>
-        {t('analysis.concepts.framework')}
+        <div style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: 'var(--text-muted)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}>
+          {t('analysis.concepts.framework')}
+        </div>
+        {onCreateConcept && (
+          <button
+            type="button"
+            onClick={onCreateConcept}
+            style={createButtonStyle}
+          >
+            {t('analysis.concepts.create.action')}
+          </button>
+        )}
       </div>
       <ul role="group" style={{ margin: 0, padding: 0 }}>
         {tree.map((node) => (
@@ -80,13 +103,42 @@ export function ConceptTree() {
         ))}
       </ul>
       {tree.length === 0 && (
-        <div style={{ padding: '16px 12px', color: 'var(--text-muted)', fontSize: 12 }}>
-          {t('analysis.concepts.empty')}
+        <div style={{ padding: '16px 12px', color: 'var(--text-muted)', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+          <div>{t('analysis.concepts.empty')}</div>
+          {onCreateConcept && (
+            <button
+              type="button"
+              onClick={onCreateConcept}
+              style={emptyCreateButtonStyle}
+            >
+              {t('analysis.concepts.create.action')}
+            </button>
+          )}
         </div>
       )}
     </div>
   );
 }
+
+const createButtonStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 999,
+  backgroundColor: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 11,
+  cursor: 'pointer',
+};
+
+const emptyCreateButtonStyle: React.CSSProperties = {
+  padding: '6px 10px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 6,
+  backgroundColor: 'transparent',
+  color: 'var(--text-primary)',
+  fontSize: 12,
+  cursor: 'pointer',
+};
 
 export type { TreeNode };
 export { buildTree };

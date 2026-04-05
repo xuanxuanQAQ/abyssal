@@ -14,6 +14,15 @@ import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { JSONContent } from '@tiptap/core';
 
+interface EditorSelectionState {
+  articleId: string;
+  draftId: string | null;
+  sectionId: string | null;
+  from: number;
+  to: number;
+  selectedText: string;
+}
+
 interface EditorState {
   editorFocused: boolean;
   aiGenerating: boolean;
@@ -23,6 +32,7 @@ interface EditorState {
   liveDraftId: string | null;
   liveDocumentJson: string | null;
   liveDocumentHash: string | null;
+  editorSelection: EditorSelectionState | null;
 
   setEditorFocused: (focused: boolean) => void;
   setAIGenerating: (generating: boolean, taskId?: string | null) => void;
@@ -33,6 +43,7 @@ interface EditorState {
     documentJson: JSONContent | string;
     documentHash: string;
   }) => void;
+  setEditorSelection: (selection: EditorSelectionState | null) => void;
   clearLiveDocumentState: () => void;
   resetEditor: () => void;
 }
@@ -49,6 +60,7 @@ export const useEditorStore = create<EditorState>()(
         liveDraftId: null,
         liveDocumentJson: null,
         liveDocumentHash: null,
+        editorSelection: null,
 
         setEditorFocused: (focused) =>
           set((state) => {
@@ -76,12 +88,18 @@ export const useEditorStore = create<EditorState>()(
             state.liveDocumentHash = documentHash;
           }),
 
+        setEditorSelection: (selection) =>
+          set((state) => {
+            state.editorSelection = selection;
+          }),
+
         clearLiveDocumentState: () =>
           set((state) => {
             state.liveArticleId = null;
             state.liveDraftId = null;
             state.liveDocumentJson = null;
             state.liveDocumentHash = null;
+            state.editorSelection = null;
           }),
 
         resetEditor: () =>
@@ -94,6 +112,7 @@ export const useEditorStore = create<EditorState>()(
             state.liveDraftId = null;
             state.liveDocumentJson = null;
             state.liveDocumentHash = null;
+            state.editorSelection = null;
           }),
       }))
     ),

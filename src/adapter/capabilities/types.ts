@@ -5,7 +5,7 @@
  * - Each capability groups related operations by domain
  * - Operations have access to the ResearchSession for cross-pipeline context
  * - The AI can chain capabilities: reader.find_passages → notes.create_from_findings
- * - Capabilities are exposed as LLM tools via a bridge in the ToolRegistry
+ * - Capabilities are exposed as LLM tools via the CapabilityRegistry
  */
 
 import type { ResearchSession } from '../../core/session';

@@ -3,8 +3,9 @@ import type { NavigationExecutorDeps } from '../../executors/navigation-executor
 import { OperationEventEmitter } from '../../event-emitter';
 import { makeOperation, resetSeq } from '../helpers';
 import type { ExecutionStep } from '../../types';
+import type { ViewType } from '../../../shared-types/enums';
 
-function makeStep(view = 'library' as const, entityId?: string): ExecutionStep & { kind: 'navigate' } {
+function makeStep(view: ViewType = 'library', entityId?: string): ExecutionStep & { kind: 'navigate' } {
   return {
     kind: 'navigate',
     view,

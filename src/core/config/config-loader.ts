@@ -25,10 +25,12 @@ import type {
   ContextBudgetConfig,
   PersonalizationConfig,
   WebSearchConfig,
+  AppearanceConfig,
 } from '../types/config';
 import { ConfigError, ConfigParseError } from '../types/errors';
 import { CONFIG_FIELD_DEFS, coerceToSchemaType, getNestedValue } from './config-schema';
 import { parseEnvironmentVariables, resolveApiKeys } from './env-parser';
+import { normalizeWorkflowOverrideKey, normalizeWorkflowOverrides } from './workflow-override-keys';
 
 type WarnFn = (message: string, ctx?: Record<string, unknown>) => void;
 
@@ -129,7 +131,6 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
  * | --verbose     | logging.level = 'debug'| boolean  |
  * | --log-level   | logging.level          | string   |
  * | --force       | batch.force            | boolean  |
- * | --mode        | project.mode           | string   |
  * | --provider    | llm.defaultProvider    | string   |
  * | --model       | llm.defaultModel       | string   |
  * | --cost        | contextBudget.costPreference | string |
@@ -149,7 +150,6 @@ export function mapCliToConfig(
     { flag: 'dryRun', path: ['batch', 'dryRun'] },
     { flag: 'dry-run', path: ['batch', 'dryRun'] },
     { flag: 'force', path: ['batch', 'force'] },
-    { flag: 'mode', path: ['project', 'mode'] },
     { flag: 'provider', path: ['llm', 'defaultProvider'] },
     { flag: 'model', path: ['llm', 'defaultModel'] },
     { flag: 'cost', path: ['contextBudget', 'costPreference'] },
@@ -280,25 +280,25 @@ function stripBom(text: string): string {
 }
 
 /**
- * §1.2: [llm.analysis] 等子节映射到 llm.workflowOverrides.analysis
+ * §1.2: [llm.discovery] / [llm.analysis] 等子节映射到 canonical workflowOverrides.*
  */
 function flattenTomlSections(parsed: Record<string, unknown>): Record<string, unknown> {
   const result = { ...parsed };
 
   if (result['llm'] && typeof result['llm'] === 'object') {
     const llm = { ...(result['llm'] as Record<string, unknown>) };
-    const workflowKeys = ['discovery', 'analysis', 'synthesize', 'article', 'agent'];
+    const workflowKeys = ['discover', 'discovery', 'analyze', 'analysis', 'synthesize', 'article', 'agent', 'vision', 'generate'];
     const overrides: Record<string, unknown> =
       (llm['workflowOverrides'] as Record<string, unknown>) ?? {};
 
     for (const key of workflowKeys) {
       if (llm[key] && typeof llm[key] === 'object') {
-        overrides[key] = llm[key];
+        overrides[normalizeWorkflowOverrideKey(key)] = llm[key];
         delete llm[key];
       }
     }
 
-    llm['workflowOverrides'] = overrides;
+    llm['workflowOverrides'] = normalizeWorkflowOverrides(overrides);
     result['llm'] = llm;
   }
 
@@ -381,7 +381,6 @@ function snakeToCamelDeep(obj: Record<string, unknown>): Record<string, unknown>
 
 const DEFAULT_PROJECT: Omit<ProjectConfig, 'name'> = {
   description: '',
-  mode: 'auto',
 };
 
 export const DEFAULT_ACQUIRE: AcquireConfig = {
@@ -549,6 +548,13 @@ const DEFAULT_WEB_SEARCH: WebSearchConfig = {
   backend: 'tavily',
 };
 
+const DEFAULT_APPEARANCE: AppearanceConfig = {
+  colorScheme: 'system',
+  accentColor: '#3B82F6',
+  fontSize: 'base',
+  animationEnabled: true,
+};
+
 /**
  * Layer 0 硬编码默认值——完整的 AbyssalConfig（除 project.name 和 workspace.baseDir 外）。
  */
@@ -576,6 +582,7 @@ export const DEFAULT_CONFIG: Omit<AbyssalConfig, 'project' | 'workspace'> & {
   personalization: DEFAULT_PERSONALIZATION,
   ai: { proactiveSuggestions: false },
   webSearch: DEFAULT_WEB_SEARCH,
+  appearance: DEFAULT_APPEARANCE,
 };
 
 // ═══ §1.6 配置加载的完整流程 ═══
@@ -850,13 +857,6 @@ function validateConfig(config: AbyssalConfig): void {
     throw new ConfigError({
       message: `rag.rerankerBackend must be one of: ${validRerankerBackends.join(', ')}`,
       context: { fieldPath: 'rag.rerankerBackend', actual: config.rag.rerankerBackend },
-    });
-  }
-  const validModes = ['anchored', 'unanchored', 'auto'];
-  if (!validModes.includes(config.project.mode)) {
-    throw new ConfigError({
-      message: `project.mode must be one of: ${validModes.join(', ')}`,
-      context: { fieldPath: 'project.mode', actual: config.project.mode },
     });
   }
 }

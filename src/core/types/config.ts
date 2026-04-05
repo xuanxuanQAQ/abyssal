@@ -1,8 +1,5 @@
 // ═══ 字面量联合 + const 数组 ═══
 
-export const PROJECT_MODES = ['anchored', 'unanchored', 'auto'] as const;
-export type ProjectMode = (typeof PROJECT_MODES)[number];
-
 export const SEED_TYPES = ['axiom', 'milestone', 'exploratory'] as const;
 export type SeedType = (typeof SEED_TYPES)[number];
 
@@ -11,7 +8,6 @@ export type SeedType = (typeof SEED_TYPES)[number];
 export interface ProjectConfig {
   name: string;
   description: string; // 默认 ""
-  mode: ProjectMode; // 默认 "auto"
 }
 
 export interface AcquireConfig {
@@ -217,6 +213,20 @@ export interface AiConfig {
   proactiveSuggestions: boolean;
 }
 
+export type ColorScheme = 'light' | 'dark' | 'system';
+export type FontSize = 'sm' | 'base' | 'lg';
+
+export interface AppearanceConfig {
+  /** 颜色方案：light / dark / system */
+  colorScheme: ColorScheme;
+  /** 强调色 (hex) */
+  accentColor: string;
+  /** 字号档位 */
+  fontSize: FontSize;
+  /** 是否启用 UI 动画 */
+  animationEnabled: boolean;
+}
+
 // ═══ AbyssalConfig 顶层（合并后的运行时配置） ═══
 
 export interface AbyssalConfig {
@@ -240,6 +250,7 @@ export interface AbyssalConfig {
   personalization: PersonalizationConfig;
   ai: AiConfig;
   webSearch: WebSearchConfig;
+  appearance: AppearanceConfig;
 }
 
 // ═══ 写作配置 ═══

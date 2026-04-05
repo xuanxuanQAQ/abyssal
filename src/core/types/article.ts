@@ -6,8 +6,19 @@ export const ARTICLE_STYLES = [
   'academic_blog',
   'formal_paper',
   'technical_doc',
+  'narrative_review',
+  'policy_brief',
 ] as const;
 export type ArticleStyle = (typeof ARTICLE_STYLES)[number];
+
+/** Chinese display labels for route-level style selector. */
+export const ARTICLE_STYLE_LABELS: Record<ArticleStyle, string> = {
+  formal_paper: '正式学术论文',
+  technical_doc: '技术说明/技术报告',
+  academic_blog: '学术博客',
+  narrative_review: '叙事式综述',
+  policy_brief: '政策简报/决策汇报',
+};
 
 export const ARTICLE_STATUSES = [
   'drafting',

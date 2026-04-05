@@ -28,15 +28,18 @@ const {
   runnerCompletionResults,
   workflowRunnerInstances,
   dbService,
+    deriveFrameworkStateMock,
 } = vi.hoisted(() => {
   const runnerStartCalls: Array<{ type: string; options: Record<string, unknown> }> = [];
   const runnerCompletionResults: Array<Promise<unknown> | unknown> = [];
   const workflowRunnerInstances: any[] = [];
+  const deriveFrameworkStateMock = vi.fn(() => 'working');
   const dbService = {
     getStats: vi.fn(),
     getSuggestedConcepts: vi.fn(),
     walCheckpoint: vi.fn(),
     close: vi.fn(),
+    raw: {},
   };
 
   return {
@@ -64,6 +67,7 @@ const {
     runnerCompletionResults,
     workflowRunnerInstances,
     dbService,
+    deriveFrameworkStateMock,
   };
 });
 
@@ -130,11 +134,15 @@ vi.mock('../electron/lock', () => ({
 }));
 
 vi.mock('../core/config/framework-state', () => ({
-  deriveFrameworkState: vi.fn(() => 'working'),
+  deriveFrameworkState: (...args: unknown[]) => deriveFrameworkStateMock(...args),
 }));
 
 vi.mock('../core/config/config-validator', () => ({
   validateConfig: (...args: unknown[]) => validateConfigMock(...args),
+}));
+
+vi.mock('../core/config/hot-reload/concept-sync', () => ({
+  syncConceptsFromYaml: vi.fn(() => ({ added: [], modified: [], deprecated: [], unchanged: [], renamed: [] })),
 }));
 
 vi.mock('../adapter/llm-client/llm-client', () => ({
@@ -303,7 +311,9 @@ describe('batchRun', () => {
     createAnalyzeWorkflowMock.mockReturnValue(vi.fn());
     createSynthesizeWorkflowMock.mockReturnValue(vi.fn());
     createBibliographyWorkflowMock.mockReturnValue(vi.fn());
-    validateConfigMock.mockReturnValue({ warnings: [], frameworkState: 'working' });
+    validateConfigMock.mockReturnValue({ warnings: [], frameworkState: 'working', concepts: [] });
+    deriveFrameworkStateMock.mockReset();
+    deriveFrameworkStateMock.mockReturnValue('working');
     renderSummaryMock.mockReturnValue('summary-output');
   });
 
@@ -392,6 +402,45 @@ describe('batchRun', () => {
     }));
     expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('Stage discover: partial (3/5)'));
     expect(stdoutWrite).toHaveBeenCalledWith('summary-output\n');
+
+    stderrWrite.mockRestore();
+    stdoutWrite.mockRestore();
+  });
+
+  it('preserves validated concept framework state when the database has not been synced from concepts.yaml yet', async () => {
+    validateConfigMock.mockReturnValue({ warnings: [], frameworkState: 'framework_forming', concepts: [
+      { id: 'c1', nameZh: '测试', nameEn: 'Test', layer: 'core', definition: 'def', searchKeywords: [], maturity: 'working', parentId: null, history: [], deprecated: false, deprecatedAt: null, deprecatedReason: null, createdAt: '' },
+    ] });
+    dbService.getStats.mockReturnValue({ concepts: { total: 0, tentative: 0, working: 0, established: 0 } });
+    deriveFrameworkStateMock.mockReturnValue('zero_concepts');
+    loadFromWorkspaceMock.mockReturnValue(createTestConfig({
+      apiKeys: {
+        anthropicApiKey: 'test-key',
+        openaiApiKey: null,
+        geminiApiKey: null,
+        deepseekApiKey: null,
+        semanticScholarApiKey: null,
+        openalexEmail: null,
+        unpaywallEmail: null,
+        cohereApiKey: null,
+        jinaApiKey: null,
+        siliconflowApiKey: null,
+        webSearchApiKey: null,
+      },
+    }));
+    createLlmClientMock.mockReturnValue({
+      complete: vi.fn(),
+      getCostStats: vi.fn().mockReturnValue(null),
+      resolveModel: vi.fn(),
+    });
+
+    const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await batchRun(makeArgs({ stage: 'analyze' }));
+
+    expect(createAnalyzeWorkflowMock).toHaveBeenCalledTimes(1);
+    expect(createAnalyzeWorkflowMock.mock.calls[0]?.[0]?.frameworkState).toBe('framework_forming');
 
     stderrWrite.mockRestore();
     stdoutWrite.mockRestore();

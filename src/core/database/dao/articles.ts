@@ -18,6 +18,7 @@ import {
   createBodyDocumentFromText,
   createEmptyArticleDocument,
   deleteSectionFromDocument,
+  extractCitedPaperIdsFromDocument,
   extractPlainText,
   insertSectionInDocument,
   parseArticleDocument,
@@ -34,16 +35,6 @@ type SectionMetaRow = ArticleSectionMeta;
 
 function defaultDocumentString(): string {
   return serializeArticleDocument(createEmptyArticleDocument());
-}
-
-function extractCitedPaperIds(text: string): string[] {
-  const ids = new Set<string>();
-  const regex = /\[@([a-zA-Z0-9_-]+)\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    if (match[1]) ids.add(match[1]);
-  }
-  return [...ids];
 }
 
 function getArticleOrThrow(db: Database.Database, articleId: ArticleId): Article {
@@ -552,7 +543,10 @@ export function getSectionDrafts(
   `).all(articleId, outlineEntryId) as Record<string, unknown>[];
 
   return rows.map((row) => {
-    const citedPaperIds = extractCitedPaperIds(String(row['content'] ?? ''));
+    const docJsonStr = row['document_json'] as string | null;
+    const citedPaperIds = docJsonStr
+      ? extractCitedPaperIdsFromDocument(parseArticleDocument(docJsonStr))
+      : extractCitedPaperIdsFromDocument(parseArticleDocument(null));
     return {
       outlineEntryId: row['outline_entry_id'] as OutlineEntryId,
       version: Number(row['version'] ?? 1),

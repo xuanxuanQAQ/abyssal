@@ -21,6 +21,7 @@ import {
   buildYamlExample,
   type TemplateVariables,
   type TemplateId,
+  type ArticleTemplateId,
 } from './template-loader';
 import { loadFile as loadFragment } from './variable-injector';
 import {
@@ -144,7 +145,16 @@ export class PromptAssembler {
     } else if (taskType === 'synthesize') {
       templateId = 'synthesize';
     } else {
-      templateId = 'article-academic_blog'; // TODO: select based on article style config
+      const articleStyleKey = request.articleStyle ?? 'formal_paper';
+      const candidateId = `article-${articleStyleKey}` as ArticleTemplateId;
+      const VALID_ARTICLE_TEMPLATES: Set<string> = new Set<string>([
+        'article-academic_blog',
+        'article-formal_paper',
+        'article-technical_doc',
+        'article-narrative_review',
+        'article-policy_brief',
+      ]);
+      templateId = VALID_ARTICLE_TEMPLATES.has(candidateId) ? candidateId : 'article-formal_paper';
     }
 
     const rawTemplate = loadTemplate(templateId);

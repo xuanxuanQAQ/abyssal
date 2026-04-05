@@ -32,7 +32,10 @@ import { useHotkey } from '../../core/hooks/useHotkey';
 import { useResponsivePanel } from '../../core/hooks/useResponsivePanel';
 
 const resizeHandleVisibleStyle: React.CSSProperties = { visibility: 'visible' };
-const resizeHandleHiddenStyle: React.CSSProperties = { visibility: 'hidden', width: 0 };
+const resizeHandleCollapsedStyle: React.CSSProperties = {
+  visibility: 'visible',
+  opacity: 0.6,
+};
 
 function toPercent(value: number): string {
   return `${Math.max(0, Math.min(100, value))}%`;
@@ -77,15 +80,12 @@ export function MainLayout() {
       // collapsed
       useAppStore.setState({ contextPanelOpen: false, contextPanelSize: 0 });
     } else {
-      // expanded or resized
-      const wasCollapsed = !useAppStore.getState().contextPanelOpen;
-      if (wasCollapsed) {
-        const lastSize = useAppStore.getState().contextPanelLastSize || 28;
-        useAppStore.setState({ contextPanelOpen: true, contextPanelSize: lastSize });
-      } else {
-        setContextPanelLastSize(size.asPercentage);
-        useAppStore.setState({ contextPanelSize: size.asPercentage });
-      }
+      // 当前拖拽得到的新尺寸即新的用户偏好
+      setContextPanelLastSize(size.asPercentage);
+      useAppStore.setState({
+        contextPanelOpen: true,
+        contextPanelSize: size.asPercentage,
+      });
     }
   }, [setContextPanelLastSize]);
 
@@ -161,7 +161,7 @@ export function MainLayout() {
             {/* Separator — 始终渲染，折叠时隐藏样式 */}
             <Separator
               className="panel-resize-handle"
-              style={contextPanelOpen ? resizeHandleVisibleStyle : resizeHandleHiddenStyle}
+              style={contextPanelOpen ? resizeHandleVisibleStyle : resizeHandleCollapsedStyle}
             />
 
             {/* ContextPanel — keep-alive：折叠时保持挂载(display:none)避免重建开销 */}

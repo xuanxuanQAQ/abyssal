@@ -253,3 +253,38 @@ export function getSuggestedConcept(
   if (!row) return null;
   return fromRow<SuggestedConcept>(row);
 }
+
+// ─── getSuggestedConceptByTerm ───
+
+export function getSuggestedConceptByTerm(
+  db: Database.Database,
+  termNormalized: string,
+): SuggestedConcept | null {
+  const row = db
+    .prepare(
+      "SELECT * FROM suggested_concepts WHERE term_normalized = ? AND status = 'pending'",
+    )
+    .get(termNormalized) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return fromRow<SuggestedConcept>(row);
+}
+
+// ─── updateSuggestedConcept ───
+
+export function updateSuggestedConcept(
+  db: Database.Database,
+  id: SuggestionId,
+  updates: Record<string, unknown>,
+): number {
+  const allowed = ['frequency', 'source_paper_ids', 'source_paper_count', 'reason', 'updated_at'];
+  const entries = Object.entries(updates).filter(([k]) => allowed.includes(k));
+  if (entries.length === 0) return 0;
+
+  const setClauses = entries.map(([k]) => `${k} = ?`).join(', ');
+  const values = entries.map(([, v]) => v);
+  values.push(id);
+
+  return db
+    .prepare(`UPDATE suggested_concepts SET ${setClauses} WHERE id = ?`)
+    .run(...values).changes;
+}

@@ -6,6 +6,8 @@ interface CellContextMenuProps {
   cell: HeatmapCell | null;
   position: { x: number; y: number } | null;
   open: boolean;
+  acceptDisabled: boolean;
+  rejectDisabled: boolean;
   onOpenChange: (open: boolean) => void;
   onViewEvidence: () => void;
   onOpenInReader: () => void;
@@ -87,6 +89,8 @@ function CellContextMenu({
   cell,
   position,
   open,
+  acceptDisabled,
+  rejectDisabled,
   onOpenChange,
   onViewEvidence,
   onOpenInReader,
@@ -122,11 +126,6 @@ function CellContextMenu({
 
   if (!open || !cell || !position) return null;
 
-  // Determine disabled states based on cell existence
-  // Accept/reject are disabled when already in that state
-  const isAccepted = false; // Adjudication status is not on HeatmapCell; caller controls via callbacks
-  const isRejected = false;
-
   return (
     <div
       ref={menuRef}
@@ -160,7 +159,7 @@ function CellContextMenu({
           onAccept();
           onOpenChange(false);
         }}
-        disabled={isAccepted}
+        disabled={acceptDisabled}
       />
       <MenuItem
         label={t('analysis.heatmap.cellMenu.rejectMapping')}
@@ -168,7 +167,7 @@ function CellContextMenu({
           onReject();
           onOpenChange(false);
         }}
-        disabled={isRejected}
+        disabled={rejectDisabled}
       />
     </div>
   );

@@ -151,6 +151,20 @@ export class IntentRouter {
       };
     }
 
+    // Citation intents prefer editor insert when cursor is in the editor
+    if (
+      (intent === 'insert-citation-sentence' || intent === 'draft-citation') &&
+      selection?.kind === 'editor'
+    ) {
+      return {
+        type: 'editor-insert-after',
+        editorId: 'main',
+        articleId: selection.articleId,
+        sectionId: selection.sectionId,
+        pos: selection.to,
+      };
+    }
+
     if (intent === 'generate-section') {
       return { type: 'chat-message' }; // resolved later by recipe with actual section info
     }

@@ -84,7 +84,6 @@ export function registerSettingsHandlers(ctx: AppContext): void {
       project: {
         name: c.project.name,
         description: c.project.description,
-        mode: c.project.mode,
       },
       llm: {
         defaultProvider: c.llm.defaultProvider,
@@ -175,6 +174,12 @@ export function registerSettingsHandlers(ctx: AppContext): void {
       },
       ai: {
         proactiveSuggestions: (c as any).ai?.proactiveSuggestions ?? false,
+      },
+      appearance: {
+        colorScheme: (c as any).appearance?.colorScheme ?? 'system',
+        accentColor: (c as any).appearance?.accentColor ?? '#3B82F6',
+        fontSize: (c as any).appearance?.fontSize ?? 'base',
+        animationEnabled: (c as any).appearance?.animationEnabled ?? true,
       },
     };
   });

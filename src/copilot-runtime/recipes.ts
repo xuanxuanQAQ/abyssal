@@ -242,17 +242,46 @@ export const insertCitationSentenceRecipe: OperationRecipe = {
   specificity: 9,
   matches: (op, ctx) =>
     op.intent === 'insert-citation-sentence' && ctx.selection != null,
-  buildPlan: async (op, ctx) => ({
-    recipeId: 'builtin:insert-citation-sentence',
-    target: { type: 'chat-message' },
-    steps: [
-      { kind: 'retrieve', query: ctx.selection?.kind === 'reader'
-        ? (ctx.selection as { selectedText: string }).selectedText
-        : op.prompt, source: 'rag' },
-      { kind: 'llm_generate', mode: 'draft' },
-    ],
-    confirmation: { mode: 'auto', reason: 'Citation draft to chat', requiredFor: 'execution' },
-  }),
+  buildPlan: async (op, ctx) => {
+    const sel = ctx.selection;
+    // When an editor selection is available, target editor insert-after
+    if (sel?.kind === 'editor') {
+      return {
+        recipeId: 'builtin:insert-citation-sentence',
+        target: {
+          type: 'editor-insert-after',
+          editorId: 'main',
+          articleId: sel.articleId,
+          sectionId: sel.sectionId,
+          pos: sel.to,
+        },
+        steps: [
+          { kind: 'retrieve', query: sel.selectedText || op.prompt, source: 'rag' },
+          { kind: 'llm_generate', mode: 'draft' },
+          { kind: 'apply_patch', patchTarget: {
+            type: 'editor-insert-after',
+            editorId: 'main',
+            articleId: sel.articleId,
+            sectionId: sel.sectionId,
+            pos: sel.to,
+          }},
+        ],
+        confirmation: { mode: 'preview', reason: 'Editor citation insert', requiredFor: 'execution' },
+      };
+    }
+    // Fall back to chat for reader selections
+    return {
+      recipeId: 'builtin:insert-citation-sentence',
+      target: { type: 'chat-message' },
+      steps: [
+        { kind: 'retrieve', query: sel?.kind === 'reader'
+          ? (sel as { selectedText: string }).selectedText
+          : op.prompt, source: 'rag' },
+        { kind: 'llm_generate', mode: 'draft' },
+      ],
+      confirmation: { mode: 'auto', reason: 'Citation draft to chat', requiredFor: 'execution' },
+    };
+  },
 };
 
 // ─── Draft Citation Recipe ───
@@ -263,15 +292,43 @@ export const draftCitationRecipe: OperationRecipe = {
   priority: 8,
   specificity: 7,
   matches: (op) => op.intent === 'draft-citation',
-  buildPlan: async (op) => ({
-    recipeId: 'builtin:draft-citation',
-    target: { type: 'chat-message' },
-    steps: [
-      { kind: 'retrieve', query: op.prompt, source: 'rag' },
-      { kind: 'llm_generate', mode: 'chat' },
-    ],
-    confirmation: { mode: 'auto', reason: 'Citation to chat', requiredFor: 'execution' },
-  }),
+  buildPlan: async (op, ctx) => {
+    const sel = ctx.selection;
+    // When an editor selection is available, target editor insert-after
+    if (sel?.kind === 'editor') {
+      return {
+        recipeId: 'builtin:draft-citation',
+        target: {
+          type: 'editor-insert-after',
+          editorId: 'main',
+          articleId: sel.articleId,
+          sectionId: sel.sectionId,
+          pos: sel.to,
+        },
+        steps: [
+          { kind: 'retrieve', query: op.prompt, source: 'rag' },
+          { kind: 'llm_generate', mode: 'draft' },
+          { kind: 'apply_patch', patchTarget: {
+            type: 'editor-insert-after',
+            editorId: 'main',
+            articleId: sel.articleId,
+            sectionId: sel.sectionId,
+            pos: sel.to,
+          }},
+        ],
+        confirmation: { mode: 'preview', reason: 'Editor citation draft', requiredFor: 'execution' },
+      };
+    }
+    return {
+      recipeId: 'builtin:draft-citation',
+      target: { type: 'chat-message' },
+      steps: [
+        { kind: 'retrieve', query: op.prompt, source: 'rag' },
+        { kind: 'llm_generate', mode: 'chat' },
+      ],
+      confirmation: { mode: 'auto', reason: 'Citation to chat', requiredFor: 'execution' },
+    };
+  },
 };
 
 // ─── Summarize Selection Recipe ───

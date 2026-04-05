@@ -101,7 +101,7 @@ export type RetrievalCoverage = 'sufficient' | 'insufficient' | 'partial';
 export type EvidenceStatus = 'sufficient' | 'insufficient' | 'missing';
 
 /** 项目起点模式 */
-export type ProjectStartMode = 'framework' | 'exploration';
+
 
 /** Advisory 建议类型 */
 export type RecommendationType =

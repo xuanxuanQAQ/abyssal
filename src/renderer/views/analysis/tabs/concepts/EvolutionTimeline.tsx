@@ -3,6 +3,7 @@
  */
 
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { HistoryEntry } from '../../../../../shared-types/models';
 import type { ConceptHistoryEventType } from '../../../../../shared-types/enums';
 
@@ -20,31 +21,88 @@ const EVENT_ICONS: Record<ConceptHistoryEventType, string> = {
   deprecated: '🗑️',
 };
 
-function formatRelativeTime(isoDate: string): string {
+function formatRelativeTime(isoDate: string, t: (key: string, params?: Record<string, unknown>) => string): string {
   const diff = Date.now() - new Date(isoDate).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return '刚刚';
-  if (mins < 60) return `${mins} 分钟前`;
+  if (mins < 1) return t('context.activity.justNow');
+  if (mins < 60) return t('context.activity.minutesAgo', { count: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return t('context.activity.hoursAgo', { count: hours });
   const days = Math.floor(hours / 24);
-  return `${days} 天前`;
+  return t('context.activity.daysAgo', { count: days });
 }
 
-function getSummary(entry: HistoryEntry): string {
-  const d = entry.details as Record<string, string | undefined>;
+function formatList(value: unknown, fallback?: unknown): string {
+  if (Array.isArray(value)) {
+    return value.join(', ');
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    return value;
+  }
+  if (Array.isArray(fallback)) {
+    return fallback.join(', ');
+  }
+  return typeof fallback === 'string' ? fallback : '';
+}
+
+function getSummary(
+  entry: HistoryEntry,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): string {
+  const d = entry.details as Record<string, unknown>;
+  const summary = typeof d.summary === 'string' ? d.summary : '';
+  const reason = typeof d.reason === 'string' ? d.reason : '';
+  const from = typeof d.from === 'string' ? d.from : '';
+  const to = typeof d.to === 'string' ? d.to : '';
   switch (entry.type) {
-    case 'created': return '创建';
-    case 'definition_refined': return `定义修改：'${(d.old ?? '').slice(0, 20)}...' → '${(d.new ?? '').slice(0, 20)}...'`;
-    case 'keywords_added': return `新增关键词：${d.keywords ?? ''}`;
-    case 'keywords_removed': return `移除关键词：${d.keywords ?? ''}`;
-    case 'maturity_upgraded': return `成熟度提升：${d.old ?? ''} → ${d.new ?? ''}`;
-    case 'maturity_downgraded': return `成熟度降级：${d.old ?? ''} → ${d.new ?? ''}`;
-    case 'merged_from': return `合并自概念 '${d.source_concept_name ?? ''}'`;
-    case 'split_into': return `拆分为 '${d.child1 ?? ''}' 和 '${d.child2 ?? ''}'`;
-    case 'parent_changed': return `层级调整：父概念从 '${d.old_parent ?? ''}' 变为 '${d.new_parent ?? ''}'`;
-    case 'deprecated': return '已废弃';
-    default: return entry.type;
+    case 'created':
+      return t('analysis.concepts.history.events.created');
+    case 'definition_refined':
+      return t('analysis.concepts.history.events.definitionRefined', {
+        summary: summary || t('analysis.concepts.history.events.noDetails'),
+      });
+    case 'keywords_added':
+      return t('analysis.concepts.history.events.keywordsAdded', {
+        keywords: formatList(d.added, summary) || t('analysis.concepts.history.events.noDetails'),
+      });
+    case 'keywords_removed':
+      return t('analysis.concepts.history.events.keywordsRemoved', {
+        keywords: formatList(d.removed, summary) || t('analysis.concepts.history.events.noDetails'),
+      });
+    case 'maturity_upgraded':
+      return t('analysis.concepts.history.events.maturityUpgraded', {
+        from: from || summary || t('analysis.concepts.history.events.unknownValue'),
+        to: to || t('analysis.concepts.history.events.unknownValue'),
+      });
+    case 'maturity_downgraded':
+      return t('analysis.concepts.history.events.maturityDowngraded', {
+        from: from || summary || t('analysis.concepts.history.events.unknownValue'),
+        to: to || t('analysis.concepts.history.events.unknownValue'),
+      });
+    case 'merged_from':
+      return t('analysis.concepts.history.events.mergedFrom', {
+        source: summary || formatList(d.sourceConceptId) || t('analysis.concepts.history.events.unknownValue'),
+      });
+    case 'split_into':
+      return t('analysis.concepts.history.events.splitInto', {
+        targets: formatList(d.newConceptIds, summary) || t('analysis.concepts.history.events.unknownValue'),
+      });
+    case 'parent_changed':
+      return t('analysis.concepts.history.events.parentChanged', {
+        from: from || t('analysis.concepts.history.events.none'),
+        to: to || t('analysis.concepts.history.events.none'),
+      });
+    case 'layer_changed':
+      return t('analysis.concepts.history.events.layerChanged', {
+        from: from || summary || t('analysis.concepts.history.events.unknownValue'),
+        to: to || t('analysis.concepts.history.events.unknownValue'),
+      });
+    case 'deprecated':
+      return t('analysis.concepts.history.events.deprecated', {
+        reason: reason || t('analysis.concepts.history.events.noReason'),
+      });
+    default:
+      return summary || entry.type;
   }
 }
 
@@ -53,13 +111,14 @@ interface EvolutionTimelineProps {
 }
 
 export function EvolutionTimeline({ history }: EvolutionTimelineProps) {
+  const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const sorted = [...history].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   const visible = showAll ? sorted : sorted.slice(0, 5);
   const hiddenCount = sorted.length - 5;
 
   if (sorted.length === 0) {
-    return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>暂无历史记录</div>;
+    return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('analysis.concepts.history.empty')}</div>;
   }
 
   return (
@@ -68,7 +127,7 @@ export function EvolutionTimeline({ history }: EvolutionTimelineProps) {
       <div style={{ position: 'absolute', left: 7, top: 4, bottom: 4, width: 2, backgroundColor: 'var(--border-subtle)' }} />
 
       {visible.map((entry, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, position: 'relative' }}>
+        <div key={`${entry.timestamp}:${entry.type}:${i}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, position: 'relative' }}>
           {/* Dot */}
           <span style={{ position: 'absolute', left: -17, top: 2, fontSize: 12 }}>
             {EVENT_ICONS[entry.type] ?? '●'}
@@ -76,10 +135,10 @@ export function EvolutionTimeline({ history }: EvolutionTimelineProps) {
 
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.4 }}>
-              {getSummary(entry)}
+              {getSummary(entry, t)}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)' }} title={entry.timestamp}>
-              {formatRelativeTime(entry.timestamp)}
+              {formatRelativeTime(entry.timestamp, t)}
             </div>
           </div>
         </div>
@@ -93,7 +152,7 @@ export function EvolutionTimeline({ history }: EvolutionTimelineProps) {
             fontSize: 12, cursor: 'pointer', padding: 0,
           }}
         >
-          查看更早 {hiddenCount} 条记录
+          {t('analysis.concepts.history.showEarlier', { count: hiddenCount })}
         </button>
       )}
     </div>

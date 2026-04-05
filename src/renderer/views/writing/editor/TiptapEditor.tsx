@@ -8,7 +8,7 @@
  * - Focus / blur / update events are forwarded to useEditorStore.
  */
 
-import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
+import React, { useEffect, useRef, forwardRef, useImperativeHandle, useCallback, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -24,6 +24,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { useEditorStore } from '../../../core/store/useEditorStore';
 // Custom extensions
 import { citationExtension } from './extensions/citationExtension';
+import { createCitationAutocompletePlugin, CitationAutocompletePanel } from './extensions/CitationAutocomplete';
 import { paragraphMarkPlugin } from './extensions/paragraphMarkPlugin';
 import { paragraphIdPlugin } from './extensions/paragraphIdPlugin';
 import { mathExtension } from './extensions/mathExtension';
@@ -41,6 +42,14 @@ export interface TiptapEditorHandle {
   focus(): void;
 }
 
+interface AutocompleteState {
+  active: boolean;
+  query: string;
+  from: number;
+  to: number;
+  coords: { left: number; top: number } | null;
+}
+
 interface TiptapEditorProps {
   content: string; // Markdown content or JSON to load initially
   contentJson?: object | null; // ProseMirror JSON (takes precedence over content)
@@ -50,11 +59,16 @@ interface TiptapEditorProps {
   onEditorReady?: ((editor: Editor) => void) | undefined;
   /** Whether to use the article-wide heading-driven document mode */
   unifiedMode?: boolean;
+  /** Paper IDs associated with current section — prioritized in autocomplete */
+  sectionPaperIds?: string[];
 }
 
 // ── Extension configuration ──
 
-function createExtensions(unifiedMode: boolean = false) {
+function createExtensions(
+  unifiedMode: boolean = false,
+  onAutocompleteStateChange?: (state: AutocompleteState) => void,
+) {
   return [
     StarterKit.configure({
       heading: false,
@@ -81,6 +95,9 @@ function createExtensions(unifiedMode: boolean = false) {
       placeholder: '开始撰写…',
     }),
     citationExtension,
+    ...(onAutocompleteStateChange
+      ? [createCitationAutocompletePlugin(onAutocompleteStateChange)]
+      : []),
     paragraphMarkPlugin,
     paragraphIdPlugin,
     ...mathExtension,
@@ -98,12 +115,31 @@ function createExtensions(unifiedMode: boolean = false) {
 // ── Component ──
 
 const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
-  function TiptapEditorInner({ content, contentJson, onUpdate, onJsonUpdate, onEditorReady, unifiedMode }, ref) {
+  function TiptapEditorInner({ content, contentJson, onUpdate, onJsonUpdate, onEditorReady, unifiedMode, sectionPaperIds }, ref) {
     const setEditorFocused = useEditorStore((s) => s.setEditorFocused);
     const setUnsavedChanges = useEditorStore((s) => s.setUnsavedChanges);
 
     const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const editorRef = useRef<Editor | null>(null);
+
+    // ── Citation autocomplete state ──
+    const [autocompleteState, setAutocompleteState] = useState<AutocompleteState>({
+      active: false,
+      query: '',
+      from: 0,
+      to: 0,
+      coords: null,
+    });
+    const autocompleteStateCallbackRef = useRef(setAutocompleteState);
+    autocompleteStateCallbackRef.current = setAutocompleteState;
+    const stableAutocompleteCallback = useCallback(
+      (state: AutocompleteState) => autocompleteStateCallbackRef.current(state),
+      [],
+    );
+
+    const handleDismissAutocomplete = useCallback(() => {
+      setAutocompleteState({ active: false, query: '', from: 0, to: 0, coords: null });
+    }, []);
 
     const handleUpdate = useCallback(
       ({ editor: ed }: { editor: Editor }) => {
@@ -133,7 +169,7 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     const initialContent = contentJson ?? content;
 
     const editor = useEditor({
-      extensions: createExtensions(unifiedMode ?? false),
+      extensions: createExtensions(unifiedMode ?? false, stableAutocompleteCallback),
       content: initialContent,
       editable: true,
       onUpdate: handleUpdate,
@@ -252,6 +288,14 @@ const TiptapEditorInner = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         }}
       >
         <EditorContent editor={editor} />
+        {editor && autocompleteState.active && (
+          <CitationAutocompletePanel
+            editor={editor}
+            state={autocompleteState}
+            onDismiss={handleDismissAutocomplete}
+            sectionPaperIds={sectionPaperIds}
+          />
+        )}
       </div>
     );
   },

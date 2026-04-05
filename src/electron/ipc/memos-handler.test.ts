@@ -39,7 +39,7 @@ describe('registerMemosHandlers', () => {
       updatedAt: '2026-04-04T00:00:00.000Z',
     };
     const getMemo = vi.fn(async () => memo);
-    const createNote = vi.fn(async () => undefined);
+    const createNote = vi.fn(async (note: any, _linkedChunks?: any, _links?: any) => undefined);
     const linkMemoToNote = vi.fn(async () => undefined);
     const enqueueDbChange = vi.fn();
 
@@ -62,7 +62,7 @@ describe('registerMemosHandlers', () => {
 
     expect(getMemo).toHaveBeenCalledWith('memo-1');
     expect(createNote).toHaveBeenCalledTimes(1);
-    const createdNote = createNote.mock.calls[0]?.[0];
+    const createdNote = createNote.mock.calls[0]![0];
     expect(createdNote).toMatchObject({
       id: result.noteId,
       title: 'First paragraph  Second paragraph',

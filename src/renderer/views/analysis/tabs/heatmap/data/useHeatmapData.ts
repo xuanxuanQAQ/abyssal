@@ -14,15 +14,46 @@ import { useMemo } from 'react';
 import { useHeatmapData as useRawHeatmapData } from '../../../../../core/ipc/hooks/useMappings';
 import { useConceptFramework } from '../../../../../core/ipc/hooks/useConcepts';
 import { usePaperList } from '../../../../../core/ipc/hooks/usePapers';
-import type { HeatmapMatrix, HeatmapCell, Paper } from '../../../../../../shared-types/models';
+import type {
+  ConceptFramework,
+  HeatmapCell,
+  HeatmapMatrix,
+  Paper,
+} from '../../../../../../shared-types/models';
+import type { Maturity } from '../../../../../../shared-types/enums';
 import { cellKey } from '../../../shared/cellKey';
 
 export type SortBy = 'relevance' | 'year' | 'coverage' | 'author';
 
-interface ConceptGroup {
+const RELEVANCE_ORDER: Record<Paper['relevance'], number> = {
+  seed: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  excluded: 4,
+};
+
+export interface ConceptGroup {
   id: string;
   name: string;
   conceptIds: string[];
+}
+
+export interface ConceptInfo {
+  id: string;
+  name: string;
+  parentId: string | null;
+  level: number;
+  maturity?: Maturity;
+}
+
+export interface ProcessedHeatmapSnapshot {
+  sortedPaperIds: string[];
+  paperLabels: string[];
+  conceptGroups: ConceptGroup[];
+  orderedConceptIds: string[];
+  concepts: ConceptInfo[];
+  cellLookup: Map<string, HeatmapCell>;
 }
 
 interface ProcessedHeatmapData {
@@ -31,6 +62,7 @@ interface ProcessedHeatmapData {
   paperLabels: string[];
   conceptGroups: ConceptGroup[];
   orderedConceptIds: string[];
+  concepts: ConceptInfo[];
   cellLookup: Map<string, HeatmapCell>;
   isLoading: boolean;
 }
@@ -54,6 +86,270 @@ function makePaperLabel(
   return year != null ? `${surname} ${year}` : surname;
 }
 
+function buildConceptGroups(
+  framework: ConceptFramework | null | undefined,
+  matrixConceptIds: string[],
+): {
+  conceptGroups: ConceptGroup[];
+  conceptInfoById: Map<string, ConceptInfo>;
+} {
+  const conceptInfoById = new Map<string, ConceptInfo>();
+
+  if (!framework) {
+    const fallbackGroups = matrixConceptIds.map((conceptId) => {
+      conceptInfoById.set(conceptId, {
+        id: conceptId,
+        name: conceptId,
+        parentId: null,
+        level: 0,
+      });
+      return {
+        id: conceptId,
+        name: conceptId,
+        conceptIds: [conceptId],
+      };
+    });
+    return { conceptGroups: fallbackGroups, conceptInfoById };
+  }
+
+  const conceptById = new Map(framework.concepts.map((concept) => [concept.id, concept]));
+  const childrenByParent = new Map<string, string[]>();
+
+  for (const concept of framework.concepts) {
+    conceptInfoById.set(concept.id, {
+      id: concept.id,
+      name: concept.name,
+      parentId: concept.parentId,
+      level: concept.level,
+      maturity: concept.maturity,
+    });
+
+    if (!concept.parentId || !conceptById.has(concept.parentId)) {
+      continue;
+    }
+
+    const siblings = childrenByParent.get(concept.parentId);
+    if (siblings) {
+      siblings.push(concept.id);
+    } else {
+      childrenByParent.set(concept.parentId, [concept.id]);
+    }
+  }
+
+  const seenRoots = new Set<string>();
+  const rootIds: string[] = [];
+
+  for (const rootId of framework.rootIds) {
+    if (conceptById.has(rootId) && !seenRoots.has(rootId)) {
+      seenRoots.add(rootId);
+      rootIds.push(rootId);
+    }
+  }
+
+  for (const concept of framework.concepts) {
+    if ((concept.parentId === null || !conceptById.has(concept.parentId)) && !seenRoots.has(concept.id)) {
+      seenRoots.add(concept.id);
+      rootIds.push(concept.id);
+    }
+  }
+
+  const conceptGroups: ConceptGroup[] = [];
+  const seenConceptIds = new Set<string>();
+
+  const appendSubtree = (conceptId: string, acc: string[]) => {
+    acc.push(conceptId);
+    seenConceptIds.add(conceptId);
+
+    for (const childId of childrenByParent.get(conceptId) ?? []) {
+      appendSubtree(childId, acc);
+    }
+  };
+
+  for (const rootId of rootIds) {
+    const root = conceptById.get(rootId);
+    if (!root) {
+      continue;
+    }
+
+    const conceptIds: string[] = [];
+    appendSubtree(rootId, conceptIds);
+    conceptGroups.push({
+      id: root.id,
+      name: root.name,
+      conceptIds,
+    });
+  }
+
+  for (const conceptId of matrixConceptIds) {
+    if (seenConceptIds.has(conceptId)) {
+      continue;
+    }
+
+    if (!conceptInfoById.has(conceptId)) {
+      conceptInfoById.set(conceptId, {
+        id: conceptId,
+        name: conceptId,
+        parentId: null,
+        level: 0,
+      });
+    }
+
+    conceptGroups.push({
+      id: conceptId,
+      name: conceptInfoById.get(conceptId)?.name ?? conceptId,
+      conceptIds: [conceptId],
+    });
+  }
+
+  return { conceptGroups, conceptInfoById };
+}
+
+export function buildProcessedHeatmapSnapshot(args: {
+  matrix: HeatmapMatrix | null;
+  framework: ConceptFramework | null | undefined;
+  papers: Paper[] | null | undefined;
+  sortBy: SortBy;
+  collapsedGroups: Set<string>;
+}): ProcessedHeatmapSnapshot {
+  const { matrix, framework, papers, sortBy, collapsedGroups } = args;
+  const paperMap = new Map<string, Paper>();
+  const allPaperIds = new Set<string>();
+  for (const paper of papers ?? []) {
+    paperMap.set(paper.id, paper);
+    allPaperIds.add(paper.id);
+  }
+
+  for (const paperId of matrix?.paperIds ?? []) {
+    allPaperIds.add(paperId);
+  }
+
+  const originalPaperOrder = new Map<string, number>();
+  for (const [index, paper] of (papers ?? []).entries()) {
+    originalPaperOrder.set(paper.id, index);
+  }
+  for (const [index, paperId] of (matrix?.paperIds ?? []).entries()) {
+    if (!originalPaperOrder.has(paperId)) {
+      originalPaperOrder.set(paperId, (papers?.length ?? 0) + index);
+    }
+  }
+
+  const sortedPaperIds = [...allPaperIds];
+  if (sortBy === 'year') {
+    sortedPaperIds.sort((a, b) => {
+      const pa = paperMap.get(a);
+      const pb = paperMap.get(b);
+      return (pa?.year ?? 0) - (pb?.year ?? 0)
+        || ((originalPaperOrder.get(a) ?? 0) - (originalPaperOrder.get(b) ?? 0));
+    });
+  } else if (sortBy === 'author') {
+    sortedPaperIds.sort((a, b) => {
+      const aName = paperMap.get(a)?.authors[0]?.name ?? '';
+      const bName = paperMap.get(b)?.authors[0]?.name ?? '';
+      return aName.localeCompare(bName)
+        || ((originalPaperOrder.get(a) ?? 0) - (originalPaperOrder.get(b) ?? 0));
+    });
+  } else if (sortBy === 'coverage' && matrix) {
+    const cellCountMap = new Map<number, number>();
+    for (const cell of matrix.cells) {
+      cellCountMap.set(
+        cell.paperIndex,
+        (cellCountMap.get(cell.paperIndex) ?? 0) + 1,
+      );
+    }
+
+    const paperIdToOriginalIdx = new Map(matrix.paperIds.map((id, idx) => [id, idx]));
+    sortedPaperIds.sort((a, b) => {
+      const idxA = paperIdToOriginalIdx.get(a) ?? 0;
+      const idxB = paperIdToOriginalIdx.get(b) ?? 0;
+      return (cellCountMap.get(idxB) ?? 0) - (cellCountMap.get(idxA) ?? 0)
+        || ((originalPaperOrder.get(a) ?? 0) - (originalPaperOrder.get(b) ?? 0));
+    });
+  } else {
+    sortedPaperIds.sort((a, b) => {
+      const relevanceA = paperMap.get(a)?.relevance ?? 'low';
+      const relevanceB = paperMap.get(b)?.relevance ?? 'low';
+      return RELEVANCE_ORDER[relevanceA] - RELEVANCE_ORDER[relevanceB]
+        || ((originalPaperOrder.get(a) ?? 0) - (originalPaperOrder.get(b) ?? 0));
+    });
+  }
+
+  const paperLabels = sortedPaperIds.map((paperId) => {
+    const paper = paperMap.get(paperId);
+    return makePaperLabel(paper?.authors, paper?.year, paperId);
+  });
+
+  const {
+    conceptGroups,
+    conceptInfoById,
+  } = buildConceptGroups(framework, matrix?.conceptIds ?? []);
+
+  const orderedConceptIds: string[] = [];
+  for (const group of conceptGroups) {
+    if (collapsedGroups.has(group.id)) {
+      const rootConceptId = group.conceptIds[0];
+      if (rootConceptId) {
+        orderedConceptIds.push(rootConceptId);
+      }
+      continue;
+    }
+    orderedConceptIds.push(...group.conceptIds);
+  }
+
+  const concepts = orderedConceptIds.map((conceptId) => (
+    conceptInfoById.get(conceptId) ?? {
+      id: conceptId,
+      name: conceptId,
+      parentId: null,
+      level: 0,
+    }
+  ));
+
+  const cellLookup = new Map<string, HeatmapCell>();
+  if (matrix) {
+    const paperIdToOriginalIdx = new Map(matrix.paperIds.map((id, idx) => [id, idx]));
+    const conceptIdToOriginalIdx = new Map(matrix.conceptIds.map((id, idx) => [id, idx]));
+    const originalPaperIdxToSortedIdx = new Map<number, number>();
+    const originalConceptIdxToOrderedIdx = new Map<number, number>();
+
+    for (let idx = 0; idx < sortedPaperIds.length; idx++) {
+      const originalIdx = paperIdToOriginalIdx.get(sortedPaperIds[idx]!);
+      if (originalIdx != null) {
+        originalPaperIdxToSortedIdx.set(originalIdx, idx);
+      }
+    }
+
+    for (let idx = 0; idx < orderedConceptIds.length; idx++) {
+      const originalIdx = conceptIdToOriginalIdx.get(orderedConceptIds[idx]!);
+      if (originalIdx != null) {
+        originalConceptIdxToOrderedIdx.set(originalIdx, idx);
+      }
+    }
+
+    for (const cell of matrix.cells) {
+      const newPaperIdx = originalPaperIdxToSortedIdx.get(cell.paperIndex);
+      const newConceptIdx = originalConceptIdxToOrderedIdx.get(cell.conceptIndex);
+      if (newPaperIdx == null || newConceptIdx == null) {
+        continue;
+      }
+
+      cellLookup.set(cellKey(newConceptIdx, newPaperIdx), {
+        ...cell,
+        conceptIndex: newConceptIdx,
+        paperIndex: newPaperIdx,
+      });
+    }
+  }
+
+  return {
+    sortedPaperIds,
+    paperLabels,
+    conceptGroups,
+    orderedConceptIds,
+    concepts,
+    cellLookup,
+  };
+}
+
 export function useProcessedHeatmapData(
   sortBy: SortBy,
   collapsedGroups: Set<string>,
@@ -65,169 +361,22 @@ export function useProcessedHeatmapData(
 
   const isLoading = isMatrixLoading || isFrameworkLoading || isPapersLoading;
 
-  // Build paper index map for sorting
-  const paperMap = useMemo(() => {
-    if (!papers) return new Map<string, Paper>();
-    const map = new Map<string, Paper>();
-    for (const p of papers) {
-      map.set(p.id, p);
-    }
-    return map;
-  }, [papers]);
-
-  // Sort paper IDs
-  const sortedPaperIds = useMemo(() => {
-    if (!matrix) return [];
-
-    const ids = [...matrix.paperIds];
-
-    if (sortBy === 'year') {
-      ids.sort((a, b) => {
-        const pa = paperMap.get(a);
-        const pb = paperMap.get(b);
-        return (pa?.year ?? 0) - (pb?.year ?? 0);
-      });
-    } else if (sortBy === 'author') {
-      ids.sort((a, b) => {
-        const pa = paperMap.get(a);
-        const pb = paperMap.get(b);
-        const aName = pa?.authors[0]?.name ?? '';
-        const bName = pb?.authors[0]?.name ?? '';
-        return aName.localeCompare(bName);
-      });
-    } else if (sortBy === 'coverage') {
-      // Sort by number of mappings (cells) per paper, descending
-      const cellCountMap = new Map<number, number>();
-      if (matrix.cells) {
-        for (const cell of matrix.cells) {
-          cellCountMap.set(
-            cell.paperIndex,
-            (cellCountMap.get(cell.paperIndex) ?? 0) + 1,
-          );
-        }
-      }
-      // Pre-build reverse index to avoid O(n) indexOf inside sort
-      const pidToIdx = new Map(matrix.paperIds.map((id, i) => [id, i]));
-      ids.sort((a, b) => {
-        const idxA = pidToIdx.get(a) ?? 0;
-        const idxB = pidToIdx.get(b) ?? 0;
-        return (cellCountMap.get(idxB) ?? 0) - (cellCountMap.get(idxA) ?? 0);
-      });
-    }
-    // 'relevance' uses the server-provided default order
-
-    return ids;
-  }, [matrix, sortBy, paperMap]);
-
-  // Paper labels
-  const paperLabels = useMemo(() => {
-    return sortedPaperIds.map((id) => {
-      const paper = paperMap.get(id);
-      return makePaperLabel(paper?.authors, paper?.year, id);
-    });
-  }, [sortedPaperIds, paperMap]);
-
-  // Concept groups from framework
-  const conceptGroups = useMemo((): ConceptGroup[] => {
-    if (!framework) return [];
-
-    // Group concepts by their root parent
-    const groups: ConceptGroup[] = [];
-    const rootConcepts = framework.concepts.filter(
-      (c) => c.parentId === null || framework.rootIds.includes(c.id),
-    );
-
-    for (const root of rootConcepts) {
-      const childIds = framework.concepts
-        .filter((c) => c.parentId === root.id)
-        .map((c) => c.id);
-
-      groups.push({
-        id: root.id,
-        name: root.name,
-        conceptIds: [root.id, ...childIds],
-      });
-    }
-
-    return groups;
-  }, [framework]);
-
-  // Ordered concept IDs (respecting collapsed groups)
-  const orderedConceptIds = useMemo(() => {
-    const result: string[] = [];
-    for (const group of conceptGroups) {
-      if (collapsedGroups.has(group.id)) {
-        // Collapsed: skip children, only count the group header
-        continue;
-      }
-      for (const cid of group.conceptIds) {
-        result.push(cid);
-      }
-    }
-    return result;
-  }, [conceptGroups, collapsedGroups]);
-
-  // Build O(1) cell lookup map keyed by "conceptIndex:paperIndex"
-  // Re-index cells based on the new sorted paper order and ordered concept list
-  const cellLookup = useMemo(() => {
-    const lookup = new Map<string, HeatmapCell>();
-    if (!matrix) return lookup;
-
-    // Pre-build O(1) reverse maps from original ID → original index (avoids O(n) indexOf)
-    const paperIdToOriginalIdx = new Map<string, number>();
-    for (let i = 0; i < matrix.paperIds.length; i++) {
-      paperIdToOriginalIdx.set(matrix.paperIds[i]!, i);
-    }
-    const conceptIdToOriginalIdx = new Map<string, number>();
-    for (let i = 0; i < matrix.conceptIds.length; i++) {
-      conceptIdToOriginalIdx.set(matrix.conceptIds[i]!, i);
-    }
-
-    // Build reverse maps: originalPaperIdx → sortedIdx, originalConceptIdx → orderedIdx
-    const paperIdToSortedIdx = new Map<string, number>();
-    for (let i = 0; i < sortedPaperIds.length; i++) {
-      const pid = sortedPaperIds[i]!;
-      const originalIdx = paperIdToOriginalIdx.get(pid);
-      if (originalIdx !== undefined) {
-        paperIdToSortedIdx.set(String(originalIdx), i);
-      }
-    }
-
-    const conceptIdToOrderedIdx = new Map<string, number>();
-    for (let i = 0; i < orderedConceptIds.length; i++) {
-      const cid = orderedConceptIds[i]!;
-      const originalIdx = conceptIdToOriginalIdx.get(cid);
-      if (originalIdx !== undefined) {
-        conceptIdToOrderedIdx.set(String(originalIdx), i);
-      }
-    }
-
-    for (const cell of matrix.cells) {
-      const newPaperIdx = paperIdToSortedIdx.get(String(cell.paperIndex));
-      const newConceptIdx = conceptIdToOrderedIdx.get(
-        String(cell.conceptIndex),
-      );
-
-      if (newPaperIdx != null && newConceptIdx != null) {
-        const key = cellKey(newConceptIdx, newPaperIdx);
-        lookup.set(key, {
-          ...cell,
-          conceptIndex: newConceptIdx,
-          paperIndex: newPaperIdx,
-        });
-      }
-    }
-
-    return lookup;
-  }, [matrix, sortedPaperIds, orderedConceptIds]);
+  const processed = useMemo(() => buildProcessedHeatmapSnapshot({
+    matrix: matrix ?? null,
+    framework,
+    papers,
+    sortBy,
+    collapsedGroups,
+  }), [matrix, framework, papers, sortBy, collapsedGroups]);
 
   return {
     matrix: matrix ?? null,
-    sortedPaperIds,
-    paperLabels,
-    conceptGroups,
-    orderedConceptIds,
-    cellLookup,
+    sortedPaperIds: processed.sortedPaperIds,
+    paperLabels: processed.paperLabels,
+    conceptGroups: processed.conceptGroups,
+    orderedConceptIds: processed.orderedConceptIds,
+    concepts: processed.concepts,
+    cellLookup: processed.cellLookup,
     isLoading,
   };
 }

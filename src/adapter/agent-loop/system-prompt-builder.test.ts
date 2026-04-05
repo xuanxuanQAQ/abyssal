@@ -110,4 +110,20 @@ describe('buildSystemPrompt — structural integrity', () => {
     expect(prompt).toContain('Test Project');
     expect(prompt).not.toContain('## Rules');
   });
+
+  it('uses a minimal greeting mode without project dump', () => {
+    const prompt = buildSystemPrompt(makeMinimalContext(), { bundles: [], interactionMode: 'greeting' });
+    expect(prompt).toContain('Reply briefly in 1-2 sentences');
+    expect(prompt).not.toContain('## Project:');
+    expect(prompt).not.toContain('tools available');
+  });
+
+  it('adds assistant-profile guidance for identity questions', () => {
+    const prompt = buildSystemPrompt(makeMinimalContext(), {
+      bundles: ['project_meta', 'capability_hints'],
+      interactionMode: 'assistant_profile',
+    });
+    expect(prompt).toContain('The user is explicitly asking who you are or what you can do');
+    expect(prompt).toContain('Test Project');
+  });
 });

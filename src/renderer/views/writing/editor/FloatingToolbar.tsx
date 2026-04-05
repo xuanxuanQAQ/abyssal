@@ -3,7 +3,7 @@
  *
  * Appears above the selected text and provides:
  *   - Basic formatting: Bold, Italic, Strikethrough
- *   - AI operations on the selection: Rewrite, Expand, Compress
+ *   - AI operation on the selection: Compress
  *
  * Uses @tiptap/react BubbleMenu which internally manages positioning
  * via the ProseMirror BubbleMenu plugin.
@@ -13,16 +13,16 @@ import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Editor } from '@tiptap/react';
-import { Bold, Italic, Strikethrough, Sparkles } from 'lucide-react';
+import { Bold, Italic, Strikethrough, Sparkles, RefreshCw, Expand } from 'lucide-react';
 import { Z_INDEX } from '../../../styles/zIndex';
 
 // ── Types ──
 
 interface FloatingToolbarProps {
   editor: Editor;
+  onAICompress?: (() => void) | undefined;
   onAIRewrite?: (() => void) | undefined;
   onAIExpand?: (() => void) | undefined;
-  onAICompress?: (() => void) | undefined;
 }
 
 // ── Styles ──
@@ -85,9 +85,9 @@ const separatorStyle: React.CSSProperties = {
 
 export function FloatingToolbar({
   editor,
+  onAICompress,
   onAIRewrite,
   onAIExpand,
-  onAICompress,
 }: FloatingToolbarProps) {
   const { t } = useTranslation();
   const preventFocusLoss = useCallback((e: React.MouseEvent) => {
@@ -136,14 +136,15 @@ export function FloatingToolbar({
         {/* ── Separator ── */}
         <div style={separatorStyle} aria-hidden />
 
-        {/* ── AI operations ── */}
+        {/* ── AI selection operations ── */}
         <button
           type="button"
           title={t('writing.editor.aiRewrite')}
           style={aiButtonStyle}
           onClick={() => onAIRewrite?.()}
+          aria-label={t('writing.editor.aiRewrite')}
         >
-          <Sparkles size={ICON_SIZE} />
+          <RefreshCw size={ICON_SIZE} />
           {t('writing.editor.rewrite')}
         </button>
 
@@ -152,8 +153,9 @@ export function FloatingToolbar({
           title={t('writing.editor.aiExpand')}
           style={aiButtonStyle}
           onClick={() => onAIExpand?.()}
+          aria-label={t('writing.editor.aiExpand')}
         >
-          <Sparkles size={ICON_SIZE} />
+          <Expand size={ICON_SIZE} />
           {t('writing.editor.expand')}
         </button>
 

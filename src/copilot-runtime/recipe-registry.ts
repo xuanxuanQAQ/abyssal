@@ -47,7 +47,7 @@ export class RecipeRegistry {
       return {
         selected: null,
         candidates: [],
-        resolution: 'deferred_to_user',
+        resolution: 'no_match',
       };
     }
 

@@ -250,7 +250,7 @@ describe('EventBus', () => {
         await bus.emit(makeEvent('user:navigate'));
       }
       const events: AppEvent[] = [];
-      bus.on('user:navigate', (e) => events.push(e));
+      bus.on('user:navigate', (e) => { events.push(e); });
       await bus.resume();
       // Should have at most MAX_PAUSE_QUEUE (500) events
       expect(events.length).toBeLessThanOrEqual(500);

@@ -14,6 +14,7 @@ import {
   DEFAULT_RAG,
   DEFAULT_ACQUIRE,
 } from '../config/config-loader';
+import { normalizeWorkflowOverrides } from '../config/workflow-override-keys';
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   apiKeys: DEFAULT_API_KEYS,
@@ -106,10 +107,10 @@ export function loadGlobalConfig(appDataDir: string): GlobalConfig {
     llm: {
       ...DEFAULT_LLM,
       ...((raw['llm'] ?? {}) as Record<string, unknown>),
-      workflowOverrides: {
+      workflowOverrides: normalizeWorkflowOverrides({
         ...DEFAULT_LLM.workflowOverrides,
         ...(((raw['llm'] as Record<string, unknown>)?.['workflowOverrides'] ?? {}) as Record<string, unknown>),
-      },
+      }),
     } as LlmConfig,
     rag: {
       ...DEFAULT_RAG,
@@ -140,7 +141,16 @@ export function saveGlobalConfig(
 
   const merged: GlobalConfig = {
     apiKeys: updates.apiKeys ? { ...current.apiKeys, ...updates.apiKeys } : current.apiKeys,
-    llm: updates.llm ? { ...current.llm, ...updates.llm } : current.llm,
+    llm: updates.llm
+      ? {
+        ...current.llm,
+        ...updates.llm,
+        workflowOverrides: normalizeWorkflowOverrides({
+          ...current.llm.workflowOverrides,
+          ...(updates.llm.workflowOverrides ?? {}),
+        }),
+      }
+      : current.llm,
     rag: updates.rag ? { ...current.rag, ...updates.rag } : current.rag,
     acquire: updates.acquire ? { ...current.acquire, ...updates.acquire } : current.acquire,
     ...(updates.webSearch || current.webSearch ? {

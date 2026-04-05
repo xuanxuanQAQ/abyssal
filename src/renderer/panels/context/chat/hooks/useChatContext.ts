@@ -7,6 +7,7 @@
 
 import { useCallback } from 'react';
 import { useAppStore } from '../../../../core/store';
+import { useEditorStore } from '../../../../core/store/useEditorStore';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
 import { useEffectiveSource } from '../../engine/useEffectiveSource';
 import { contextSourceKey } from '../../engine/contextSourceKey';
@@ -18,11 +19,21 @@ export function useChatContext(): () => ChatContext {
   return useCallback((): ChatContext => {
     const appState = useAppStore.getState();
     const readerState = useReaderStore.getState();
+    const editorState = useEditorStore.getState();
 
     const context: ChatContext = {
       activeView: appState.activeView,
       contextKey: contextSourceKey(source),
     };
+
+    if (appState.activeView === 'writing') {
+      if (appState.selectedArticleId) {
+        context.selectedArticleId = appState.selectedArticleId;
+      }
+      if (appState.selectedDraftId) {
+        context.selectedDraftId = appState.selectedDraftId;
+      }
+    }
 
     // 注入阅读器中选取的引用文本
     if (readerState.quotedSelection) {
@@ -66,6 +77,10 @@ export function useChatContext(): () => ChatContext {
         context.selectedConceptId = source.conceptId;
         break;
       case 'section':
+        context.selectedArticleId = source.articleId;
+        if (source.draftId) {
+          context.selectedDraftId = source.draftId;
+        }
         context.selectedSectionId = source.sectionId;
         break;
       case 'graphNode':
@@ -87,6 +102,24 @@ export function useChatContext(): () => ChatContext {
         break;
       case 'empty':
         break;
+    }
+
+    if (
+      appState.activeView === 'writing' &&
+      editorState.editorSelection &&
+      editorState.editorSelection.articleId === (context.selectedArticleId ?? editorState.editorSelection.articleId) &&
+      editorState.editorSelection.sectionId === (context.selectedSectionId ?? editorState.editorSelection.sectionId)
+    ) {
+      context.selectedArticleId = editorState.editorSelection.articleId;
+      if (editorState.editorSelection.draftId) {
+        context.selectedDraftId = editorState.editorSelection.draftId;
+      }
+      if (editorState.editorSelection.sectionId) {
+        context.selectedSectionId = editorState.editorSelection.sectionId;
+      }
+      context.editorSelectionText = editorState.editorSelection.selectedText;
+      context.editorSelectionFrom = editorState.editorSelection.from;
+      context.editorSelectionTo = editorState.editorSelection.to;
     }
 
     return context;

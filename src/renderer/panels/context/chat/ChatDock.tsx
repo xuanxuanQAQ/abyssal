@@ -17,11 +17,17 @@ import { useChatSession, persistMessage } from './hooks/useChatSession';
 import { useChatContext } from './hooks/useChatContext';
 import { useEffectiveSource } from '../engine/useEffectiveSource';
 import { ChunkAccumulator } from './streaming/ChunkAccumulator';
+import { buildChatCopilotEnvelope, mapCopilotToolStatus } from './copilotBridge';
 import { useChatStore, type ChatDockMode } from '../../../core/store/useChatStore';
 import { useReaderStore } from '../../../core/store/useReaderStore';
 import { getAPI } from '../../../core/ipc/bridge';
 import type { ChatMessage } from '../../../../shared-types/models';
-import type { AgentStreamEvent } from '../../../../shared-types/ipc';
+import type { CopilotOperationEvent, CopilotSessionState } from '../../../../copilot-runtime/types';
+
+interface OperationBinding {
+  messageId: string;
+  sessionKey: string;
+}
 
 function getToolDisplayLabel(
   toolName: string,
@@ -75,62 +81,234 @@ export const ChatDock = React.memo(function ChatDock() {
       : t('context.chat.status.generating');
   const toolStatusMode = activeToolCalls.length > 0 ? 'tool' : 'generating';
 
-  const accumulatorRef = useRef<ChunkAccumulator>(
-    new ChunkAccumulator({
-      onFinalize: (_messageId, content, finalizedSessionKey) => {
-        const session = useChatStore.getState().sessions[finalizedSessionKey];
-        const msg = session?.messages.find((m) => m.id === _messageId);
-        if (msg) {
-          persistMessage({ ...msg, content, status: 'completed' }, finalizedSessionKey);
-        }
-      },
-    })
-  );
+  const accumulatorsRef = useRef<Map<string, ChunkAccumulator>>(new Map());
+  const operationBindingsRef = useRef<Map<string, OperationBinding>>(new Map());
+  const pendingCopilotEventsRef = useRef<Map<string, CopilotOperationEvent[]>>(new Map());
+  const sessionOperationRef = useRef<Map<string, string>>(new Map());
 
-  // Register agentStream listener ONCE.
+  const getOrCreateAccumulator = useCallback((operationId: string, messageId: string, targetSessionKey: string) => {
+    let accumulator = accumulatorsRef.current.get(operationId);
+    if (!accumulator) {
+      accumulator = new ChunkAccumulator({
+        onFinalize: (_messageId, content, finalizedSessionKey) => {
+          const session = useChatStore.getState().sessions[finalizedSessionKey];
+          const msg = session?.messages.find((m) => m.id === _messageId);
+          if (msg) {
+            persistMessage({ ...msg, content, status: 'completed' }, finalizedSessionKey);
+          }
+        },
+      });
+      accumulatorsRef.current.set(operationId, accumulator);
+    }
+
+    accumulator.bind(messageId, targetSessionKey);
+    return accumulator;
+  }, []);
+
+  const clearOperationState = useCallback((operationId: string, clearSessionBinding = true) => {
+    const binding = operationBindingsRef.current.get(operationId);
+    operationBindingsRef.current.delete(operationId);
+    pendingCopilotEventsRef.current.delete(operationId);
+
+    const accumulator = accumulatorsRef.current.get(operationId);
+    if (accumulator) {
+      accumulator.dispose();
+      accumulatorsRef.current.delete(operationId);
+    }
+
+    if (clearSessionBinding && binding) {
+      const activeOperationId = sessionOperationRef.current.get(binding.sessionKey);
+      if (activeOperationId === operationId) {
+        sessionOperationRef.current.delete(binding.sessionKey);
+      }
+    }
+  }, []);
+
+  const finalizeOperation = useCallback((operationId: string, clearSessionBinding = true) => {
+    const accumulator = accumulatorsRef.current.get(operationId);
+    if (accumulator) {
+      accumulator.finalize();
+    }
+    clearOperationState(operationId, clearSessionBinding);
+  }, [clearOperationState]);
+
+  const finalizeSessionOperations = useCallback((targetSessionKey: string, clearSessionBinding = true) => {
+    for (const [operationId, binding] of operationBindingsRef.current.entries()) {
+      if (binding.sessionKey === targetSessionKey) {
+        finalizeOperation(operationId, clearSessionBinding);
+      }
+    }
+  }, [finalizeOperation]);
+
+  const syncPendingClarification = useCallback(async (targetSessionKey: string) => {
+    const session = await getAPI().copilot.getSession(targetSessionKey) as CopilotSessionState | null;
+    const clarification = session?.pendingClarification;
+    if (!clarification) return;
+
+    sessionOperationRef.current.set(targetSessionKey, clarification.operationId);
+    finalizeSessionOperations(targetSessionKey, false);
+
+    useChatStore.getState().ensureSession(targetSessionKey);
+    const cachedSession = useChatStore.getState().sessions[targetSessionKey];
+    const lastAssistantMessage = [...(cachedSession?.messages ?? [])]
+      .reverse()
+      .find((message) => message.role === 'assistant');
+
+    const clarificationState = {
+      operationId: clarification.operationId,
+      continuationToken: clarification.continuationToken,
+      question: clarification.question,
+      options: clarification.options.map((option) => ({ id: option.id, label: option.label })),
+    };
+
+    if (!lastAssistantMessage) {
+      useChatStore.getState().addMessage({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: clarification.question,
+        timestamp: Date.now(),
+        status: 'completed',
+        clarification: clarificationState,
+      });
+      useChatStore.getState().setChatStreaming(false);
+      return;
+    }
+
+    useChatStore.getState().updateMessageInSession(targetSessionKey, lastAssistantMessage.id, (message) => {
+      if (!message.content) {
+        message.content = clarification.question;
+      }
+      message.status = 'completed';
+      delete message.streamBuffer;
+      message.clarification = clarificationState;
+    });
+    useChatStore.getState().setChatStreaming(false);
+  }, [finalizeSessionOperations]);
+
+  const handleCopilotEvent = useCallback((event: CopilotOperationEvent) => {
+    if (event.type === 'operation.started') {
+      sessionOperationRef.current.set(event.sessionId, event.operationId);
+    }
+
+    const binding = operationBindingsRef.current.get(event.operationId);
+    if (!binding) {
+      const buffered = pendingCopilotEventsRef.current.get(event.operationId) ?? [];
+      pendingCopilotEventsRef.current.set(event.operationId, [...buffered, event]);
+      return;
+    }
+
+    const accumulator = getOrCreateAccumulator(event.operationId, binding.messageId, binding.sessionKey);
+
+    switch (event.type) {
+      case 'model.delta':
+        if (event.channel === 'chat') {
+          accumulator.pushChunk(event.text);
+        }
+        break;
+
+      case 'tool.call':
+        accumulator.pushToolCall({
+          name: event.toolName,
+          input: {},
+          ...(event.message ? { output: event.message } : {}),
+          status: mapCopilotToolStatus(event.status),
+        });
+        break;
+
+      case 'operation.completed':
+        finalizeOperation(event.operationId);
+        break;
+
+      case 'operation.failed':
+        accumulator.pushChunk(`\n\n**Error:** ${event.message}`);
+        finalizeOperation(event.operationId);
+        break;
+
+      case 'operation.aborted':
+        finalizeOperation(event.operationId);
+        break;
+
+      case 'operation.clarification_required':
+        finalizeOperation(event.operationId, false);
+        void syncPendingClarification(binding.sessionKey);
+        break;
+
+      default:
+        break;
+    }
+  }, [finalizeOperation, getOrCreateAccumulator, syncPendingClarification]);
+
+  const flushPendingCopilotEvents = useCallback((operationId: string) => {
+    const pending = pendingCopilotEventsRef.current.get(operationId) ?? [];
+    pendingCopilotEventsRef.current.delete(operationId);
+    for (const event of pending) {
+      handleCopilotEvent(event);
+    }
+  }, [handleCopilotEvent]);
+
+  const registerOperationBinding = useCallback((operationId: string, messageId: string, targetSessionKey: string) => {
+    operationBindingsRef.current.set(operationId, { messageId, sessionKey: targetSessionKey });
+    sessionOperationRef.current.set(targetSessionKey, operationId);
+    getOrCreateAccumulator(operationId, messageId, targetSessionKey);
+    flushPendingCopilotEvents(operationId);
+  }, [flushPendingCopilotEvents, getOrCreateAccumulator]);
+
+  const rebindOperation = useCallback((previousOperationId: string, nextOperationId: string) => {
+    if (previousOperationId === nextOperationId) {
+      flushPendingCopilotEvents(nextOperationId);
+      return;
+    }
+
+    const binding = operationBindingsRef.current.get(previousOperationId);
+    if (binding) {
+      operationBindingsRef.current.delete(previousOperationId);
+      operationBindingsRef.current.set(nextOperationId, binding);
+
+      const accumulator = accumulatorsRef.current.get(previousOperationId);
+      if (accumulator) {
+        accumulatorsRef.current.delete(previousOperationId);
+        accumulatorsRef.current.set(nextOperationId, accumulator);
+        accumulator.bind(binding.messageId, binding.sessionKey);
+      }
+
+      if (sessionOperationRef.current.get(binding.sessionKey) === previousOperationId) {
+        sessionOperationRef.current.set(binding.sessionKey, nextOperationId);
+      }
+    }
+
+    pendingCopilotEventsRef.current.delete(previousOperationId);
+    flushPendingCopilotEvents(nextOperationId);
+  }, [flushPendingCopilotEvents]);
+
   useEffect(() => {
     const api = getAPI();
-    const unsub = api.on.agentStream((event: AgentStreamEvent) => {
-      const accumulator = accumulatorRef.current;
-
-      switch (event.type) {
-        case 'text_delta':
-          accumulator.pushChunk(event.delta);
-          break;
-
-        case 'tool_use_start':
-          accumulator.pushToolCall({
-            name: event.toolName,
-            input: event.args,
-            status: 'running',
-          });
-          break;
-
-        case 'tool_use_result':
-          accumulator.pushToolCall({
-            name: event.toolName,
-            input: {},
-            output: event.result,
-            status: 'completed',
-          });
-          break;
-
-        case 'done':
-          accumulator.finalize();
-          break;
-
-        case 'error':
-          accumulator.pushChunk(`\n\n**Error:** ${event.message}`);
-          accumulator.finalize();
-          break;
-      }
+    const unsub = api.on.copilotEvent((event) => {
+      handleCopilotEvent(event as CopilotOperationEvent);
     });
 
     return () => {
       unsub();
-      accumulatorRef.current.dispose();
+      for (const accumulator of accumulatorsRef.current.values()) {
+        accumulator.dispose();
+      }
+      accumulatorsRef.current.clear();
+      operationBindingsRef.current.clear();
+      pendingCopilotEventsRef.current.clear();
+      sessionOperationRef.current.clear();
     };
-  }, []);
+  }, [handleCopilotEvent]);
+
+  useEffect(() => {
+    const api = getAPI();
+    void syncPendingClarification(sessionKey);
+    const unsub = api.on.copilotSessionChanged((event) => {
+      if (event.sessionId !== sessionKey) return;
+      void syncPendingClarification(sessionKey);
+    });
+    return () => {
+      unsub();
+    };
+  }, [sessionKey, syncPendingClarification]);
 
   // 发送去重：防止快速连点产生重复消息
   const sendingRef = useRef(false);
@@ -158,6 +336,7 @@ export const ChatDock = React.memo(function ChatDock() {
       };
 
       try {
+        const envelope = buildChatCopilotEnvelope(sessionKey, text, chatContext);
         const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -169,22 +348,35 @@ export const ChatDock = React.memo(function ChatDock() {
 
         useChatStore.getState().addMessage(assistantMessage);
         useChatStore.getState().setChatStreaming(true);
-        accumulatorRef.current.bind(assistantMessage.id, sessionKey);
+        registerOperationBinding(envelope.operation.id, assistantMessage.id, sessionKey);
 
-        await getAPI().chat.send(text, chatContext, sessionKey);
+        const result = await getAPI().copilot.execute(envelope);
+        rebindOperation(envelope.operation.id, result.operationId);
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {
           msg.status = 'sent';
         });
-      } catch {
+      } catch (err) {
+        const errorMessage = (err as Error).message ?? 'Send failed';
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {
           msg.status = 'error';
         });
+        const assistantOperationId = sessionOperationRef.current.get(sessionKey);
+        if (assistantOperationId) {
+          const binding = operationBindingsRef.current.get(assistantOperationId);
+          const accumulator = binding
+            ? getOrCreateAccumulator(assistantOperationId, binding.messageId, binding.sessionKey)
+            : null;
+          if (accumulator) {
+            accumulator.pushChunk(`**Error:** ${errorMessage}`);
+            finalizeOperation(assistantOperationId);
+          }
+        }
         useChatStore.getState().setChatStreaming(false);
       } finally {
         sendingRef.current = false;
       }
     },
-    [sessionKey, buildChatContext]
+    [buildChatContext, finalizeOperation, getOrCreateAccumulator, registerOperationBinding, rebindOperation, sessionKey]
   );
 
   /** 重试失败的用户消息 */
@@ -199,9 +391,67 @@ export const ChatDock = React.memo(function ChatDock() {
   );
 
   const handleAbort = useCallback(() => {
-    getAPI().chat.abort(sessionKey);
-    accumulatorRef.current.finalize();
-  }, [sessionKey]);
+    const operationId = sessionOperationRef.current.get(sessionKey);
+    if (operationId) {
+      void getAPI().copilot.abort(operationId);
+      finalizeOperation(operationId);
+    }
+  }, [finalizeOperation, sessionKey]);
+
+  const handleClarificationSelect = useCallback(async (messageId: string, optionId: string) => {
+    const session = useChatStore.getState().sessions[sessionKey];
+    const message = session?.messages.find((entry) => entry.id === messageId);
+    const clarification = message?.clarification;
+    if (!clarification || clarification.submitting) return;
+
+    useChatStore.getState().updateMessageInSession(sessionKey, messageId, (entry) => {
+      if (!entry.clarification) return;
+      entry.clarification = {
+        ...entry.clarification,
+        submitting: true,
+        selectedOptionId: optionId,
+      };
+    });
+
+    const assistantMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      status: 'streaming',
+      streamBuffer: '',
+    };
+
+    useChatStore.getState().addMessage(assistantMessage);
+    useChatStore.getState().setChatStreaming(true);
+    registerOperationBinding(clarification.operationId, assistantMessage.id, sessionKey);
+
+    try {
+      const result = await getAPI().copilot.resume({
+        operationId: clarification.operationId,
+        continuationToken: clarification.continuationToken,
+        selectedOptionId: optionId,
+      });
+      rebindOperation(clarification.operationId, result.operationId);
+    } catch (err) {
+      const errorMessage = (err as Error).message ?? 'Resume failed';
+      clearOperationState(clarification.operationId, false);
+      useChatStore.getState().updateMessageInSession(sessionKey, assistantMessage.id, (entry) => {
+        entry.content = `**Error:** ${errorMessage}`;
+        entry.status = 'completed';
+        delete entry.streamBuffer;
+      });
+      persistMessage({ ...assistantMessage, content: `**Error:** ${errorMessage}`, status: 'completed' }, sessionKey);
+      useChatStore.getState().updateMessageInSession(sessionKey, messageId, (entry) => {
+        if (!entry.clarification) return;
+        entry.clarification = {
+          ...entry.clarification,
+          submitting: false,
+          selectedOptionId: undefined,
+        };
+      });
+    }
+  }, [clearOperationState, registerOperationBinding, rebindOperation, sessionKey]);
 
   const toggleFullscreen = useCallback(() => {
     const newMode: ChatDockMode = chatDockMode === 'fullscreen' ? 'expanded' : 'fullscreen';
@@ -348,6 +598,7 @@ export const ChatDock = React.memo(function ChatDock() {
             fullyLoaded={fullyLoaded}
             onLoadMore={loadMoreHistory}
             onRetry={handleRetry}
+            onClarificationSelect={handleClarificationSelect}
             bottomInset={historyBottomInset}
           />
         ) : (

@@ -59,6 +59,7 @@ const INVOKE_CHANNELS = [
   'db:annotations:update', 'db:annotations:delete',
   // db:articles
   'db:articles:listOutlines', 'db:articles:create', 'db:articles:update',
+  'db:articles:delete',
   'db:articles:getDocument', 'db:articles:saveDocument',
   'db:articles:getOutline', 'db:articles:updateOutlineOrder',
   'db:articles:getSection', 'db:articles:updateSection',
@@ -87,10 +88,6 @@ const INVOKE_CHANNELS = [
   'search:paperDetails', 'search:citations', 'search:related', 'search:byAuthor',
   // rag
   'rag:search', 'rag:searchWithReport', 'rag:getWritingContext',
-  // pipeline
-  'pipeline:start', 'pipeline:cancel',
-  // chat
-  'chat:send', 'chat:abort',
   // fs
   'fs:openPDF', 'fs:savePDFAnnotations', 'fs:exportArticle', 'fs:importFiles',
   'fs:createSnapshot', 'fs:restoreSnapshot', 'fs:listSnapshots', 'fs:cleanupSnapshots',
@@ -132,7 +129,6 @@ const EVENT_CHANNELS = [
   'pipeline:streamChunk$event',
   'app:workflowComplete$event',
   'app:sectionQuality$event',
-  'chat:response$event',
   'app:window:maximizedChange$event',
   'advisory:notificationsUpdated$event',
   'workspace:switched$event',
@@ -140,7 +136,6 @@ const EVENT_CHANNELS = [
 
 const PUSH_CHANNELS = [
   'push:workflowProgress',
-  'push:agentStream',
   'push:dbChanged',
   'push:settingsChanged',
   'push:notification',

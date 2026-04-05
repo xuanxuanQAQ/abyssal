@@ -149,16 +149,12 @@ export function createMainWindow(opts: WindowManagerOptions): BrowserWindow {
     }
   });
 
-  // ── Load content (dev or prod) ──
-
-  loadContent(mainWindow, opts.isDev, opts.logger);
-
   // ── CSP headers ──
 
   mainWindow.webContents.session.webRequest.onHeadersReceived(
     (details, callback) => {
       const csp = opts.isDev
-        ? "default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://localhost:5173 http://localhost:5173;"
+        ? "default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://localhost:5173; connect-src 'self' ws://localhost:5173 http://localhost:5173;"
         : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;";
       callback({
         responseHeaders: {
@@ -168,6 +164,10 @@ export function createMainWindow(opts: WindowManagerOptions): BrowserWindow {
       });
     },
   );
+
+  // ── Load content (dev or prod) ──
+
+  loadContent(mainWindow, opts.isDev, opts.logger);
 
   mainWindow.on('closed', () => {
     mainWindow = null;

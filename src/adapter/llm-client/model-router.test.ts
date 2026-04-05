@@ -72,6 +72,21 @@ describe('ModelRouter', () => {
       expect(route.provider).toBe('anthropic');
       expect(route.model).toBe('claude-sonnet-4-20250514');
     });
+
+    it('accepts legacy discovery/analyze override keys', () => {
+      const router = createRouter(
+        makeConfig({
+          workflowOverrides: {
+            discovery: { provider: 'deepseek', model: 'deepseek-chat' },
+            analysis: { provider: 'openai', model: 'gpt-4o' },
+          },
+        } as any),
+        makeApiKeys({ deepseekApiKey: 'sk-ds', openaiApiKey: 'sk-openai' }),
+      );
+
+      expect(router.resolve('discover')).toEqual({ provider: 'deepseek', model: 'deepseek-chat' });
+      expect(router.resolve('analyze.section')).toEqual({ provider: 'openai', model: 'gpt-4o' });
+    });
   });
 
   describe('resolveAndValidate', () => {

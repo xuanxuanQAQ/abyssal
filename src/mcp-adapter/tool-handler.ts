@@ -8,8 +8,21 @@ import type { ProcessService } from '../core/process';
 import type { RagService } from '../core/rag';
 import type { BibliographyService } from '../core/bibliography';
 import type { Logger } from '../core/infra/logger';
+import type { ConfigProvider } from '../core/infra/config-provider';
 import { AbyssalError } from '../core/types/errors';
 import { getToolMap, type ToolDefinition } from './tool-definitions';
+
+// Sections writable via MCP (matches WRITABLE_SECTIONS in config capability)
+const MCP_WRITABLE_SECTIONS = new Set([
+  'llm', 'rag', 'acquire', 'discovery', 'analysis', 'language',
+  'contextBudget', 'webSearch', 'personalization', 'ai', 'appearance',
+]);
+
+const MCP_REDACTED_SECTIONS = new Set(['apiKeys']);
+
+function hasOwnKey<T extends object>(obj: T, key: PropertyKey): key is keyof T {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
 
 // ─── §4.3 服务上下文 ───
 
@@ -20,6 +33,7 @@ export interface ServiceContext {
   processService: ProcessService;
   ragService: RagService;
   bibliographyService: BibliographyService;
+  configProvider?: ConfigProvider;
   logger: Logger;
   readOnly: boolean;
   startTime: number; // Date.now() at server start
@@ -227,6 +241,11 @@ async function dispatchToolCall(
     return healthCheck(ctx);
   }
 
+  // Config Tools — 直接路由，不走 service method pattern
+  if (mod === 'config') {
+    return dispatchConfigTool(functionName, args, ctx);
+  }
+
   // 路由到对应模块的 Service 实例方法
   const service = getService(mod, ctx);
   if (!service) {
@@ -268,4 +287,57 @@ function getService(mod: string, ctx: ServiceContext): unknown {
     case 'bibliography': return ctx.bibliographyService;
     default: return null;
   }
+}
+
+// ─── Config Tool dispatch ───
+
+async function dispatchConfigTool(
+  functionName: string,
+  args: Record<string, unknown>,
+  ctx: ServiceContext,
+): Promise<unknown> {
+  if (!ctx.configProvider) {
+    throw new Error('ConfigProvider not available');
+  }
+
+  if (functionName === 'getSettings') {
+    const config = ctx.configProvider.config;
+    const section = args['section'] as string | undefined;
+    if (section) {
+      if (MCP_REDACTED_SECTIONS.has(section)) {
+        throw new Error(`Section "${section}" contains credentials and cannot be read via MCP`);
+      }
+      if (!hasOwnKey(config, section)) {
+        throw new Error(`Unknown settings section: ${section}`);
+      }
+      const value = config[section];
+      return { section, data: value };
+    }
+    // Return all except redacted
+    const safe: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(config)) {
+      if (!MCP_REDACTED_SECTIONS.has(key)) safe[key] = value;
+    }
+    return safe;
+  }
+
+  if (functionName === 'updateSettings') {
+    const section = args['section'] as string;
+    const patch = args['patch'] as Record<string, unknown>;
+    if (!section || !patch) {
+      throw new Error('Both "section" and "patch" are required');
+    }
+    if (!MCP_WRITABLE_SECTIONS.has(section)) {
+      throw new Error(`Section "${section}" cannot be modified via MCP. Writable: ${[...MCP_WRITABLE_SECTIONS].join(', ')}`);
+    }
+    // Apply patch to current config
+    const current = structuredClone(ctx.configProvider.config);
+    const sectionObj = ((current as any)[section] ?? {}) as Record<string, unknown>;
+    Object.assign(sectionObj, patch);
+    (current as any)[section] = sectionObj;
+    ctx.configProvider.update(current);
+    return { success: true, section, updatedKeys: Object.keys(patch) };
+  }
+
+  throw new Error(`Unknown config function: ${functionName}`);
 }

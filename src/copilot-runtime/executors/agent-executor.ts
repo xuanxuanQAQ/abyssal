@@ -1,8 +1,7 @@
 /**
  * AgentExecutor — interfaces with LLM + tool calling.
  *
- * Wraps the existing SessionOrchestrator/AgentLoop streaming logic
- * into the unified executor interface.
+ * Implements the unified executor interface for tool-use conversation loops.
  */
 
 import type { LlmClient, StreamChunk } from '../../adapter/llm-client/llm-client';
@@ -10,6 +9,8 @@ import type { CapabilityRegistry } from '../../adapter/capabilities';
 import type { ResearchSession } from '../../core/session/research-session';
 import type { EventBus } from '../../core/event-bus';
 import type { ToolCallingGovernor } from '../../adapter/orchestrator/tool-calling-governor';
+import { classifyPromptGate } from '../../adapter/orchestrator/prompt-injection-gating';
+import { routeToolFamilies, buildToolRouteInstruction } from '../../adapter/orchestrator/tool-routing';
 import type {
   CopilotOperation,
   ContextSnapshot,
@@ -50,7 +51,7 @@ export class AgentExecutor {
     emitter: OperationEventEmitter,
     signal?: AbortSignal,
   ): Promise<AgentExecutorResult> {
-    const systemPrompt = await this.deps.buildSystemPrompt(operation);
+    let systemPrompt = await this.deps.buildSystemPrompt(operation);
 
     const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 
@@ -62,12 +63,30 @@ export class AgentExecutor {
     }
 
     // Add the current prompt
-    messages.push({ role: 'user', content: buildPromptWithContext(operation) });
+    const userPrompt = buildPromptWithContext(operation);
+    messages.push({ role: 'user', content: userPrompt });
 
-    // Build tool definitions based on operation constraints
-    const tools = this.deps.capabilities.toToolDefinitions();
+    // Route tool families based on user intent
+    const promptGate = classifyPromptGate({
+      userMessage: operation.prompt,
+      hasRecentSelection: operation.context.selection !== null,
+    });
+    const disableToolUse = promptGate.type === 'greeting' || promptGate.type === 'smalltalk' || promptGate.type === 'assistant-profile';
 
-    const allowToolUse = step.mode !== 'patch'; // patch mode is pure generation
+    const route = routeToolFamilies({ userMessage: operation.prompt, gateType: promptGate.type });
+    const tools = disableToolUse
+      ? []
+      : this.deps.capabilities.toToolDefinitions({
+          allowedFamilies: route.allowedFamilies,
+          userMessage: operation.prompt,
+        });
+
+    // Inject routing instruction when routing is confident
+    if (!disableToolUse && route.confidence >= 0.75) {
+      systemPrompt += `\n\n${buildToolRouteInstruction(route)}`;
+    }
+
+    const allowToolUse = step.mode !== 'patch' && !disableToolUse; // patch mode and social openers are pure generation
 
     // Reset governor for this operation
     this.deps.governor.reset();
@@ -150,6 +169,8 @@ export class AgentExecutor {
 
       // Execute tool calls
       for (const tc of roundToolCalls) {
+        if (signal?.aborted) break;
+
         // Governor check
         const guardResult = this.deps.governor.canCallTool(tc.name);
         if (!guardResult.allowed) {

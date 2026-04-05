@@ -14,7 +14,7 @@ import type {
   RetrievalCoverage,
   EvidenceStatus,
   RecommendationType,
-  ProjectStartMode,
+
   Maturity,
   ConceptChangeType,
   ConceptHistoryEventType,
@@ -517,6 +517,20 @@ export type MessageStatus =
 /** Tool Call 执行状态 */
 export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
+export interface ChatClarificationOption {
+  id: string;
+  label: string;
+}
+
+export interface ChatClarificationState {
+  operationId: string;
+  continuationToken: string;
+  question: string;
+  options: ChatClarificationOption[];
+  submitting?: boolean | undefined;
+  selectedOptionId?: string | undefined;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -525,6 +539,7 @@ export interface ChatMessage {
   status: MessageStatus;
   toolCalls?: ToolCallInfo[] | undefined;
   citations?: Citation[] | undefined;
+  clarification?: ChatClarificationState | undefined;
   /** 流式接收中的临时文本缓冲（仅内存态，不持久化） */
   streamBuffer?: string | undefined;
 }
@@ -772,7 +787,6 @@ export interface CleanupPolicy {
 export interface ProjectSetupConfig {
   // Step 1: 项目基础
   name: string;
-  mode: 'anchored' | 'unanchored' | 'auto';
   workspacePath?: string | undefined;
 
   // Step 2: LLM 配置
@@ -800,8 +814,6 @@ export interface ProjectSetupConfig {
   sourcePreset?: 'china' | 'overseas' | 'custom' | undefined;
   enabledSources?: string[] | undefined;
 
-  /** @deprecated use mode instead */
-  startMode?: ProjectStartMode | undefined;
   initialConcepts?: string[] | undefined;
 }
 
@@ -860,7 +872,7 @@ export interface SuggestedConcept {
   closestExisting: { conceptId: string; conceptName: string; maturity: Maturity } | null;
   contextSnippets: string[];
   suggestedKeywords: string[];
-  status: 'pending' | 'accepted' | 'dismissed';
+  status: 'pending' | 'adopted' | 'dismissed';
 }
 
 // ═══ v2.0 碎片笔记（Memo） ═══
@@ -972,7 +984,6 @@ export interface SettingsData {
   project: {
     name: string;
     description: string;
-    mode: string;
   };
   llm: {
     defaultProvider: string;
@@ -1064,6 +1075,12 @@ export interface SettingsData {
   ai: {
     proactiveSuggestions: boolean;
   };
+  appearance: {
+    colorScheme: 'light' | 'dark' | 'system';
+    accentColor: string;
+    fontSize: 'sm' | 'base' | 'lg';
+    animationEnabled: boolean;
+  };
 }
 
 export interface DbStatsInfo {
@@ -1095,6 +1112,10 @@ export interface ConceptStats {
   conceptId: string;
   mappingCount: number;
   paperCount: number;
+  avgConfidence: number;
+  relationDistribution: Record<string, number>;
+  reviewedCount: number;
+  unreviewedCount: number;
 }
 
 export interface SuggestedConceptsStats {

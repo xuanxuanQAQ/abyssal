@@ -44,7 +44,9 @@ export type SynthesizeTemplateId = 'synthesize';
 export type ArticleTemplateId =
   | 'article-academic_blog'
   | 'article-formal_paper'
-  | 'article-technical_doc';
+  | 'article-technical_doc'
+  | 'article-narrative_review'
+  | 'article-policy_brief';
 
 export type TemplateId = AnalyzeTemplateId | SynthesizeTemplateId | ArticleTemplateId;
 

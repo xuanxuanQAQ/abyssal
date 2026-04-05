@@ -27,6 +27,7 @@ import { useDragNode } from './interactions/useDragNode';
 import { GraphTableView } from './accessibility/GraphTableView';
 import { useGraphKeyboardNav } from './accessibility/useGraphKeyboardNav';
 import type { GraphFilter } from '../../../shared-types/ipc';
+import { useHotkey } from '../../core/hooks/useHotkey';
 
 export function GraphView() {
   const { t } = useTranslation();
@@ -45,7 +46,7 @@ export function GraphView() {
       focusNodeId: focusedGraphNodeId,
     };
   }, [focusedGraphNodeId]);
-  const { data: graphData } = useGraphData();
+  const { data: graphData } = useGraphData(filter);
 
   // Graphology instance (persistent across data updates)
   const graphRef = useRef<Graph | null>(null);
@@ -170,17 +171,9 @@ export function GraphView() {
     return count;
   }, [graph, graphData, layerVisibility, similarityThreshold]);
 
-  // Mod+Shift+T to toggle table view
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'T') {
-        e.preventDefault();
-        setShowTableView((v) => !v);
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  useHotkey('Ctrl+Shift+T', () => {
+    setShowTableView((v) => !v);
+  });
 
   // Relayout handler
   const handleRelayout = useCallback(() => {

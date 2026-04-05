@@ -116,4 +116,90 @@ describe('db-process rpc integration surface', () => {
       vi.useRealTimers();
     }
   });
+
+  it('preserves unknown-method envelopes instead of collapsing them into generic RPC errors', async () => {
+    const proxy = new DbProxy({ timeoutMs: 1000 });
+    const child = new FakeChild();
+    (proxy as any).child = child;
+    (proxy as any).setupMessageHandler();
+
+    const promise = proxy.call('unknownMethod');
+    const request = child.sentMessages[0] as { id: string; method: string };
+
+    expect(request.method).toBe('unknownMethod');
+
+    child.emit('message', {
+      id: request.id,
+      error: {
+        message: 'Unknown DB method: unknownMethod',
+        code: 'UNKNOWN_METHOD',
+        name: 'DatabaseError',
+        context: { method: 'unknownMethod' },
+      },
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      message: 'Unknown DB method: unknownMethod',
+      code: 'UNKNOWN_METHOD',
+      context: { method: 'unknownMethod' },
+    });
+  });
+
+  it('times out stalled lifecycle switch calls and preserves the previous init payload', async () => {
+    vi.useFakeTimers();
+    try {
+      const proxy = new DbProxy({ timeoutMs: 25 });
+      const child = new FakeChild();
+      (proxy as any).child = child;
+      (proxy as any).initPayload = {
+        workspaceRoot: 'C:/ws-old',
+        userDataPath: 'C:/user',
+        skipVecExtension: false,
+      };
+
+      const promise = proxy.switchWorkspace({
+        workspaceRoot: 'C:/ws-new',
+        userDataPath: 'C:/user',
+        skipVecExtension: false,
+      });
+      const captured = promise.then(
+        () => ({ ok: true as const }),
+        (error) => error as Error,
+      );
+
+      await vi.advanceTimersByTimeAsync(26);
+
+      await expect(captured).resolves.toMatchObject({ message: 'Lifecycle switch timeout' });
+      expect((proxy as any).initPayload).toEqual({
+        workspaceRoot: 'C:/ws-old',
+        userDataPath: 'C:/user',
+        skipVecExtension: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks the proxy as disconnected after exceeding the restart threshold', () => {
+    vi.useFakeTimers();
+    try {
+      const onHealthStatus = vi.fn();
+      const proxy = new DbProxy({ timeoutMs: 1000, onHealthStatus });
+      (proxy as any).initPayload = {
+        workspaceRoot: 'C:/ws',
+        userDataPath: 'C:/user',
+        skipVecExtension: false,
+      };
+      (proxy as any).closed = false;
+
+      (proxy as any).handleChildCrash(new Error('boom-1'));
+      (proxy as any).handleChildCrash(new Error('boom-2'));
+      (proxy as any).handleChildCrash(new Error('boom-3'));
+      (proxy as any).handleChildCrash(new Error('boom-4'));
+
+      expect(onHealthStatus).toHaveBeenLastCalledWith('disconnected');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

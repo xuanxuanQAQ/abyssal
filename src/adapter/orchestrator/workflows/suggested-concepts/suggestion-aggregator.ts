@@ -87,7 +87,7 @@ export async function aggregateSuggestions(
           await db.updateSuggestedConcept(existing['id'] as string, {
             source_paper_count: newCount,
             source_paper_ids: JSON.stringify(existingPaperIds),
-            total_frequency: (existing['total_frequency'] as number ?? 0) + suggestion.frequencyInPaper,
+            frequency: (existing['frequency'] as number ?? 0) + suggestion.frequencyInPaper,
             updated_at: new Date().toISOString(),
           });
 

@@ -40,7 +40,6 @@ export function MemoCard({ memo, entityNameCache }: MemoCardProps) {
   const [editText, setEditText] = useState(memo.text);
   const [expanded, setExpanded] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [secondaryActionsOpen, setSecondaryActionsOpen] = useState(false);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [textOverflows, setTextOverflows] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -248,36 +247,13 @@ export function MemoCard({ memo, entityNameCache }: MemoCardProps) {
                   })}
                   disabled={upgradeToNoteMutation.isPending}
                 />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSecondaryActionsOpen((open) => !open);
-                  }}
-                  style={secondaryActionToggleStyle}
-                >
-                  <span>{t('common.moreActions')}</span>
-                  {secondaryActionsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </button>
+                <IconBtn
+                  icon={<Lightbulb size={14} />}
+                  title={t('notes.memo.upgradeToConcept')}
+                  onClick={() => setShowUpgradeDialog(true)}
+                />
               </div>
             )}
-          </div>
-        )}
-
-        {!editing && !confirmingDelete && secondaryActionsOpen && (
-          <div style={secondaryActionsPanelStyle}>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setSecondaryActionsOpen(false);
-                setShowUpgradeDialog(true);
-              }}
-              style={secondaryActionBtnStyle}
-            >
-              <Lightbulb size={13} />
-              <span>{t('notes.memo.upgradeToConcept')}</span>
-            </button>
           </div>
         )}
       </div>
@@ -347,28 +323,6 @@ const expandBtnStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 2,
   marginTop: 4, padding: 0, border: 'none', background: 'none',
   color: 'var(--accent-color)', fontSize: 11, cursor: 'pointer',
-};
-
-const secondaryActionToggleStyle: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 4,
-  height: 28, padding: '0 8px',
-  border: 'none', borderRadius: 'var(--radius-sm, 4px)',
-  backgroundColor: 'transparent', color: 'var(--text-muted)',
-  cursor: 'pointer', fontSize: 11,
-};
-
-const secondaryActionsPanelStyle: React.CSSProperties = {
-  marginTop: 8,
-  paddingTop: 8,
-  borderTop: '1px dashed var(--border-subtle)',
-};
-
-const secondaryActionBtnStyle: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 6,
-  padding: '6px 10px',
-  border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm, 4px)',
-  backgroundColor: 'transparent', color: 'var(--text-secondary)',
-  fontSize: 12, cursor: 'pointer',
 };
 
 function tagStyle(color: string): React.CSSProperties {

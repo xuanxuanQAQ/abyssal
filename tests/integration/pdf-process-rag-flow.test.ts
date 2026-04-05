@@ -75,4 +75,54 @@ describe('pdf -> process -> rag minimal flow', () => {
     expect(assembled.formattedContext).toContain('Layout-aware retrieval improves evidence quality');
     expect(assembled.totalTokenCount).toBeGreaterThan(0);
   });
+
+  it('degrades empty extracted text without producing garbage retrieval context', () => {
+    const { sectionMapV2, boundaries } = extractSections('', []);
+    const chunks = chunkText(sectionMapV2, boundaries, [''], {
+      paperId: 'paper-empty' as never,
+      maxTokensPerChunk: 64,
+      overlapTokens: 16,
+    });
+
+    const assembled = assembleContext([], [], 300, 'focused');
+
+    expect(chunks.every((chunk) => chunk.text.trim().length === 0)).toBe(true);
+    expect(assembled.formattedContext).toBe('');
+    expect(assembled.chunks).toHaveLength(0);
+  });
+
+  it('deduplicates repeated chunks while keeping the resulting context stable', () => {
+    const lines = [
+      '1 Introduction',
+      'Repeated chunk content should appear only once in the assembled context. '.repeat(12),
+    ];
+    const styled = [
+      makeStyled(lines[0]!, 14, true),
+      makeStyled(lines[1]!),
+    ];
+    const fullText = lines.join('\n');
+
+    const { sectionMapV2, boundaries } = extractSections(fullText, styled);
+    const chunks = chunkText(sectionMapV2, boundaries, [fullText], {
+      paperId: 'paper-dedupe' as never,
+      maxTokensPerChunk: 128,
+      overlapTokens: 16,
+    });
+    const duplicate = {
+      ...chunks[0]!,
+      displayTitle: 'Deduped Paper',
+      score: 0.8,
+      rawL2Distance: null,
+      originPath: 'structured' as const,
+    };
+
+    const assembled = assembleContext([
+      duplicate,
+      { ...duplicate, score: 0.7 },
+    ], [], 400, 'focused');
+
+    expect(assembled.chunks).toHaveLength(1);
+    expect(assembled.formattedContext).toContain('Repeated chunk content should appear only once');
+    expect(assembled.formattedContext.match(/--- \[structured\] Deduped Paper \| Section: 1 Introduction \| Pages: 0 ---/g)).toHaveLength(1);
+  });
 });

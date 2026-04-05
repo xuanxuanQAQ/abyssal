@@ -16,10 +16,10 @@ describe('classifyPromptGate — greeting', () => {
     expect(result.usedRule).toBe(true);
   });
 
-  it('greeting bundles: project_meta + capability_hints only', () => {
+  it('greeting bundles: no project meta or capability hints', () => {
     const { bundles } = gate('Hello!');
-    expect(bundles).toContain('project_meta');
-    expect(bundles).toContain('capability_hints');
+    expect(bundles).not.toContain('project_meta');
+    expect(bundles).not.toContain('capability_hints');
     expect(bundles).not.toContain('active_focus');
     expect(bundles).not.toContain('working_memory_light');
     expect(bundles).not.toContain('working_memory_full');
@@ -30,6 +30,21 @@ describe('classifyPromptGate — greeting', () => {
   it('greeting: does NOT inject selection_context even when hasRecentSelection=true', () => {
     const { bundles } = gate('你好', true);
     expect(bundles).not.toContain('selection_context');
+  });
+});
+
+describe('classifyPromptGate — assistant-profile', () => {
+  it('classifies explicit assistant identity query', () => {
+    const result = gate('你是谁？');
+    expect(result.type).toBe('assistant-profile');
+    expect(result.usedRule).toBe(true);
+  });
+
+  it('assistant-profile bundles: project_meta + capability_hints', () => {
+    const { bundles } = gate('你能做什么？');
+    expect(bundles).toContain('project_meta');
+    expect(bundles).toContain('capability_hints');
+    expect(bundles).not.toContain('active_focus');
   });
 });
 

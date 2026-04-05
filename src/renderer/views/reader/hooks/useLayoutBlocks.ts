@@ -22,7 +22,19 @@ export function groupDocumentBlocksByPage(
 ): Map<number, ContentBlockDTO[]> {
   const grouped = new Map<number, ContentBlockDTO[]>();
   for (const page of pages) {
-    grouped.set(page.pageIndex, page.blocks);
+    if (page.blocks.length === 0) {
+      if (!grouped.has(page.pageIndex)) {
+        grouped.set(page.pageIndex, []);
+      }
+      continue;
+    }
+
+    for (const block of page.blocks) {
+      const targetPageIndex = Number.isInteger(block.pageIndex) ? block.pageIndex : page.pageIndex;
+      const existing = grouped.get(targetPageIndex) ?? [];
+      existing.push(block);
+      grouped.set(targetPageIndex, existing);
+    }
   }
   return grouped;
 }
@@ -58,7 +70,10 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
       console.log(`[DLA-Hook] Page ${event.pageIndex} ready: ${event.blocks.length} blocks`);
       setBlockMap((prev) => {
         const next = new Map(prev);
-        next.set(event.pageIndex, event.blocks);
+        const normalized = groupDocumentBlocksByPage([{ pageIndex: event.pageIndex, blocks: event.blocks }]);
+        for (const [pageIndex, blocks] of normalized) {
+          next.set(pageIndex, blocks);
+        }
         return next;
       });
     });

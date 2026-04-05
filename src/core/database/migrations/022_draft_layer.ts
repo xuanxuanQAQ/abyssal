@@ -1,11 +1,183 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import {
-  buildDocumentProjection,
-  contentHash,
-  parseArticleDocument,
-  serializeArticleDocument,
-} from '../../../shared/writing/documentOutline';
+
+// ── Inlined from shared/writing/documentOutline.ts ──
+// Migration files must be self-contained because Vitest forks pool
+// cannot resolve .ts relative imports under Node ESM.
+
+interface JSONContent {
+  type?: string;
+  attrs?: Record<string, unknown>;
+  content?: JSONContent[];
+  text?: string;
+  marks?: unknown[];
+}
+
+interface ProjectedSection {
+  id: string;
+  title: string;
+  level: number;
+  depth: number;
+  parentId: string | null;
+  sortIndex: number;
+  wordCount: number;
+  startIndex: number;
+  bodyStartIndex: number;
+  bodyEndIndex: number;
+  subtreeEndIndex: number;
+  bodyDocument: JSONContent;
+  plainText: string;
+  children: ProjectedSection[];
+}
+
+interface DocumentProjection {
+  document: JSONContent;
+  flatSections: ProjectedSection[];
+  rootSections: ProjectedSection[];
+}
+
+function cloneNode<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function createEmptyArticleDocument(): JSONContent {
+  return { type: 'doc', content: [{ type: 'paragraph' }] };
+}
+
+function parseArticleDocument(documentJson: string | null | undefined): JSONContent {
+  if (!documentJson) return createEmptyArticleDocument();
+  try {
+    const parsed = JSON.parse(documentJson) as JSONContent;
+    if (parsed?.type !== 'doc' || !Array.isArray(parsed.content)) {
+      return createEmptyArticleDocument();
+    }
+    return parsed;
+  } catch {
+    return createEmptyArticleDocument();
+  }
+}
+
+function serializeArticleDocument(document: JSONContent): string {
+  return JSON.stringify(document);
+}
+
+function contentHash(json: JSONContent): string {
+  const str = JSON.stringify(json);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function isOutlineHeading(node: JSONContent | undefined): boolean {
+  if (!node || node.type !== 'heading') return false;
+  const level = Number(node.attrs?.level ?? 0);
+  return level >= 1 && level <= 3;
+}
+
+function clampHeadingLevel(level: number): number {
+  return Math.max(1, Math.min(6, level));
+}
+
+function extractTextContent(node: JSONContent | undefined): string {
+  if (!node) return '';
+  if (typeof node.text === 'string') return node.text;
+  if (!Array.isArray(node.content)) return '';
+  return node.content.map((child) => extractTextContent(child)).join('');
+}
+
+function extractPlainText(nodes: JSONContent[]): string {
+  const parts: string[] = [];
+  for (const node of nodes) {
+    const text = extractTextContent(node).trim();
+    if (text.length > 0) parts.push(text);
+  }
+  return parts.join('\n\n');
+}
+
+function countWords(text: string): number {
+  const normalized = text.trim();
+  if (normalized.length === 0) return 0;
+  return normalized.split(/\s+/).length;
+}
+
+function buildDocumentProjection(inputDocument: JSONContent): DocumentProjection {
+  const document = inputDocument?.type === 'doc' ? inputDocument : createEmptyArticleDocument();
+  const content = Array.isArray(document.content) ? document.content : [];
+  const flatSections: ProjectedSection[] = [];
+  const siblingCounter = new Map<string | null, number>();
+  const stack: ProjectedSection[] = [];
+
+  const headingIndices: number[] = [];
+  for (let index = 0; index < content.length; index += 1) {
+    if (isOutlineHeading(content[index])) headingIndices.push(index);
+  }
+
+  for (let index = 0; index < headingIndices.length; index += 1) {
+    const startIndex = headingIndices[index]!;
+    const headingNode = content[startIndex]!;
+    const nextHeadingIndex = headingIndices[index + 1] ?? content.length;
+    const level = clampHeadingLevel(Number(headingNode.attrs?.level ?? 1));
+    const sectionId = String(headingNode.attrs?.sectionId ?? '');
+    const title = extractTextContent(headingNode).trim() || '未命名节';
+
+    while (stack.length > 0 && stack[stack.length - 1]!.level >= level) {
+      stack.pop();
+    }
+
+    const parent = stack[stack.length - 1] ?? null;
+    const parentId = parent?.id ?? null;
+    const sortIndex = siblingCounter.get(parentId) ?? 0;
+    siblingCounter.set(parentId, sortIndex + 1);
+
+    const bodyNodes = content.slice(startIndex + 1, nextHeadingIndex).map((node) => cloneNode(node));
+    const bodyDocument: JSONContent = {
+      type: 'doc',
+      content: bodyNodes.length > 0 ? bodyNodes : [{ type: 'paragraph' }],
+    };
+    const plainText = extractPlainText(bodyNodes);
+
+    const projected: ProjectedSection = {
+      id: sectionId,
+      title,
+      level,
+      depth: level - 1,
+      parentId,
+      sortIndex,
+      wordCount: countWords(plainText),
+      startIndex,
+      bodyStartIndex: startIndex + 1,
+      bodyEndIndex: nextHeadingIndex - 1,
+      subtreeEndIndex: content.length - 1,
+      bodyDocument,
+      plainText,
+      children: [],
+    };
+
+    if (parent) parent.children.push(projected);
+    flatSections.push(projected);
+    stack.push(projected);
+  }
+
+  for (let index = 0; index < flatSections.length; index += 1) {
+    const current = flatSections[index]!;
+    for (let nextIndex = index + 1; nextIndex < flatSections.length; nextIndex += 1) {
+      const candidate = flatSections[nextIndex]!;
+      if (candidate.level <= current.level) {
+        current.subtreeEndIndex = candidate.startIndex - 1;
+        break;
+      }
+    }
+  }
+
+  return {
+    document,
+    flatSections,
+    rootSections: flatSections.filter((section) => section.parentId === null),
+  };
+}
 
 function columnExists(db: Database.Database, tableName: string, columnName: string): boolean {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;

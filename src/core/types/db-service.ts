@@ -142,6 +142,8 @@ export interface IDbService {
   dismissSuggestedConcept(suggestionId: SuggestionId): number;
   getSuggestedConcepts(status?: SuggestionStatus, limit?: number): SuggestedConcept[];
   getSuggestedConcept(id: SuggestionId): SuggestedConcept | null;
+  getSuggestedConceptByTerm(termNormalized: string): SuggestedConcept | null;
+  updateSuggestedConcept(id: SuggestionId, updates: Record<string, unknown>): number;
   restoreSuggestedConcept(suggestionId: SuggestionId): number;
   getSuggestedConceptsStats(): SuggestedConceptsStatsResult;
 

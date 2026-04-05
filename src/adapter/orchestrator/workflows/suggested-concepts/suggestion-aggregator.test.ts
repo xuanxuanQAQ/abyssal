@@ -30,7 +30,7 @@ describe('aggregateSuggestions', () => {
       getSuggestedConceptByTerm: vi.fn().mockResolvedValue({
         id: 'existing-1',
         source_paper_ids: '["paper0"]',
-        total_frequency: 2,
+        frequency: 2,
       }),
     });
 
@@ -44,7 +44,29 @@ describe('aggregateSuggestions', () => {
     expect(result.updatedSuggestions).toBe(1);
     expect(db.updateSuggestedConcept).toHaveBeenCalledWith('existing-1', expect.objectContaining({
       source_paper_count: 2,
-      total_frequency: 5,
+      frequency: 5,
+    }));
+  });
+
+  it('updates frequency using the persisted suggested_concepts schema field', async () => {
+    const db = makeDb({
+      getSuggestedConceptByTerm: vi.fn().mockResolvedValue({
+        id: 'existing-1',
+        source_paper_ids: '["paper0"]',
+        frequency: 2,
+      }),
+    });
+
+    await aggregateSuggestions(
+      [{ term: 'Embodied Cognition', termNormalized: 'embodied cognition', frequencyInPaper: 3, closestExisting: null, reason: 'test', suggestedDefinition: null, suggestedKeywords: null }],
+      'paper1',
+      db,
+      null,
+    );
+
+    expect(db.updateSuggestedConcept).toHaveBeenCalledWith('existing-1', expect.objectContaining({
+      source_paper_count: 2,
+      frequency: 5,
     }));
   });
 
@@ -53,7 +75,7 @@ describe('aggregateSuggestions', () => {
       getSuggestedConceptByTerm: vi.fn().mockResolvedValue({
         id: 'existing-1',
         source_paper_ids: '["paper1"]',
-        total_frequency: 3,
+        frequency: 3,
       }),
     });
 
@@ -73,7 +95,7 @@ describe('aggregateSuggestions', () => {
       getSuggestedConceptByTerm: vi.fn().mockResolvedValue({
         id: 'existing-1',
         source_paper_ids: '["paper0", "paper1"]',
-        total_frequency: 5,
+        frequency: 5,
       }),
     });
     const notifier: PushNotifier = { pushNotification: vi.fn() };
@@ -99,7 +121,7 @@ describe('aggregateSuggestions', () => {
         // First call: returns null (not found), second call: returns existing (after race)
         insertCallCount++;
         if (insertCallCount <= 1) return null;
-        return { id: 'race-winner', source_paper_ids: '["paper0"]', total_frequency: 1 };
+        return { id: 'race-winner', source_paper_ids: '["paper0"]', frequency: 1 };
       }),
       addSuggestedConcept: vi.fn().mockRejectedValue(new Error('UNIQUE constraint failed')),
     });

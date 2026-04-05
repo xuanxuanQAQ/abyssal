@@ -176,6 +176,12 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
       enabled: false,
       backend: 'tavily',
     },
+    appearance: {
+      colorScheme: 'system',
+      accentColor: '#3B82F6',
+      fontSize: 'base',
+      animationEnabled: true,
+    },
     ...overrides,
   };
 }

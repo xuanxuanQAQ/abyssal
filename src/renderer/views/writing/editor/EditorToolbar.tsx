@@ -5,9 +5,9 @@
  *   1. Text format   — Bold, Italic, Strikethrough, Code
  *   2. Heading        — H2, H3 only (no H1 per section-level design)
  *   3. Block          — BulletList, OrderedList, Blockquote
- *   4. Insert + AI    — Link, Math, Cite, AI Generate / Rewrite / Expand
+ *   4. Insert         — Link, Math, Cite, Image
  *
- * When `aiGenerating === true` the AI buttons collapse into a
+ * When `aiGenerating === true` the toolbar shows a compact
  * "[generating...] [cancel]" indicator.
  */
 
@@ -38,9 +38,6 @@ import {
 interface EditorToolbarProps {
   editor: Editor | null;
   aiGenerating: boolean;
-  onAIGenerate?: (() => void) | undefined;
-  onAIRewrite?: (() => void) | undefined;
-  onAIExpand?: (() => void) | undefined;
   onAICancel?: (() => void) | undefined;
   onInsertCitation?: (() => void) | undefined;
   onInsertMath?: (() => void) | undefined;
@@ -145,9 +142,6 @@ function ToolbarButton({ icon, title, active, disabled, onClick }: TBProps) {
 export function EditorToolbar({
   editor,
   aiGenerating,
-  onAIGenerate,
-  onAIRewrite,
-  onAIExpand,
   onAICancel,
   onInsertCitation,
   onInsertMath,
@@ -177,12 +171,7 @@ export function EditorToolbar({
 
   // ── Format helpers ──
 
-  const toggle = useCallback(
-    (cmd: () => void) => {
-      if (!disabled) cmd();
-    },
-    [disabled],
-  );
+
 
   const isActive = useCallback(
     (name: string, attrs?: Record<string, unknown>): boolean => {
@@ -205,7 +194,7 @@ export function EditorToolbar({
   );
 
   const runToolbarCommand = useCallback(
-    (name: string, command: (ed: Editor) => boolean) => {
+    (command: (ed: Editor) => boolean) => {
       if (!editor) return;
       command(editor);
     },
@@ -223,9 +212,9 @@ export function EditorToolbar({
     if (!editor) return;
     const url = linkValue.trim();
     if (url.length === 0) {
-      runToolbarCommand('unsetLink', (ed) => ed.chain().focus().extendMarkRange('link').unsetLink().run());
+      runToolbarCommand((ed) => ed.chain().focus().extendMarkRange('link').unsetLink().run());
     } else {
-      runToolbarCommand('setLink', (ed) => ed.chain().focus().extendMarkRange('link').setLink({ href: url }).run());
+      runToolbarCommand((ed) => ed.chain().focus().extendMarkRange('link').setLink({ href: url }).run());
     }
     setLinkEditOpen(false);
   }, [editor, linkValue, runToolbarCommand]);
@@ -238,28 +227,28 @@ export function EditorToolbar({
         title={t('writing.editor.bold')}
         active={isActive('bold')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleMark('bold').run())}
-        onClick={() => runToolbarCommand('bold', (ed) => ed.chain().focus().toggleMark('bold').run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleMark('bold').run())}
       />
       <ToolbarButton
         icon={<Italic size={ICON_SIZE} />}
         title={t('writing.editor.italic')}
         active={isActive('italic')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleMark('italic').run())}
-        onClick={() => runToolbarCommand('italic', (ed) => ed.chain().focus().toggleMark('italic').run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleMark('italic').run())}
       />
       <ToolbarButton
         icon={<Strikethrough size={ICON_SIZE} />}
         title={t('writing.editor.strikethrough')}
         active={isActive('strike')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleStrike().run())}
-        onClick={() => runToolbarCommand('strike', (ed) => ed.chain().focus().toggleStrike().run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleStrike().run())}
       />
       <ToolbarButton
         icon={<Code size={ICON_SIZE} />}
         title={t('writing.editor.code')}
         active={isActive('code')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleCode().run())}
-        onClick={() => runToolbarCommand('code', (ed) => ed.chain().focus().toggleCode().run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleCode().run())}
       />
 
       <Separator />
@@ -270,21 +259,21 @@ export function EditorToolbar({
         title={t('writing.editor.heading1', { defaultValue: '一级标题' })}
         active={isActive('heading', { level: 1 })}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleHeading({ level: 1 }).run())}
-        onClick={() => runToolbarCommand('heading1', (ed) => ed.chain().focus().toggleHeading({ level: 1 }).run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleHeading({ level: 1 }).run())}
       />
       <ToolbarButton
         icon={<Heading2 size={ICON_SIZE} />}
         title={t('writing.editor.heading2')}
         active={isActive('heading', { level: 2 })}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleHeading({ level: 2 }).run())}
-        onClick={() => runToolbarCommand('heading2', (ed) => ed.chain().focus().toggleHeading({ level: 2 }).run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleHeading({ level: 2 }).run())}
       />
       <ToolbarButton
         icon={<Heading3 size={ICON_SIZE} />}
         title={t('writing.editor.heading3')}
         active={isActive('heading', { level: 3 })}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleHeading({ level: 3 }).run())}
-        onClick={() => runToolbarCommand('heading3', (ed) => ed.chain().focus().toggleHeading({ level: 3 }).run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleHeading({ level: 3 }).run())}
       />
 
       <Separator />
@@ -295,21 +284,21 @@ export function EditorToolbar({
         title={t('writing.editor.bulletList')}
         active={isActive('bulletList')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleBulletList().run())}
-        onClick={() => runToolbarCommand('bulletList', (ed) => ed.chain().focus().toggleBulletList().run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleBulletList().run())}
       />
       <ToolbarButton
         icon={<ListOrdered size={ICON_SIZE} />}
         title={t('writing.editor.orderedList')}
         active={isActive('orderedList')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleOrderedList().run())}
-        onClick={() => runToolbarCommand('orderedList', (ed) => ed.chain().focus().toggleOrderedList().run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleOrderedList().run())}
       />
       <ToolbarButton
         icon={<Quote size={ICON_SIZE} />}
         title={t('writing.editor.blockquote')}
         active={isActive('blockquote')}
         disabled={disabled || !canRun((ed) => ed.can().chain().focus().toggleBlockquote().run())}
-        onClick={() => runToolbarCommand('blockquote', (ed) => ed.chain().focus().toggleBlockquote().run())}
+        onClick={() => runToolbarCommand((ed) => ed.chain().focus().toggleBlockquote().run())}
       />
 
       <Separator />
@@ -352,6 +341,7 @@ export function EditorToolbar({
             type="text"
             value={linkValue}
             placeholder="https://..."
+            autoFocus
             onChange={(e) => setLinkValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -391,7 +381,6 @@ export function EditorToolbar({
         </>
       )}
 
-      {/* ── AI ── */}
       {aiGenerating ? (
         <>
           <span
@@ -416,40 +405,7 @@ export function EditorToolbar({
             {t('common.cancel')}
           </button>
         </>
-      ) : (
-        <>
-          <button
-            type="button"
-            title={t('writing.editor.aiGenerate')}
-            style={aiLabelStyle}
-            disabled={disabled}
-            onClick={() => onAIGenerate?.()}
-          >
-            <Sparkles size={ICON_SIZE} />
-            {t('writing.editor.generate')}
-          </button>
-          <button
-            type="button"
-            title={t('writing.editor.aiRewrite')}
-            style={aiLabelStyle}
-            disabled={disabled}
-            onClick={() => onAIRewrite?.()}
-          >
-            <Sparkles size={ICON_SIZE} />
-            {t('writing.editor.rewrite')}
-          </button>
-          <button
-            type="button"
-            title={t('writing.editor.aiExpand')}
-            style={aiLabelStyle}
-            disabled={disabled}
-            onClick={() => onAIExpand?.()}
-          >
-            <Sparkles size={ICON_SIZE} />
-            {t('writing.editor.expand')}
-          </button>
-        </>
-      )}
+      ) : null}
     </div>
   );
 }

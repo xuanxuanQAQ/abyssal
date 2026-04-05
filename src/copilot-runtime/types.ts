@@ -344,6 +344,7 @@ export interface RecipeResolution {
   selected: OperationRecipe | null;
   candidates: string[];
   resolution:
+    | 'no_match'
     | 'single_match'
     | 'priority'
     | 'specificity'

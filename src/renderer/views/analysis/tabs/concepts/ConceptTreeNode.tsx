@@ -4,11 +4,12 @@
  * Features:
  * - Expand/collapse children
  * - Keyboard navigation (Enter to select, Space to toggle)
- * - Mapping count + approval rate display
+ * - Mapping count + reviewed progress display
  * - role="treeitem" for accessibility
  */
 
 import React, { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { MaturityBadge } from '../../../../shared/MaturityBadge';
 import { useConceptStats } from '../../../../core/ipc/hooks/useConcepts';
@@ -29,6 +30,7 @@ export const ConceptTreeNode = React.memo(function ConceptTreeNode({
   selectedId,
   onSelect,
 }: ConceptTreeNodeProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const { concept, children } = node;
   const isSelected = concept.id === selectedId;
@@ -38,8 +40,9 @@ export const ConceptTreeNode = React.memo(function ConceptTreeNode({
   const { data: stats } = useConceptStats(concept.id);
   const mappingCount = stats?.mappingCount ?? 0;
   const paperCount = stats?.paperCount ?? 0;
-  const approvalRate =
-    mappingCount > 0 ? Math.round((paperCount / mappingCount) * 100) : 0;
+  const reviewedCount = stats?.reviewedCount ?? 0;
+  const reviewedRate =
+    mappingCount > 0 ? Math.round((reviewedCount / mappingCount) * 100) : 0;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -97,7 +100,7 @@ export const ConceptTreeNode = React.memo(function ConceptTreeNode({
               e.stopPropagation();
               setExpanded(!expanded);
             }}
-            aria-label={expanded ? 'Collapse' : 'Expand'}
+            aria-label={expanded ? t('analysis.concepts.tree.collapse') : t('analysis.concepts.tree.expand')}
             style={{
               background: 'none',
               border: 'none',
@@ -140,7 +143,12 @@ export const ConceptTreeNode = React.memo(function ConceptTreeNode({
               alignItems: 'center',
               gap: 3,
             }}
-            title={`${mappingCount} mappings, ${paperCount} papers (${approvalRate}%)`}
+            title={t('analysis.concepts.tree.mappingSummary', {
+              mappingCount,
+              paperCount,
+              reviewedCount,
+              reviewedPct: reviewedRate,
+            })}
           >
             <span>{mappingCount}</span>
             <span
@@ -156,7 +164,7 @@ export const ConceptTreeNode = React.memo(function ConceptTreeNode({
               <span
                 style={{
                   display: 'block',
-                  width: `${approvalRate}%`,
+                  width: `${reviewedRate}%`,
                   height: '100%',
                   backgroundColor: 'var(--success)',
                   borderRadius: 1.5,

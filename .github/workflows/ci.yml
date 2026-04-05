@@ -55,6 +55,8 @@ jobs:
       unit: ${{ steps.filter.outputs.unit }}
       integration: ${{ steps.filter.outputs.integration }}
       renderer: ${{ steps.filter.outputs.renderer }}
+      golden: ${{ steps.filter.outputs.golden }}
+      robustness: ${{ steps.filter.outputs.robustness }}
       build: ${{ steps.filter.outputs.build }}
 
     steps:
@@ -104,6 +106,25 @@ jobs:
               - 'src/electron/preload.ts'
               - 'src/electron/ipc/**'
               - 'src/shared-types/**'
+            golden:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vitest.config.ts'
+              - 'tests/golden/**'
+              - 'src/adapter/**'
+              - 'src/core/**'
+              - 'src/copilot-runtime/**'
+            robustness:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vitest.config.ts'
+              - 'tests/robustness/**'
+              - 'src/adapter/**'
+              - 'src/core/**'
+              - 'src/copilot-runtime/**'
+              - 'src/electron/**'
             build:
               - '.github/workflows/ci.yml'
               - 'package.json'
@@ -125,7 +146,7 @@ jobs:
   pr-test:
     name: PR tests (ubuntu)
     needs: [check, changes]
-    if: github.event_name == 'pull_request' && (needs.changes.outputs.unit == 'true' || needs.changes.outputs.integration == 'true' || needs.changes.outputs.renderer == 'true')
+    if: github.event_name == 'pull_request' && (needs.changes.outputs.unit == 'true' || needs.changes.outputs.integration == 'true' || needs.changes.outputs.renderer == 'true' || needs.changes.outputs.golden == 'true' || needs.changes.outputs.robustness == 'true')
     runs-on: ubuntu-latest
 
     steps:
@@ -151,10 +172,18 @@ jobs:
         if: needs.changes.outputs.renderer == 'true'
         run: npx vitest run --project renderer --reporter=verbose
 
+      - name: Golden tests
+        if: needs.changes.outputs.golden == 'true'
+        run: npx vitest run --project golden --reporter=verbose
+
+      - name: Robustness tests
+        if: needs.changes.outputs.robustness == 'true'
+        run: npx vitest run --project robustness --reporter=verbose
+
   push-test:
     name: Push tests (${{ matrix.os }})
     needs: [check, changes]
-    if: github.event_name == 'push' && (needs.changes.outputs.unit == 'true' || needs.changes.outputs.integration == 'true' || needs.changes.outputs.renderer == 'true')
+    if: github.event_name == 'push' && (needs.changes.outputs.unit == 'true' || needs.changes.outputs.integration == 'true' || needs.changes.outputs.renderer == 'true' || needs.changes.outputs.golden == 'true' || needs.changes.outputs.robustness == 'true')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -183,6 +212,14 @@ jobs:
       - name: Renderer tests
         if: needs.changes.outputs.renderer == 'true'
         run: npx vitest run --project renderer --reporter=verbose
+
+      - name: Golden tests
+        if: needs.changes.outputs.golden == 'true'
+        run: npx vitest run --project golden --reporter=verbose
+
+      - name: Robustness tests
+        if: needs.changes.outputs.robustness == 'true'
+        run: npx vitest run --project robustness --reporter=verbose
 
   build:
     name: Build verification (ubuntu)

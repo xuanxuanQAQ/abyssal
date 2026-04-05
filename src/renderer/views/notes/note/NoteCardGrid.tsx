@@ -1,10 +1,7 @@
 /**
- * NoteCardGrid — responsive card grid for structured notes.
+ * NoteCardGrid  研究笔记卡片列表
  *
- * Accepts filter from NotesFilterSidebar.
- * Cards show title, excerpt, entity tags, last modified date.
- *
- * See spec: section 6.4
+ * 全幅列表，点击卡片后由 NotesView 切换到编辑器。
  */
 
 import { useState } from 'react';
@@ -24,7 +21,6 @@ interface NoteCardGridProps {
 export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
   const { t } = useTranslation();
   const entityNameCache = useEntityDisplayNameCache();
-  // Extract NoteFilter-compatible fields from MemoFilter
   const noteFilter = filter ? (() => {
     const nf: import('../../../../shared-types/models').NoteFilter = {};
     if (filter.conceptIds) nf.conceptIds = filter.conceptIds;
@@ -39,41 +35,65 @@ export function NoteCardGrid({ onOpenNote, filter }: NoteCardGridProps) {
   const filteredNotes = notes ?? [];
 
   return (
-    <div style={{ height: '100%', overflow: 'auto', padding: 16 }}>
-      {/* Toolbar */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px',
-            border: 'none', borderRadius: 'var(--radius-sm, 4px)',
-            backgroundColor: 'var(--accent-color)', color: '#fff', fontSize: 12, cursor: 'pointer',
-          }}
-        >
-          <Plus size={14} /> {t('notes.note.newNote')}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={headerStyle}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          {filteredNotes.length > 0
+            ? t('notes.note.listSummary', { count: filteredNotes.length, defaultValue: `${filteredNotes.length} 条研究笔记` })
+            : t('notes.tabs.researchNotes')}
+        </span>
+        <button onClick={() => setShowCreate(true)} style={createBtnStyle}>
+          <Plus size={13} /> {t('notes.note.newNote')}
         </button>
       </div>
 
-      {/* Grid */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-        gap: 12,
-      }}>
-        {filteredNotes.map((note) => (
-          <NoteCard key={note.id} note={note} onClick={() => onOpenNote(note.id)} entityNameCache={entityNameCache} />
-        ))}
-      </div>
-
-      {filteredNotes.length === 0 && (
-        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-          {notes && notes.length > 0
-            ? t('notes.note.noMatchingNotes')
-            : t('notes.note.emptyState')}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {filteredNotes.map((note) => (
+            <NoteCard
+              key={note.id}
+              note={note}
+              onClick={() => onOpenNote(note.id)}
+              entityNameCache={entityNameCache}
+            />
+          ))}
         </div>
-      )}
+
+        {filteredNotes.length === 0 && (
+          <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.6 }}>
+            {notes && notes.length > 0
+              ? t('notes.note.noMatchingNotes')
+              : t('notes.note.emptyState')}
+          </div>
+        )}
+      </div>
 
       <CreateNoteDialog open={showCreate} onOpenChange={setShowCreate} onCreated={onOpenNote} />
     </div>
   );
 }
+
+//  Styles 
+
+const headerStyle: React.CSSProperties = {
+  padding: '8px 12px',
+  borderBottom: '1px solid var(--border-subtle)',
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  flexShrink: 0,
+};
+
+const createBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '5px 10px',
+  border: 'none',
+  borderRadius: 6,
+  backgroundColor: 'var(--accent-color)',
+  color: '#fff',
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: 'pointer',
+};

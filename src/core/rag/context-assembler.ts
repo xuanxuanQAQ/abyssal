@@ -179,6 +179,14 @@ export function assembleContext(
   maxTokens: number,
   budgetMode: ContextBudgetMode,
 ): AssembleResult {
+  const dedupedCandidates: RankedChunk[] = [];
+  const seenChunkIds = new Set<string>();
+  for (const chunk of rankedCandidates) {
+    if (seenChunkIds.has(chunk.chunkId)) continue;
+    seenChunkIds.add(chunk.chunkId);
+    dedupedCandidates.push(chunk);
+  }
+
   // §5.2: 分离来源
   const memoChunks = forcedChunks.filter((c) => c.source === 'memo');
   const annotationChunks = forcedChunks.filter((c) => c.source === 'annotation');
@@ -187,7 +195,7 @@ export function assembleContext(
   const paperGroups = new Map<string, RankedChunk[]>();
   const otherChunks: RankedChunk[] = []; // private / note / figure
 
-  for (const chunk of rankedCandidates) {
+  for (const chunk of dedupedCandidates) {
     if (chunk.paperId && (chunk.source === 'paper' || chunk.source === 'figure')) {
       const key = chunk.paperId;
       const arr = paperGroups.get(key) ?? [];

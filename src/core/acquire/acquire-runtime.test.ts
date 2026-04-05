@@ -438,4 +438,105 @@ describe('AcquireService runtime branches', () => {
     expect(quickExtractSpy).not.toHaveBeenCalled();
     expect(sanityCheckSpy).not.toHaveBeenCalled();
   });
+
+  it('keeps successful downloads when quickExtractText cannot extract preview text', async () => {
+    const tempDir = makeTempDir('abyssal-acquire-runtime-');
+    createdDirs.push(tempDir);
+    const savePath = path.join(tempDir, 'no-preview.pdf');
+    const baseConfig = createTestConfig();
+    const config = createTestConfig({
+      acquire: {
+        ...baseConfig.acquire,
+        enableFastPath: true,
+        enableRecon: false,
+        enableSpeculativeExecution: false,
+        enableFuzzyResolve: false,
+        enableContentSanityCheck: true,
+      },
+    });
+
+    tryFastPathMock.mockReturnValue({
+      matched: true,
+      pdfUrl: 'https://example.test/fast.pdf',
+      source: 'arxiv',
+    });
+    downloadPdfMock.mockImplementation(async (_http: unknown, _url: string, tempPath: string) => {
+      fs.writeFileSync(tempPath, '%PDF-1.4\nno-preview');
+    });
+
+    const service = new AcquireService(config, silentLogger);
+    const quickExtractSpy = vi.spyOn(service as any, 'quickExtractText').mockResolvedValue(null);
+    const sanityCheckSpy = vi.spyOn((service as any).sanityChecker, 'check');
+
+    const result = await service.acquireFulltext({
+      doi: '10.1000/test-doi',
+      arxivId: null,
+      pmcid: null,
+      url: null,
+      savePath,
+      paperTitle: 'Previewless PDF',
+      paperAuthors: ['Alice'],
+      paperYear: 2024,
+    });
+
+    expect(result.status).toBe('success');
+    expect(quickExtractSpy).toHaveBeenCalledTimes(1);
+    expect(sanityCheckSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['paywall', 'captcha', 'corrupted'] as const)(
+    'returns suspicious when sanity checking flags a %s verdict',
+    async (verdict) => {
+      const tempDir = makeTempDir('abyssal-acquire-runtime-');
+      createdDirs.push(tempDir);
+      const savePath = path.join(tempDir, `${verdict}.pdf`);
+      const baseConfig = createTestConfig();
+      const config = createTestConfig({
+        acquire: {
+          ...baseConfig.acquire,
+          enableFastPath: true,
+          enableRecon: false,
+          enableSpeculativeExecution: false,
+          enableFuzzyResolve: false,
+          enableContentSanityCheck: true,
+        },
+      });
+
+      tryFastPathMock.mockReturnValue({
+        matched: true,
+        pdfUrl: 'https://example.test/fast.pdf',
+        source: 'arxiv',
+      });
+      downloadPdfMock.mockImplementation(async (_http: unknown, _url: string, tempPath: string) => {
+        fs.writeFileSync(tempPath, '%PDF-1.4\nflagged');
+      });
+
+      const service = new AcquireService(config, silentLogger);
+      (service as any).quickExtractText = vi.fn().mockResolvedValue('A'.repeat(200));
+      (service as any).sanityChecker = {
+        check: vi.fn().mockResolvedValue({
+          verdict,
+          confidence: 0.99,
+          explanation: `${verdict} detected`,
+        }),
+      };
+
+      const result = await service.acquireFulltext({
+        doi: '10.1000/test-doi',
+        arxivId: null,
+        pmcid: null,
+        url: null,
+        savePath,
+        paperTitle: 'Flagged PDF',
+        paperAuthors: ['Alice'],
+        paperYear: 2024,
+      });
+
+      expect(result.status).toBe('suspicious');
+      expect(result.source).toBe('arxiv');
+      expect(result.pdfPath).toBe(savePath);
+      expect(fs.existsSync(savePath)).toBe(true);
+      expect(result.attempts.at(-1)).toMatchObject({ source: 'arxiv', status: 'success' });
+    },
+  );
 });

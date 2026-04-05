@@ -453,6 +453,35 @@ const systemTools: RawToolDef[] = [
   },
 ];
 
+// ═══ Config Tools (2) ═══
+
+const configTools: RawToolDef[] = [
+  {
+    name: 'abyssal_get_settings',
+    description: 'Get current application settings. Optionally specify a section (e.g. "llm", "rag", "appearance").',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        section: { ...str, description: 'Settings section to retrieve. Omit for all sections.' },
+      },
+    },
+    isWriteOperation: false, module: 'config', functionName: 'getSettings', injectedParams: [],
+  },
+  {
+    name: 'abyssal_update_settings',
+    description: 'Update application settings. Writable sections: llm, rag, acquire, discovery, analysis, language, contextBudget, webSearch, personalization, ai, appearance.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        section: { ...str, description: 'Settings section to update' },
+        patch: { type: 'object' as const, description: 'Key-value pairs to update' },
+      },
+      required: ['section', 'patch'],
+    },
+    isWriteOperation: true, module: 'config', functionName: 'updateSettings', injectedParams: [],
+  },
+];
+
 // ═══ 导出全部 Tool 定义 ═══
 
 /** 自动从 inputSchema.properties 派生 paramOrder（如未显式设置） */
@@ -472,6 +501,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     ...ragTools,
     ...bibliographyTools,
     ...systemTools,
+    ...configTools,
   ];
   return raw.map(ensureParamOrder);
 }

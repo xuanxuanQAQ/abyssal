@@ -1,7 +1,7 @@
 /**
  * WorkingMemory — cross-operation memory that persists within a research session.
  *
- * Unlike AgentMemory (short-term, per-conversation), WorkingMemory spans
+ * Cross-operation memory that spans
  * ALL interactions: chat, pipeline results, user behavior, AI suggestions.
  *
  * Entries are scored by recency and relevance, and older entries decay.

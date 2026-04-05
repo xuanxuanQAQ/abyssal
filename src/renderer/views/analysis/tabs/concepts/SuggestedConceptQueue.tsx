@@ -4,7 +4,7 @@
 
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Lightbulb, Check, X, Clock } from 'lucide-react';
+import { Lightbulb, Check, X } from 'lucide-react';
 import { useSuggestedConceptList, useDismissSuggestedConcept } from '../../../../core/ipc/hooks/useSuggestedConcepts';
 import { MaturityBadge } from '../../../../shared/MaturityBadge';
 import { CreateConceptDialog } from './CreateConceptDialog';
@@ -24,7 +24,7 @@ export function SuggestedConceptQueue() {
         color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em',
         display: 'flex', alignItems: 'center', gap: 4,
       }}>
-        <Lightbulb size={12} /> {t('analysis.concepts.suggestions.title')}
+        <Lightbulb size={12} /> {t('analysis.concepts.suggestions.title')} {pending.length > 0 ? `(${pending.length})` : ''}
       </div>
 
       {pending.length === 0 ? (
@@ -73,9 +73,6 @@ function SuggestionItem({ suggestion, onDismiss }: { suggestion: SuggestedConcep
           </button>
           <button title={t('analysis.concepts.suggestions.dismiss')} style={iconBtnStyle} onClick={onDismiss}>
             <X size={12} />
-          </button>
-          <button title={t('analysis.concepts.suggestions.later')} style={iconBtnStyle}>
-            <Clock size={12} />
           </button>
         </div>
       </div>

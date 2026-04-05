@@ -124,12 +124,33 @@ export async function batchRun(args: CliArgs): Promise<void> {
 
     const cbm = createContextBudgetManager(logger);
 
+    // ── 5.5. Sync concepts.yaml → DB (ensures DB reflects YAML definitions) ──
+    if (validationResult.concepts.length > 0) {
+      try {
+        const { syncConceptsFromYaml } = await import('../core/config/hot-reload/concept-sync');
+        const syncReport = syncConceptsFromYaml(validationResult.concepts, dbService.raw, logger);
+        logger.info('Concept sync from YAML', {
+          added: syncReport.added.length,
+          modified: syncReport.modified.length,
+          deprecated: syncReport.deprecated.length,
+          unchanged: syncReport.unchanged.length,
+        });
+      } catch (err) {
+        logger.warn('Concept sync from YAML failed', { error: (err as Error).message });
+      }
+    }
+
     // ── 6. Framework state (§8.6) ──
-    // Use validation result first, then refine from DB stats
+    // Derive from DB stats (which now include synced YAML concepts)
     let frameworkState: FrameworkState = validationResult.frameworkState;
     try {
       const stats = dbService.getStats() as { concepts: { total: number; tentative: number; working: number; established: number } };
-      frameworkState = deriveFrameworkState(stats.concepts);
+      const dbState = deriveFrameworkState(stats.concepts);
+      // Prefer DB-derived state, but fall back to validation result if DB is empty
+      // and validation found concepts (sync may have just added them)
+      if (dbState !== 'zero_concepts' || validationResult.concepts.length === 0) {
+        frameworkState = dbState;
+      }
     } catch { /* use validation result */ }
 
     if (frameworkState === 'zero_concepts') {
@@ -192,6 +213,10 @@ export async function batchRun(args: CliArgs): Promise<void> {
         frameworkState,
         workspacePath,
         outputLanguage: config.language.defaultOutputLanguage,
+        analysisConfig: {
+          autoSuggestConcepts: config.analysis.autoSuggestConcepts,
+          autoSuggestThreshold: config.concepts.autoSuggestThreshold,
+        },
         ragService: ragService ? {
           retrieve: async (query: string, options?: { paperId?: string; topK?: number }) => {
             const result = await ragService!.retrieve({

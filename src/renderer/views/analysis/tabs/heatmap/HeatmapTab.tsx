@@ -6,12 +6,17 @@
  * Manages all shared state and passes it down to children.
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '../../../../core/store';
+import { cellKey } from '../../shared/cellKey';
+import { useAdjudicateMapping } from '../../../../core/ipc/hooks/useMappings';
 import { HeatmapToolbar } from './HeatmapToolbar';
 import { HeatmapGrid } from './layout/HeatmapGrid';
 import { HeatmapLegend } from './HeatmapLegend';
+import { CellTooltip } from './interaction/CellTooltip';
+import { CellContextMenu } from './interaction/CellContextMenu';
 import {
   useProcessedHeatmapData,
   type SortBy,
@@ -20,9 +25,20 @@ import { computeRowOffsets, computeTotalHeight } from './data/rowOffsets';
 import { exportHeatmapCSV } from './export/exportCSV';
 import { exportHeatmapPNG } from './export/exportPNG';
 
+function sameCell(
+  left: { row: number; col: number } | null,
+  right: { row: number; col: number } | null,
+) {
+  return left?.row === right?.row && left?.col === right?.col;
+}
+
 export function HeatmapTab() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const selectedMappingId = useAppStore((s) => s.selectedMappingId);
+  const selectMapping = useAppStore((s) => s.selectMapping);
+  const navigateTo = useAppStore((s) => s.navigateTo);
+  const adjudicateMapping = useAdjudicateMapping();
 
   // ── State ──
   const [sortBy, setSortBy] = useState<SortBy>('relevance');
@@ -35,6 +51,14 @@ export function HeatmapTab() {
     row: number;
     col: number;
   } | null>(null);
+  const [hoveredPosition, setHoveredPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [contextMenuState, setContextMenuState] = useState<{
+    cell: { row: number; col: number };
+    position: { x: number; y: number };
+  } | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set<string>(),
   );
@@ -44,37 +68,11 @@ export function HeatmapTab() {
     sortedPaperIds,
     paperLabels,
     conceptGroups,
+    concepts,
     orderedConceptIds,
     cellLookup,
     isLoading,
   } = useProcessedHeatmapData(sortBy, collapsedGroups);
-
-  // Build concept info array from ordered IDs + groups
-  const concepts = useMemo(() => {
-    const conceptMap = new Map<
-      string,
-      { id: string; name: string; parentId: string | null; level: number }
-    >();
-    for (const group of conceptGroups) {
-      for (const cid of group.conceptIds) {
-        // First concept in each group is the root (level 0), others are level 1
-        const isRoot = cid === group.conceptIds[0];
-        conceptMap.set(cid, {
-          id: cid,
-          name: cid, // Will be overridden if framework data populates names
-          parentId: isRoot ? null : (group.conceptIds[0] ?? null),
-          level: isRoot ? 0 : 1,
-        });
-      }
-    }
-
-    return orderedConceptIds
-      .map((id) => conceptMap.get(id))
-      .filter(
-        (c): c is { id: string; name: string; parentId: string | null; level: number } =>
-          c != null,
-      );
-  }, [conceptGroups, orderedConceptIds]);
 
   // O(1) adjudication status lookup from cell data
   const adjudicationMap = useMemo(() => {
@@ -90,11 +88,10 @@ export function HeatmapTab() {
     const boundaries = new Set<number>();
     let idx = 0;
     for (const group of conceptGroups) {
-      if (collapsedGroups.has(group.id)) continue;
-      if (idx > 0) {
+      if (idx > 0 && group.conceptIds.length > 1) {
         boundaries.add(idx);
       }
-      idx += group.conceptIds.length;
+      idx += collapsedGroups.has(group.id) ? 1 : group.conceptIds.length;
     }
     return boundaries;
   }, [conceptGroups, collapsedGroups]);
@@ -109,6 +106,72 @@ export function HeatmapTab() {
     () => computeTotalHeight(rowOffsets, concepts.length),
     [rowOffsets, concepts.length],
   );
+
+  const getCellAt = useCallback((cell: { row: number; col: number } | null) => {
+    if (!cell) return null;
+    return cellLookup.get(cellKey(cell.row, cell.col)) ?? null;
+  }, [cellLookup]);
+
+  const hoveredHeatmapCell = useMemo(
+    () => getCellAt(hoveredCell),
+    [getCellAt, hoveredCell],
+  );
+
+  const contextMenuCell = useMemo(
+    () => getCellAt(contextMenuState?.cell ?? null),
+    [contextMenuState, getCellAt],
+  );
+
+  const selectedCellFromStore = useMemo(() => {
+    if (!selectedMappingId) return null;
+    for (const cell of cellLookup.values()) {
+      if (cell.mappingId === selectedMappingId) {
+        return { row: cell.conceptIndex, col: cell.paperIndex };
+      }
+    }
+    return null;
+  }, [selectedMappingId, cellLookup]);
+
+  const getAdjudicationLabel = useCallback((status: string) => {
+    switch (status) {
+      case 'accepted':
+        return t('context.adjudication.accepted');
+      case 'rejected':
+        return t('context.adjudication.rejected');
+      case 'revised':
+        return t('context.adjudication.revised');
+      default:
+        return t('context.adjudication.pending');
+    }
+  }, [t]);
+
+  const syncSelectedMapping = useCallback((cell: { row: number; col: number } | null) => {
+    setSelectedCell(cell);
+
+    const heatmapCell = getCellAt(cell);
+    if (!heatmapCell) {
+      selectMapping(null);
+      return;
+    }
+
+    selectMapping(
+      heatmapCell.mappingId,
+      sortedPaperIds[heatmapCell.paperIndex] ?? null ?? undefined,
+      concepts[heatmapCell.conceptIndex]?.id,
+    );
+  }, [concepts, getCellAt, selectMapping, sortedPaperIds]);
+
+  useEffect(() => {
+    if (!sameCell(selectedCell, selectedCellFromStore)) {
+      setSelectedCell(selectedCellFromStore);
+    }
+  }, [selectedCell, selectedCellFromStore]);
+
+  useEffect(() => {
+    if (contextMenuState && !contextMenuCell) {
+      setContextMenuState(null);
+    }
+  }, [contextMenuCell, contextMenuState]);
 
   // ── Callbacks ──
   const handleToggleGroup = useCallback((groupId: string) => {
@@ -156,6 +219,52 @@ export function HeatmapTab() {
       conceptNames,
     );
   }, [cellLookup, sortedPaperIds, orderedConceptIds, paperLabels, concepts]);
+
+  const handleSelectCell = useCallback((cell: { row: number; col: number } | null) => {
+    syncSelectedMapping(cell);
+  }, [syncSelectedMapping]);
+
+  const handleOpenCellMenu = useCallback((
+    cell: { row: number; col: number } | null,
+    position: { x: number; y: number } | null,
+  ) => {
+    if (!cell || !position) {
+      setContextMenuState(null);
+      return;
+    }
+
+    syncSelectedMapping(cell);
+    setContextMenuState({ cell, position });
+  }, [syncSelectedMapping]);
+
+  const handleViewEvidence = useCallback(() => {
+    if (!contextMenuState) return;
+    syncSelectedMapping(contextMenuState.cell);
+  }, [contextMenuState, syncSelectedMapping]);
+
+  const handleOpenInReader = useCallback(() => {
+    if (!contextMenuCell) return;
+    const paperId = sortedPaperIds[contextMenuCell.paperIndex];
+    if (!paperId) return;
+
+    navigateTo({
+      type: 'paper',
+      id: paperId,
+      view: 'reader',
+    });
+  }, [contextMenuCell, navigateTo, sortedPaperIds]);
+
+  const handleAdjudication = useCallback((decision: 'accept' | 'reject') => {
+    if (!contextMenuCell) return;
+    const paperId = sortedPaperIds[contextMenuCell.paperIndex];
+    if (!paperId) return;
+
+    adjudicateMapping.mutate({
+      mappingId: contextMenuCell.mappingId,
+      decision,
+      paperId,
+    });
+  }, [adjudicateMapping, contextMenuCell, sortedPaperIds]);
 
   if (isLoading) {
     return (
@@ -209,11 +318,36 @@ export function HeatmapTab() {
           hoveredCell={hoveredCell}
           selectedCell={selectedCell}
           onHoverCell={setHoveredCell}
-          onSelectCell={setSelectedCell}
+          onHoverPositionChange={setHoveredPosition}
+          onSelectCell={handleSelectCell}
+          onOpenCellMenu={handleOpenCellMenu}
           showGrid={showGrid}
           rowOffsets={rowOffsets}
           totalContentHeight={totalContentHeight}
           cellLookup={cellLookup}
+        />
+        <CellTooltip
+          cell={contextMenuState ? null : hoveredHeatmapCell}
+          conceptName={hoveredCell ? (concepts[hoveredCell.row]?.name ?? '') : ''}
+          paperLabel={hoveredCell ? (paperLabels[hoveredCell.col] ?? '') : ''}
+          position={contextMenuState ? null : hoveredPosition}
+          adjudicationLabel={hoveredHeatmapCell ? getAdjudicationLabel(hoveredHeatmapCell.adjudicationStatus) : ''}
+        />
+        <CellContextMenu
+          cell={contextMenuCell}
+          position={contextMenuState?.position ?? null}
+          open={Boolean(contextMenuState && contextMenuCell)}
+          acceptDisabled={contextMenuCell?.adjudicationStatus === 'accepted'}
+          rejectDisabled={contextMenuCell?.adjudicationStatus === 'rejected'}
+          onOpenChange={(open) => {
+            if (!open) {
+              setContextMenuState(null);
+            }
+          }}
+          onViewEvidence={handleViewEvidence}
+          onOpenInReader={handleOpenInReader}
+          onAccept={() => handleAdjudication('accept')}
+          onReject={() => handleAdjudication('reject')}
         />
       </div>
 

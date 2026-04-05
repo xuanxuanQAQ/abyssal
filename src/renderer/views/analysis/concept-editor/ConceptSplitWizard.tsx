@@ -21,6 +21,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
+import { executeCopilotTextRequest } from '../../../panels/context/chat/copilotBridge';
 import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
 import type {
   Concept,
@@ -279,7 +280,16 @@ ${state.mappings.map((m) => `- ${m.id}: ${m.relationType} (confidence: ${m.confi
 
 Respond ONLY with a JSON object, no other text.`;
 
-      const result = await api.chat.send(prompt);
+      const result = await executeCopilotTextRequest({
+        prompt,
+        sessionId: `concept-split:${conceptId}:${crypto.randomUUID()}`,
+        surface: 'analysis-panel',
+        context: {
+          activeView: 'analysis',
+          contextKey: `concept:${conceptId}`,
+          selectedConceptId: conceptId,
+        },
+      });
 
       // Parse the LLM response as JSON — use non-greedy match to avoid spanning multiple objects
       const jsonMatch = result.match(/\{[\s\S]*?\}/);

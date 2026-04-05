@@ -81,7 +81,7 @@ describe('useAIOperations', () => {
     let callIndex = 0;
     randomUuidSpy = vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => {
       callIndex += 1;
-      return `op-${callIndex}`;
+      return `00000000-0000-4000-8000-${String(callIndex).padStart(12, '0')}`;
     });
   });
 
@@ -112,7 +112,7 @@ describe('useAIOperations', () => {
     });
 
     expect(executeMock).toHaveBeenCalledTimes(1);
-    const envelope = executeMock.mock.calls[0][0];
+    const [envelope] = executeMock.mock.calls[0]!;
     expect(envelope.operation.intent).toBe('generate-section');
     expect(envelope.operation.outputTarget).toEqual({
       type: 'section-replace',
@@ -148,7 +148,7 @@ describe('useAIOperations', () => {
       await Promise.resolve();
     });
 
-    const envelope = executeMock.mock.calls[0][0];
+    const [envelope] = executeMock.mock.calls[0]!;
     expect(envelope.operation.intent).toBe('rewrite-selection');
     expect(envelope.operation.outputTarget).toEqual({
       type: 'editor-selection-replace',
@@ -183,13 +183,13 @@ describe('useAIOperations', () => {
     });
 
     expect(useEditorStore.getState().aiGenerating).toBe(true);
-    expect(useEditorStore.getState().aiGeneratingTaskId).toBe('op-1');
+    expect(useEditorStore.getState().aiGeneratingTaskId).toBe('00000000-0000-4000-8000-000000000001');
 
     await act(async () => {
       await ops.cancel();
     });
 
-    expect(abortMock).toHaveBeenCalledWith('op-1');
+    expect(abortMock).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001');
     expect(useEditorStore.getState().aiGenerating).toBe(false);
     expect(useEditorStore.getState().aiGeneratingTaskId).toBeNull();
   });

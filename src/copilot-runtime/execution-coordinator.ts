@@ -201,8 +201,8 @@ export class ExecutionCoordinator {
       const resolution = this.deps.recipeRegistry.resolve(contextualOperation, context);
 
       if (!resolution.selected) {
-        // No recipe matched or deferred to user
-        if (resolution.resolution === 'deferred_to_user') {
+        // Multiple recipes tied → ask user to pick
+        if (resolution.resolution === 'deferred_to_user' && resolution.candidates.length > 0) {
           return this.handleClarification(
             contextualOperation,
             '多个操作匹配，请选择具体动作',
@@ -210,7 +210,7 @@ export class ExecutionCoordinator {
           );
         }
 
-        // Fallback: treat as plain chat
+        // No recipe matched → fallback to plain chat
         traceStore.failPhase(operation.id, 'recipe', {
           code: 'NO_RECIPE',
           message: 'No recipe matched',
@@ -512,12 +512,13 @@ export class ExecutionCoordinator {
   ): Promise<CopilotExecuteResult> {
     // Run as simple chat
     const step = { kind: 'llm_generate' as const, mode: 'chat' as const };
-    await this.deps.agentExecutor.execute(operation, step, this.deps.emitter, signal);
+    const result = await this.deps.agentExecutor.execute(operation, step, this.deps.emitter, signal);
     this.throwIfAborted(signal);
 
     this.deps.emitter.emit({
       type: 'operation.completed',
       operationId: operation.id,
+      ...(result.text ? { resultSummary: result.text.substring(0, 200) } : {}),
     });
 
     this.deps.traceStore.finalizeTrace(

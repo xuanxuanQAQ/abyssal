@@ -42,6 +42,32 @@
   --lens-border: rgba(255, 255, 255, 0.08);
   --lens-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
   --ai-glow: rgba(59, 130, 246, 0.22);
+  --bg-elevated: #191C24;
+  --text-tertiary: #858590;
+  --text-on-accent: #F8FAFC;
+  --border-color: var(--border-default);
+  --accent-color-muted: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  --accent-color-10: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  --app-shell-background:
+    radial-gradient(circle at 16% 14%, rgba(59, 130, 246, 0.12), transparent 22%),
+    radial-gradient(circle at 82% 6%, rgba(14, 165, 233, 0.10), transparent 18%),
+    linear-gradient(180deg, #0C111B 0%, #0A0E16 100%);
+  --app-shell-overlay:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 24%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(148, 163, 184, 0.035) 0,
+      rgba(148, 163, 184, 0.035) 1px,
+      transparent 1px,
+      transparent 32px
+    );
+  --workspace-stage-background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 18%),
+    linear-gradient(180deg, var(--paper-surface), var(--paper-surface-muted));
+  --workspace-stage-overlay:
+    radial-gradient(circle at 14% 10%, rgba(59, 130, 246, 0.09), transparent 20%),
+    radial-gradient(circle at 84% 0%, rgba(14, 165, 233, 0.07), transparent 17%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06), transparent 14%, transparent 86%, rgba(255, 255, 255, 0.04));
 
   color-scheme: dark;
 }
@@ -76,6 +102,32 @@
   --lens-shadow: 0 16px 38px rgba(71, 85, 105, 0.10);
   --lens-shadow-soft: 0 8px 20px rgba(71, 85, 105, 0.08);
   --ai-glow: rgba(59, 130, 246, 0.18);
+  --bg-elevated: #FFFFFF;
+  --text-tertiary: #64748B;
+  --text-on-accent: #F8FAFC;
+  --border-color: var(--border-default);
+  --accent-color-muted: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  --accent-color-10: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  --app-shell-background:
+    radial-gradient(circle at 12% 18%, rgba(59, 130, 246, 0.05), transparent 24%),
+    radial-gradient(circle at 88% 8%, rgba(99, 102, 241, 0.045), transparent 20%),
+    linear-gradient(180deg, #F8FAFD 0%, #F1F5F9 100%);
+  --app-shell-overlay:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0) 28%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(148, 163, 184, 0.03) 0,
+      rgba(148, 163, 184, 0.03) 1px,
+      transparent 1px,
+      transparent 32px
+    );
+  --workspace-stage-background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0) 20%),
+    linear-gradient(180deg, var(--paper-surface), var(--paper-surface-muted));
+  --workspace-stage-overlay:
+    radial-gradient(circle at 16% 10%, rgba(59, 130, 246, 0.055), transparent 22%),
+    radial-gradient(circle at 82% 0%, rgba(14, 165, 233, 0.045), transparent 18%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.24), transparent 16%, transparent 84%, rgba(255, 255, 255, 0.16));
 
   color-scheme: light;
 }
@@ -148,6 +200,24 @@
   --close-btn-hover: #C42B1C;
 }
 
+[data-font-size='sm'] {
+  --text-xs: 10px;
+  --text-sm: 11px;
+  --text-base: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+}
+
+[data-font-size='lg'] {
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+}
+
 /* ═══════════════════════════════════════════
    基础重置与全局样式
    ═══════════════════════════════════════════ */
@@ -195,10 +265,7 @@ body {
   overflow: hidden;
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(circle at 12% 18%, rgba(59, 130, 246, 0.05), transparent 24%),
-    radial-gradient(circle at 88% 8%, rgba(99, 102, 241, 0.045), transparent 20%),
-    linear-gradient(180deg, #F8FAFD 0%, #F1F5F9 100%);
+  background: var(--app-shell-background);
 }
 
 .app-shell::before {
@@ -206,15 +273,7 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0) 28%),
-    repeating-linear-gradient(
-      180deg,
-      rgba(148, 163, 184, 0.03) 0,
-      rgba(148, 163, 184, 0.03) 1px,
-      transparent 1px,
-      transparent 32px
-    );
+  background: var(--app-shell-overlay);
   z-index: 0;
 }
 
@@ -240,9 +299,7 @@ body {
   grid-area: workspace;
   overflow: hidden;
   position: relative;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0) 20%),
-    linear-gradient(180deg, var(--paper-surface), var(--paper-surface-muted));
+  background: var(--workspace-stage-background);
 }
 
 .app-shell__workspace::before {
@@ -250,10 +307,7 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(circle at 16% 10%, rgba(59, 130, 246, 0.055), transparent 22%),
-    radial-gradient(circle at 82% 0%, rgba(14, 165, 233, 0.045), transparent 18%),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.24), transparent 16%, transparent 84%, rgba(255, 255, 255, 0.16));
+  background: var(--workspace-stage-overlay);
   z-index: 0;
 }
 
@@ -654,6 +708,14 @@ body.is-dragging [data-drag-inert] {
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border-default) transparent;
+}
+
+/* Hide scrollbar completely (used by draft tabs, etc.) */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  scrollbar-width: none;
 }
 
 /* ═══════════════════════════════════════════

@@ -8,6 +8,7 @@ import type Database from 'better-sqlite3';
 import type { NoteId, PaperId, ConceptId, MemoId } from '../../types/common';
 import type { ResearchNote } from '../../types/note';
 import type { TextChunk } from '../../types/chunk';
+import { normalizeNoteFilePath } from '../note-file-path';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 import { insertChunksBatch, deleteChunksByPrefix } from './chunks';
@@ -21,6 +22,7 @@ export function createNote(
   embeddings: (Float32Array | null)[],
 ): void {
   const timestamp = now();
+  const normalizedFilePath = normalizeNoteFilePath(note.id, note.filePath);
 
   writeTransaction(db, () => {
     db.prepare(`
@@ -30,7 +32,7 @@ export function createNote(
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       note.id,
-      note.filePath,
+      normalizedFilePath,
       note.title,
       JSON.stringify(note.linkedPaperIds),
       JSON.stringify(note.linkedConceptIds),

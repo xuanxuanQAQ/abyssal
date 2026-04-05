@@ -10,9 +10,7 @@
  *   excluded:    var(--danger)        red, semi-transparent
  *
  * Shows a warning icon when total coverage is 0 or < 3, and a
- * "Search Related" button when coverage is zero.
- *
- * TODO: Search button triggers discover pipeline (not wired yet).
+ * targeted discover action when coverage is zero.
  */
 
 import React from 'react';
@@ -27,6 +25,7 @@ interface ConceptCoverageBarProps {
   pending: number;
   excluded: number;
   total: number;
+  isDiscovering?: boolean;
   onSearchRelated?: (() => void) | undefined;
 }
 
@@ -46,6 +45,7 @@ export function ConceptCoverageBar({
   pending,
   excluded,
   total,
+  isDiscovering = false,
   onSearchRelated,
 }: ConceptCoverageBarProps) {
   const { t } = useTranslation();
@@ -211,6 +211,7 @@ export function ConceptCoverageBar({
         <button
           type="button"
           onClick={onSearchRelated}
+          disabled={isDiscovering}
           className="analysis-action-btn analysis-coverage-search-btn"
           style={{
             marginTop: 6,
@@ -220,10 +221,11 @@ export function ConceptCoverageBar({
             background: 'none',
             color: 'var(--accent-color)',
             fontSize: 'var(--text-xs)',
-            cursor: 'pointer',
+            cursor: isDiscovering ? 'default' : 'pointer',
+            opacity: isDiscovering ? 0.7 : 1,
           }}
         >
-          {t('analysis.coverage.searchRelated')}
+          {isDiscovering ? t('analysis.coverage.discovering') : t('analysis.coverage.triggerDiscover')}
         </button>
       )}
     </div>

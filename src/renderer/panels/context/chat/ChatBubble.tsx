@@ -22,10 +22,11 @@ import type { ChatMessage } from '../../../../shared-types/models';
 interface ChatBubbleProps {
   message: ChatMessage;
   onRetry?: ((messageId: string) => void) | undefined;
+  onClarificationSelect?: ((messageId: string, optionId: string) => void) | undefined;
   showAssistantLabel?: boolean;
 }
 
-function ChatBubbleInner({ message, onRetry, showAssistantLabel = false }: ChatBubbleProps) {
+function ChatBubbleInner({ message, onRetry, onClarificationSelect, showAssistantLabel = false }: ChatBubbleProps) {
   const { t } = useTranslation();
   const isUser = message.role === 'user';
   const displayContent = message.status === 'streaming'
@@ -129,6 +130,38 @@ function ChatBubbleInner({ message, onRetry, showAssistantLabel = false }: ChatB
           </div>
         )}
 
+        {message.clarification && onClarificationSelect && (
+          <div style={{ marginTop: 18, display: 'flex', flexWrap: 'wrap', gap: 8, fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+            {message.clarification.options.map((option) => {
+              const isSelected = message.clarification?.selectedOptionId === option.id;
+              const disabled = !!message.clarification?.submitting;
+              return (
+                <button
+                  key={option.id}
+                  onClick={() => onClarificationSelect(message.id, option.id)}
+                  disabled={disabled}
+                  style={{
+                    padding: '7px 12px',
+                    fontSize: 12,
+                    borderRadius: 999,
+                    border: isSelected
+                      ? '1px solid var(--accent-color)'
+                      : '1px solid var(--border-default)',
+                    background: isSelected
+                      ? 'color-mix(in srgb, var(--accent-color) 16%, var(--bg-base))'
+                      : 'var(--bg-base)',
+                    color: isSelected ? 'var(--accent-color)' : 'var(--text-secondary)',
+                    cursor: disabled ? 'default' : 'pointer',
+                    opacity: disabled && !isSelected ? 0.6 : 1,
+                  }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* 错误状态重试按钮 */}
         {message.status === 'error' && onRetry && (
           <div style={{ marginTop: 16 }}>
@@ -166,6 +199,7 @@ export const ChatBubble = React.memo(
     // 已完成消息完全静态化
     return prev.message.id === next.message.id
       && prev.message.content === next.message.content
+      && prev.message.clarification === next.message.clarification
       && prev.showAssistantLabel === next.showAssistantLabel;
   }
 );

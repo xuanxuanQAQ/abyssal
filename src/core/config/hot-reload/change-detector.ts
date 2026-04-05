@@ -39,15 +39,6 @@ const IMPACT_RULES: ImpactRule[] = [
     }),
   },
   {
-    pattern: 'project.mode',
-    analyze: () => ({
-      requiresMigration: false,
-      affectsExistingData: false,
-      autoMigrable: true,
-      description: 'Changes pipeline behavior (mode switch logic)',
-    }),
-  },
-  {
     pattern: 'rag.embeddingModel',
     analyze: () => ({
       requiresMigration: true,

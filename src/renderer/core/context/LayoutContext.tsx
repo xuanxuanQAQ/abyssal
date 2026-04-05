@@ -1,9 +1,11 @@
 /**
- * LayoutContext — 导航栏位置、默认面板宽度、动画开关
+ * LayoutContext — UI 动画偏好
  *
- * 持久化到 localStorage，低频变更。
+ * 主存储为 config 系统（appearance.animationEnabled），通过 IPC 读写。
+ * localStorage 仅作为启动快速加载缓存。
  *
  * v1.1: 设置 data-reduce-motion 属性并监听 prefers-reduced-motion。
+ * v1.2: 迁移到 config 系统，监听 push:settingsChanged。
  */
 
 import React, {
@@ -14,51 +16,68 @@ import React, {
   useEffect,
   type ReactNode,
 } from 'react';
-
-type NavRailPosition = 'left' | 'top';
+import { getAPI } from '../ipc/bridge';
 
 interface LayoutContextValue {
-  navRailPosition: NavRailPosition;
-  defaultContextPanelWidth: number;
   animationEnabled: boolean;
-  setNavRailPosition: (pos: NavRailPosition) => void;
-  setDefaultContextPanelWidth: (width: number) => void;
   setAnimationEnabled: (enabled: boolean) => void;
 }
 
 const STORAGE_KEY = 'abyssal-layout';
 
 interface StoredLayout {
-  navRailPosition: NavRailPosition;
-  defaultContextPanelWidth: number;
   animationEnabled: boolean;
 }
 
-function loadLayout(): StoredLayout {
+function loadLayoutFromStorage(): StoredLayout {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw) as StoredLayout;
   } catch {
     // ignore
   }
-  return {
-    navRailPosition: 'left',
-    defaultContextPanelWidth: 380,
-    animationEnabled: true,
-  };
+  return { animationEnabled: true };
 }
 
-function saveLayout(layout: StoredLayout): void {
+function saveLayoutToStorage(layout: StoredLayout): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
 }
 
 const LayoutContext = createContext<LayoutContextValue | null>(null);
 
 export function LayoutProvider({ children }: { children: ReactNode }) {
-  const [layout, setLayout] = useState<StoredLayout>(loadLayout);
+  const [layout, setLayout] = useState<StoredLayout>(loadLayoutFromStorage);
 
+  // 启动后从 config 系统加载真实值
   useEffect(() => {
-    saveLayout(layout);
+    getAPI().settings.getAll().then((data) => {
+      if (data?.appearance) {
+        const enabled = data.appearance.animationEnabled ?? true;
+        setLayout({ animationEnabled: enabled });
+        saveLayoutToStorage({ animationEnabled: enabled });
+      }
+    }).catch(() => {});
+  }, []);
+
+  // 监听 push:settingsChanged（AI 或其他来源修改了 appearance）
+  useEffect(() => {
+    const api = getAPI();
+    const unsub = api.on.settingsChanged((event: { section: string; keys: string[] }) => {
+      if (event.section !== 'appearance') return;
+      api.settings.getAll().then((data) => {
+        if (data?.appearance) {
+          const enabled = data.appearance.animationEnabled ?? true;
+          setLayout({ animationEnabled: enabled });
+          saveLayoutToStorage({ animationEnabled: enabled });
+        }
+      }).catch(() => {});
+    });
+    return unsub;
+  }, []);
+
+  // localStorage 缓存
+  useEffect(() => {
+    saveLayoutToStorage(layout);
   }, [layout]);
 
   // §10.3 data-reduce-motion 属性同步
@@ -76,31 +95,23 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     const handler = (e: MediaQueryListEvent) => {
       if (e.matches) {
         setLayout((l) => ({ ...l, animationEnabled: false }));
+        getAPI().settings.updateSection('appearance', { animationEnabled: false }).catch(() => {});
       }
     };
     // 初始检测
     if (mql.matches) {
       setLayout((l) => ({ ...l, animationEnabled: false }));
+      getAPI().settings.updateSection('appearance', { animationEnabled: false }).catch(() => {});
     }
     mql.addEventListener('change', handler);
     return () => mql.removeEventListener('change', handler);
   }, []);
 
-  const setNavRailPosition = useCallback(
-    (pos: NavRailPosition) =>
-      setLayout((l) => ({ ...l, navRailPosition: pos })),
-    []
-  );
-
-  const setDefaultContextPanelWidth = useCallback(
-    (width: number) =>
-      setLayout((l) => ({ ...l, defaultContextPanelWidth: width })),
-    []
-  );
-
   const setAnimationEnabled = useCallback(
-    (enabled: boolean) =>
-      setLayout((l) => ({ ...l, animationEnabled: enabled })),
+    (enabled: boolean) => {
+      setLayout((l) => ({ ...l, animationEnabled: enabled }));
+      getAPI().settings.updateSection('appearance', { animationEnabled: enabled }).catch(() => {});
+    },
     []
   );
 
@@ -108,8 +119,6 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     <LayoutContext.Provider
       value={{
         ...layout,
-        setNavRailPosition,
-        setDefaultContextPanelWidth,
         setAnimationEnabled,
       }}
     >

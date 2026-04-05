@@ -4,12 +4,13 @@
  * 三个可折叠区域：SmartGroups + TagTree + SearchHistory。
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { SmartGroups } from './SmartGroups';
 import { TagTree } from './TagTree';
 import { SearchHistory } from './SearchHistory';
+import { useLibrarySidebarSectionsPreference, type LibrarySidebarSectionsState } from '../hooks/useLibrarySidebarPreferences';
 import type { PaperCounts } from '../../../../shared-types/models';
 
 interface LibrarySidebarProps {
@@ -18,19 +19,19 @@ interface LibrarySidebarProps {
 
 function CollapsibleSection({
   title,
-  defaultOpen = true,
+  open,
+  onOpenChange,
   children,
 }: {
   title: string;
-  defaultOpen?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-
   return (
     <div className="library-sidebar-section">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => onOpenChange(!open)}
         className="library-sidebar-section-trigger"
         style={{
           display: 'flex',
@@ -59,6 +60,11 @@ function CollapsibleSection({
 
 export function LibrarySidebar({ counts }: LibrarySidebarProps) {
   const { t } = useTranslation();
+  const [sections, setSectionOpen] = useLibrarySidebarSectionsPreference();
+
+  const handleSectionOpenChange = (section: keyof LibrarySidebarSectionsState) => (open: boolean) => {
+    setSectionOpen(section, open);
+  };
 
   return (
     <nav
@@ -73,19 +79,31 @@ export function LibrarySidebar({ counts }: LibrarySidebarProps) {
         fontSize: 'var(--text-sm)',
       }}
     >
-      <CollapsibleSection title={t('library.sidebar.smartGroups')}>
+      <CollapsibleSection
+        title={t('library.sidebar.smartGroups')}
+        open={sections.smartGroups}
+        onOpenChange={handleSectionOpenChange('smartGroups')}
+      >
         <SmartGroups counts={counts} />
       </CollapsibleSection>
 
       <div className="library-sidebar-divider" style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
 
-      <CollapsibleSection title={t('library.sidebar.tags')}>
+      <CollapsibleSection
+        title={t('library.sidebar.tags')}
+        open={sections.tags}
+        onOpenChange={handleSectionOpenChange('tags')}
+      >
         <TagTree />
       </CollapsibleSection>
 
       <div className="library-sidebar-divider" style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 12px' }} />
 
-      <CollapsibleSection title={t('library.sidebar.searchHistory')} defaultOpen={false}>
+      <CollapsibleSection
+        title={t('library.sidebar.searchHistory')}
+        open={sections.searchHistory}
+        onOpenChange={handleSectionOpenChange('searchHistory')}
+      >
         <SearchHistory />
       </CollapsibleSection>
     </nav>

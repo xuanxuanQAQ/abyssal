@@ -163,7 +163,6 @@ export function ProjectSetupWizard({
 
   // Step 1: Project basics
   const [name, setName] = useState('');
-  const [mode, setMode] = useState<'anchored' | 'unanchored' | 'auto'>('auto');
 
   // Step 2: LLM
   const [llmProvider, setLlmProvider] = useState('anthropic');
@@ -202,7 +201,6 @@ export function ProjectSetupWizard({
     setCreating(false);
     setError(null);
     setName('');
-    setMode('auto');
     setLlmProvider('anthropic');
     setLlmModel('claude-sonnet-4-20250514');
     setLlmApiKey('');
@@ -376,7 +374,6 @@ export function ProjectSetupWizard({
     try {
       const config: ProjectSetupConfig = {
         name: name.trim(),
-        mode,
         llmProvider,
         llmModel,
         llmApiKey: llmApiKey.trim() || undefined,
@@ -409,7 +406,7 @@ export function ProjectSetupWizard({
       setCreating(false);
     }
   }, [
-    name, mode, llmProvider, llmModel, llmApiKey,
+    name, llmProvider, llmModel, llmApiKey,
     embeddingProvider, embeddingModel, effectiveEmbeddingApiKey,
     rerankerBackend, effectiveRerankerApiKey,
     outputLanguage, proxyEnabled, proxyUrl,
@@ -635,22 +632,6 @@ export function ProjectSetupWizard({
                     style={inputStyle}
                     autoFocus
                   />
-                </div>
-
-                <div style={fieldGroupStyle}>
-                  <label style={labelStyle}>{t('wizard.mode')}</label>
-                  <select
-                    value={mode}
-                    onChange={(e) => setMode(e.target.value as typeof mode)}
-                    style={selectStyle}
-                  >
-                    <option value="auto">{t('wizard.modeAuto')}</option>
-                    <option value="anchored">{t('wizard.modeAnchored')}</option>
-                    <option value="unanchored">{t('wizard.modeUnanchored')}</option>
-                  </select>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
-                    {t('wizard.modeHint')}
-                  </span>
                 </div>
               </div>
             )}

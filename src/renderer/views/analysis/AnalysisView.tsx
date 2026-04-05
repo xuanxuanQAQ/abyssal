@@ -36,7 +36,7 @@ export function AnalysisView() {
           display: 'flex',
           alignItems: 'stretch',
           height: 36,
-          borderBottom: '1px solid var(--border-color)',
+          borderBottom: '1px solid var(--border-subtle)',
           flexShrink: 0,
         }}
       >

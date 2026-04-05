@@ -47,4 +47,25 @@ describe('ChunkAccumulator', () => {
     expect(sessionB?.messages[0]?.content).toBe('other-session');
     expect(onFinalize).toHaveBeenCalledWith('assistant-a', 'Hello world', 'chat:a');
   });
+
+  it('strips a dangling colon when a tool call starts', () => {
+    const accumulator = new ChunkAccumulator();
+
+    useChatStore.getState().setActiveSessionKey('chat:tool');
+    useChatStore.getState().ensureSession('chat:tool');
+    useChatStore.getState().addMessage(makeAssistantMessage('assistant-tool'));
+
+    accumulator.bind('assistant-tool', 'chat:tool');
+    accumulator.pushChunk('让我先查询一下：');
+    accumulator.pushToolCall({
+      name: 'notes--query',
+      input: {},
+      status: 'running',
+    });
+    accumulator.finalize();
+
+    const session = useChatStore.getState().sessions['chat:tool'];
+    expect(session?.messages[0]?.content).toBe('让我先查询一下');
+    expect(session?.messages[0]?.toolCalls?.[0]?.name).toBe('notes--query');
+  });
 });

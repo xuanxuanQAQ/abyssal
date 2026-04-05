@@ -113,6 +113,7 @@ export interface AnalyzeServices {
   pushNotifier?: PushNotifier | null;
   modelRouterConfig?: { frontierModel: string; lowCostModel: string };
   outputLanguage?: string | undefined;
+  analysisConfig?: { autoSuggestConcepts?: boolean; autoSuggestThreshold?: number };
 }
 
 type AnalyzeSingleResult =
@@ -377,6 +378,8 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             force: false,
             outputLanguage: services.outputLanguage,
             conceptSnapshotHash,
+            autoSuggestConcepts: services.analysisConfig?.autoSuggestConcepts ?? true,
+            autoSuggestThreshold: services.analysisConfig?.autoSuggestThreshold ?? 3,
           });
 
           if (outcome.status === 'completed') {
@@ -459,6 +462,8 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
             force: true,
             outputLanguage: services.outputLanguage,
             conceptSnapshotHash,
+            autoSuggestConcepts: services.analysisConfig?.autoSuggestConcepts ?? true,
+            autoSuggestThreshold: services.analysisConfig?.autoSuggestThreshold ?? 3,
           });
 
           if (outcome.status === 'completed') {
@@ -509,6 +514,8 @@ async function analyzeSinglePaper(
     force: boolean;
     outputLanguage?: string | undefined;
     conceptSnapshotHash: string;
+    autoSuggestConcepts: boolean;
+    autoSuggestThreshold: number;
   },
 ): Promise<AnalyzeSingleResult> {
   const { dbProxy, llmClient, contextBudgetManager, logger, workspacePath, runner } = ctx;
@@ -616,8 +623,10 @@ async function analyzeSinglePaper(
       return { status: 'failed', stage: 'generic_analysis', message: 'Generic analysis parse failed' };
     }
 
-    // Write suggestions via aggregator
-    await writeSuggestions(genericResult.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger);
+    // Write suggestions via aggregator (guarded by autoSuggestConcepts config)
+    if (ctx.autoSuggestConcepts) {
+      await writeSuggestions(genericResult.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger, ctx.autoSuggestThreshold);
+    }
 
     writeAnalysisArtifact(
       {
@@ -1050,7 +1059,9 @@ async function analyzeSinglePaper(
   }
 
   // 10c: Concept suggestions via aggregator (§6.8) — outside transaction (non-critical)
-  await writeSuggestions(validated.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger);
+  if (ctx.autoSuggestConcepts) {
+    await writeSuggestions(validated.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger, ctx.autoSuggestThreshold);
+  }
 
   writeAnalysisArtifact(
     {
@@ -1201,6 +1212,7 @@ async function writeSuggestions(
   dbProxy: AnalyzeServices['dbProxy'],
   pushNotifier: PushNotifier | null,
   logger: Logger,
+  threshold: number = 3,
 ): Promise<void> {
   if (suggestions.length === 0) return;
 
@@ -1213,7 +1225,7 @@ async function writeSuggestions(
   // async wrappers around sync DatabaseService — safe to call with `as any`.
   if (dbProxy.getSuggestedConceptByTerm) {
     try {
-      const result = await aggregateSuggestions(suggestions, paperId, dbProxy as any, pushNotifier);
+      const result = await aggregateSuggestions(suggestions, paperId, dbProxy as any, pushNotifier, threshold);
       logger.debug(`[analyze] Paper ${paperId}: suggestion aggregation done`, {
         new: result.newSuggestions,
         updated: result.updatedSuggestions,
@@ -1269,9 +1281,11 @@ function resolveStageModel(
  * Used to detect if concepts were modified during a batch analysis run.
  */
 function computeConceptHash(concepts: ConceptForSubset[]): string {
-  // Sort by ID for determinism, then hash IDs + definition content + maturity
+  // Sort by ID for determinism, then hash all fields used by subset selection and prompt injection
   const sorted = [...concepts].sort((a, b) => a.id.localeCompare(b.id));
-  const payload = sorted.map((c) => `${c.id}:${c.maturity}:${c.definition}`).join('|');
+  const payload = sorted.map((c) =>
+    `${c.id}:${c.maturity}:${c.definition}:${c.nameEn}:${c.nameZh}:${(c.searchKeywords ?? []).join(',')}:${c.parentId ?? ''}`,
+  ).join('|');
   // Simple djb2 hash — sufficient for staleness detection, not crypto
   let hash = 5381;
   for (let i = 0; i < payload.length; i++) {

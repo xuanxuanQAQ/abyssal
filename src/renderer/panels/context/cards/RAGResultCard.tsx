@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAppStore } from '../../../core/store';
+import { requestCitationInsert } from '../../../views/writing/shared/citationActions';
 import type { RAGResult } from '../../../../shared-types/models';
 import type { RetrievalPath } from '../../../../shared-types/enums';
 
@@ -202,9 +203,13 @@ export const RAGResultCard = React.memo(function RAGResultCard({ result, section
   const navigateTo = useAppStore((s) => s.navigateTo);
 
   const handleInsert = () => {
-    // TODO: integrate with useEditorStore.insertAtCursor (Sub-Doc 7 Writing)
+    const success = requestCitationInsert(result.paperId);
     setInserted(true);
-    toast.success(t('context.rag.inserted', { section: sectionTitle ?? '' }));
+    if (success) {
+      toast.success(t('context.rag.inserted', { section: sectionTitle ?? '' }));
+    } else {
+      toast.error(t('context.rag.noActiveEditor', 'No active editor to insert citation'));
+    }
   };
 
   const handleOpenInReader = () => {

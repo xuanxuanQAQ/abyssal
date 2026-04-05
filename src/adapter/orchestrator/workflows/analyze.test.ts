@@ -177,6 +177,20 @@ describe('analyze workflow', () => {
     );
   });
 
+  it('does not persist suggested concepts when autoSuggestConcepts is disabled', async () => {
+    const services = makeServices({
+      frameworkState: 'zero_concepts',
+      analysisConfig: { autoSuggestConcepts: false },
+    });
+
+    const workflow = createAnalyzeWorkflow(services);
+    const ctx = makeRunnerContext();
+
+    await workflow({ paperIds: ['a1b2c3d4e5f6'] }, ctx);
+
+    expect(services.dbProxy.addSuggestedConcept).not.toHaveBeenCalled();
+  });
+
   it('single paper failure does not abort workflow', async () => {
     const services = makeServices();
     let callCount = 0;
@@ -343,6 +357,78 @@ describe('analyze workflow', () => {
     );
     // mapPaperConcept should NOT be called separately when completeAnalysis succeeds
     expect(services.dbProxy.mapPaperConcept).not.toHaveBeenCalled();
+  });
+
+  it('flags concept mappings as stale when keywords change after the batch snapshot', async () => {
+    const services = makeServices({
+      frameworkState: 'framework_forming',
+    });
+    (services.dbProxy.getAllConcepts as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        {
+          id: 'c1',
+          nameEn: 'Social Presence',
+          nameZh: '社会临场感',
+          definition: 'Shared sense of being with others',
+          maturity: 'working',
+          searchKeywords: ['presence'],
+          parentId: null,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'c1',
+          nameEn: 'Social Presence',
+          nameZh: '社会临场感',
+          definition: 'Shared sense of being with others',
+          maturity: 'working',
+          searchKeywords: ['presence', 'co-presence'],
+          parentId: null,
+        },
+      ]);
+    (services.dbProxy.getPaper as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'a1b2c3d4e5f6',
+      title: 'Test Paper',
+      abstract: 'Test abstract',
+      fulltextStatus: 'available',
+      analysisStatus: 'not_started',
+      relevance: 'high',
+    });
+    (services.llmClient.complete as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: JSON.stringify({
+        summary: 'Summary',
+        analysis_markdown: 'Body.',
+        concept_mappings: [
+          {
+            concept_id: 'c1',
+            relation: 'related',
+            confidence: 0.8,
+            evidence: {
+              en: 'evidence',
+              original: 'evidence',
+              original_lang: 'en',
+              chunk_id: null,
+              page: null,
+              annotation_id: null,
+            },
+          },
+        ],
+        suggested_new_concepts: [],
+      }),
+      usage: { inputTokens: 100, outputTokens: 50 },
+      reasoning: null,
+    });
+
+    const workflow = createAnalyzeWorkflow(services);
+    const ctx = makeRunnerContext();
+
+    await workflow({ paperIds: ['a1b2c3d4e5f6'] }, ctx);
+
+    expect(ctx.reportQualityWarning).toHaveBeenCalledWith(
+      'a1b2c3d4e5f6',
+      'concept_stale',
+      expect.stringContaining('Concept framework was modified during batch analysis'),
+    );
   });
 
   it('passes the routed frontier model into full analysis LLM calls', async () => {

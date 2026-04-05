@@ -7,12 +7,13 @@
  */
 
 import { dialog, app } from 'electron';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
 import { acquireLock } from '../lock';
 import { ConfigLoader } from '../../core/infra/config';
-import { loadGlobalConfig } from '../../core/infra/global-config';
+import { loadGlobalConfig, saveGlobalConfig } from '../../core/infra/global-config';
 import { createDbProxy } from '../../db-process/db-proxy';
 import {
   WorkspaceManager,
@@ -20,6 +21,162 @@ import {
   isWorkspace,
   getWorkspacePaths,
 } from '../../core/workspace';
+import { EMBEDDING_MODEL_REGISTRY, type EmbeddingProvider } from '../../core/config/config-schema';
+import type { GlobalConfig } from '../../core/types/config';
+import type { ProjectSetupConfig } from '../../shared-types/models';
+
+const PROVIDER_API_KEY_FIELDS: Record<string, keyof GlobalConfig['apiKeys']> = {
+  anthropic: 'anthropicApiKey',
+  openai: 'openaiApiKey',
+  gemini: 'geminiApiKey',
+  deepseek: 'deepseekApiKey',
+  siliconflow: 'siliconflowApiKey',
+  cohere: 'cohereApiKey',
+  jina: 'jinaApiKey',
+  tavily: 'webSearchApiKey',
+  serpapi: 'webSearchApiKey',
+  bing: 'webSearchApiKey',
+};
+
+const SOURCE_PRESETS: Record<'china' | 'overseas', string[]> = {
+  china: ['cnki', 'wanfang', 'unpaywall', 'arxiv', 'pmc', 'scihub'],
+  overseas: ['unpaywall', 'arxiv', 'pmc'],
+};
+
+function toTomlValue(val: unknown): string {
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  return JSON.stringify(val);
+}
+
+async function saveWorkspaceSections(
+  workspaceRoot: string,
+  patches: Record<string, Record<string, unknown>>,
+): Promise<void> {
+  const configDir = path.join(workspaceRoot, '.abyssal');
+  const configPath = path.join(configDir, 'config.toml');
+
+  let raw: Record<string, unknown> = {};
+  try {
+    const toml = require('smol-toml');
+    raw = toml.parse(await fsp.readFile(configPath, 'utf-8')) as Record<string, unknown>;
+  } catch {}
+
+  for (const [section, patch] of Object.entries(patches)) {
+    const existing = (raw[section] ?? {}) as Record<string, unknown>;
+    raw[section] = { ...existing, ...patch };
+  }
+
+  const lines: string[] = ['# Abyssal workspace config (auto-generated)', ''];
+  for (const [sectionName, sectionValue] of Object.entries(raw)) {
+    if (!sectionValue || typeof sectionValue !== 'object' || Array.isArray(sectionValue)) continue;
+    lines.push(`[${sectionName}]`);
+    for (const [key, val] of Object.entries(sectionValue as Record<string, unknown>)) {
+      if (val === null || val === undefined) continue;
+      if (typeof val === 'object' && !Array.isArray(val)) {
+        lines.push('');
+        lines.push(`[${sectionName}.${key}]`);
+        for (const [subKey, subValue] of Object.entries(val as Record<string, unknown>)) {
+          if (subValue === null || subValue === undefined) continue;
+          lines.push(`${subKey} = ${toTomlValue(subValue)}`);
+        }
+      } else {
+        lines.push(`${key} = ${toTomlValue(val)}`);
+      }
+    }
+    lines.push('');
+  }
+
+  await fsp.mkdir(configDir, { recursive: true });
+  await fsp.writeFile(configPath, lines.join('\n'), 'utf-8');
+}
+
+function applyApiKey(
+  patch: Partial<GlobalConfig['apiKeys']>,
+  provider: string | undefined,
+  apiKey: string | undefined,
+): void {
+  const trimmed = apiKey?.trim();
+  if (!provider || !trimmed) return;
+  const field = PROVIDER_API_KEY_FIELDS[provider];
+  if (field) {
+    patch[field] = trimmed;
+  }
+}
+
+function inferEnabledSources(config: ProjectSetupConfig): string[] | undefined {
+  if (config.enabledSources && config.enabledSources.length > 0) {
+    return config.enabledSources;
+  }
+  if (config.sourcePreset === 'china' || config.sourcePreset === 'overseas') {
+    return SOURCE_PRESETS[config.sourcePreset];
+  }
+  return undefined;
+}
+
+async function persistProjectSetupConfig(
+  ctx: AppContext,
+  workspaceRoot: string,
+  config: ProjectSetupConfig,
+): Promise<void> {
+  const embeddingModelSpec = EMBEDDING_MODEL_REGISTRY[config.embeddingProvider as EmbeddingProvider]
+    ?.find((entry) => entry.model === config.embeddingModel);
+  const enabledSources = inferEnabledSources(config);
+
+  const apiKeysPatch: Partial<GlobalConfig['apiKeys']> = {
+    ...(config.semanticScholarApiKey?.trim() ? { semanticScholarApiKey: config.semanticScholarApiKey.trim() } : {}),
+    ...(config.webSearchApiKey?.trim() ? { webSearchApiKey: config.webSearchApiKey.trim() } : {}),
+  };
+
+  applyApiKey(apiKeysPatch, config.llmProvider, config.llmApiKey);
+  applyApiKey(apiKeysPatch, config.embeddingProvider, config.embeddingApiKey);
+  applyApiKey(apiKeysPatch, config.rerankerBackend, config.rerankerApiKey);
+  applyApiKey(apiKeysPatch, config.webSearchBackend, config.webSearchApiKey);
+
+  saveGlobalConfig(app.getPath('userData'), {
+    ...(Object.keys(apiKeysPatch).length > 0 ? { apiKeys: apiKeysPatch } : {}),
+    llm: {
+      defaultProvider: config.llmProvider,
+      defaultModel: config.llmModel,
+    } as any,
+    rag: {
+      embeddingProvider: config.embeddingProvider,
+      embeddingModel: config.embeddingModel,
+      ...(embeddingModelSpec ? { embeddingDimension: embeddingModelSpec.dimension } : {}),
+      rerankerBackend: config.rerankerBackend,
+    } as any,
+    acquire: {
+      ...(enabledSources ? { enabledSources } : {}),
+      ...(config.proxyEnabled !== undefined ? { proxyEnabled: config.proxyEnabled } : {}),
+      ...(config.proxyUrl ? { proxyUrl: config.proxyUrl } : {}),
+      ...(enabledSources ? {
+        enableScihub: enabledSources.includes('scihub'),
+        enableCnki: enabledSources.includes('cnki'),
+        enableWanfang: enabledSources.includes('wanfang'),
+      } : {}),
+    } as any,
+    webSearch: {
+      enabled: config.webSearchEnabled ?? false,
+      backend: config.webSearchBackend ?? 'tavily',
+    } as any,
+  } as Partial<GlobalConfig>);
+
+  await saveWorkspaceSections(workspaceRoot, {
+    project: {
+      name: config.name,
+    },
+    language: {
+      defaultOutputLanguage: config.outputLanguage,
+    },
+  });
+
+  try {
+    const globalConfig = loadGlobalConfig(app.getPath('userData'));
+    const newConfig = ConfigLoader.loadFromWorkspace(ctx.workspaceRoot, globalConfig);
+    ctx.configProvider.update(newConfig);
+  } catch {
+    // Creating a project can happen before an active workspace exists.
+  }
+}
 
 export function registerWorkspaceHandlers(ctx: AppContext): void {
   const { logger } = ctx;
@@ -182,25 +339,40 @@ export function registerWorkspaceHandlers(ctx: AppContext): void {
   // ── app:createProject ──
 
   typedHandler('app:createProject', logger, async (_e, config) => {
-    const cfg = (config as unknown as Record<string, unknown>) ?? {};
-    const projectName = (cfg['name'] as string) ?? 'New Project';
+    const defaultConfig: ProjectSetupConfig = {
+      name: 'New Project',
+      llmProvider: 'anthropic',
+      llmModel: 'claude-sonnet-4-20250514',
+      embeddingProvider: 'openai',
+      embeddingModel: 'text-embedding-3-small',
+      rerankerBackend: 'cohere',
+      outputLanguage: 'zh-CN',
+    };
+    const cfg: ProjectSetupConfig = (config as ProjectSetupConfig | undefined) ?? defaultConfig;
+    const projectName = cfg.name || 'New Project';
 
-    const result = await dialog.showOpenDialog({
-      title: `Select location for "${projectName}"`,
-      properties: ['openDirectory', 'createDirectory'],
-      buttonLabel: 'Create Here',
-    });
+    const baseDir = cfg.workspacePath ?? await (async () => {
+      const result = await dialog.showOpenDialog({
+        title: `Select location for "${projectName}"`,
+        properties: ['openDirectory', 'createDirectory'],
+        buttonLabel: 'Create Here',
+      });
 
-    if (result.canceled || result.filePaths.length === 0) {
-      throw new Error('User cancelled directory selection');
-    }
+      if (result.canceled || result.filePaths.length === 0) {
+        throw new Error('User cancelled directory selection');
+      }
 
-    const rootDir = path.join(result.filePaths[0]!, projectName);
+      return result.filePaths[0]!;
+    })();
+
+    const rootDir = path.join(baseDir, projectName);
     const scaffoldResult = scaffoldWorkspace({
       rootDir,
       name: projectName,
-      description: (cfg['description'] as string) ?? '',
+      description: '',
     });
+
+    await persistProjectSetupConfig(ctx, rootDir, cfg);
 
     const mgr = new WorkspaceManager(app.getPath('userData'));
     mgr.touchRecent(rootDir, projectName);

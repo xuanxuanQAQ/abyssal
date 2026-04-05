@@ -42,6 +42,12 @@ describe('preload contract', () => {
     expect(typeof api.on.copilotSessionChanged).toBe('function');
   });
 
+  it('exposes article deletion through the renderer bridge', async () => {
+    const api = await loadApi();
+
+    expect(typeof api.db.articles.delete).toBe('function');
+  });
+
   it('throws enriched errors for envelope failures', async () => {
     invokeMock.mockResolvedValue({
       ok: false,

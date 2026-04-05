@@ -182,13 +182,25 @@ async function handleDetect(msg: DlaDetectRequest): Promise<void> {
 
 let mupdfModule: any = null;
 
+type MupdfImporters = {
+  primary: () => Promise<any>;
+  fallback: (specifier: string) => Promise<any>;
+};
+
+const defaultMupdfImporters: MupdfImporters = {
+  primary: async () => import('mupdf'),
+  fallback: async (specifier: string) => import(/* @vite-ignore */ specifier),
+};
+
+let mupdfImporters: MupdfImporters = defaultMupdfImporters;
+
 async function loadMupdf(): Promise<any> {
   if (!mupdfModule) {
     try {
-      mupdfModule = await import('mupdf');
+      mupdfModule = await mupdfImporters.primary();
     } catch {
       const fallbackSpecifier = 'mupdf/dist/mupdf.js';
-      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
+      mupdfModule = await mupdfImporters.fallback(fallbackSpecifier);
     }
   }
   return mupdfModule;
@@ -252,3 +264,17 @@ process.on('SIGTERM', async () => {
   await destroySession();
   process.exit(0);
 });
+
+export const __testing__ = {
+  setMupdfImporters(overrides: Partial<MupdfImporters>): void {
+    mupdfImporters = {
+      ...mupdfImporters,
+      ...overrides,
+    };
+    mupdfModule = null;
+  },
+  resetMupdfImporters(): void {
+    mupdfImporters = defaultMupdfImporters;
+    mupdfModule = null;
+  },
+};

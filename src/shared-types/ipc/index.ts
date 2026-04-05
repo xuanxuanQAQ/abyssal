@@ -97,45 +97,21 @@ export interface ChatContext {
   contextKey: string;
   /** Chat conversation key used to isolate backend chat context/history */
   conversationKey?: string;
+  selectedArticleId?: string;
+  selectedDraftId?: string;
   selectedPaperId?: string;
   /** 多论文上下文（Library 多选时） */
   selectedPaperIds?: string[];
   selectedConceptId?: string;
   selectedSectionId?: string;
+  editorSelectionText?: string;
+  editorSelectionFrom?: number;
+  editorSelectionTo?: number;
   pdfPage?: number;
   /** 用户在 PDF 阅读器中选取的引用文本 */
   selectedQuote?: string;
   /** DLA 智能选取的图片截图（figure/table/formula） */
   imageClips?: ChatImageClip[];
-}
-
-/**
- * Agent stream chunk — canonical type for all agent/chat streaming events.
- *
- * Discriminated union on `type`:
- * - text_delta: incremental text content
- * - tool_use_start: tool invocation started
- * - tool_use_result: tool returned result
- * - done: conversation turn complete
- * - error: agent error
- */
-export type AgentStreamEvent =
-  | { type: 'text_delta'; conversationId: string; delta: string }
-  | { type: 'tool_use_start'; conversationId: string; toolName: string; args: Record<string, unknown> }
-  | { type: 'tool_use_result'; conversationId: string; toolName: string; result: string }
-  | { type: 'done'; conversationId: string; fullText: string; usage: { inputTokens: number; outputTokens: number } }
-  | { type: 'error'; conversationId: string; code: string; message: string };
-
-/** @deprecated Use AgentStreamEvent instead */
-export interface ChatResponseEvent {
-  sessionId: string;
-  chunk: string;
-  isLast: boolean;
-  toolCalls?: Array<{
-    name: string;
-    input: Record<string, unknown>;
-    output?: string;
-  }>;
 }
 
 export interface DBChangeEvent {

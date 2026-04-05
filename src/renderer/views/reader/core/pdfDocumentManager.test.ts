@@ -17,11 +17,44 @@ vi.mock('./pdfWorkerManager', () => ({
 
 import { PDFDocumentManager, filePathToPdfJsUrl } from './pdfDocumentManager';
 
+class MockDOMMatrix {
+  multiplySelf() {
+    return this;
+  }
+  preMultiplySelf() {
+    return this;
+  }
+  translateSelf() {
+    return this;
+  }
+  scaleSelf() {
+    return this;
+  }
+  rotateSelf() {
+    return this;
+  }
+  invertSelf() {
+    return this;
+  }
+}
+
+if (!('DOMMatrix' in globalThis)) {
+  Object.assign(globalThis, { DOMMatrix: MockDOMMatrix });
+}
+
 function makeLoadingTask(doc: { numPages: number; destroy: () => Promise<void> }) {
   return {
     promise: Promise.resolve(doc),
     destroy: vi.fn(async () => {}),
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 describe('filePathToPdfJsUrl', () => {
@@ -91,5 +124,34 @@ describe('PDFDocumentManager', () => {
     expect(doc.destroy).toHaveBeenCalledTimes(1);
     expect(manager.getDocument()).toBeNull();
     expect((manager as unknown as { activeRenderTasks: Set<unknown> }).activeRenderTasks.size).toBe(0);
+  });
+
+  it('ignores late results from an older load after a newer document has taken over', async () => {
+    const firstDoc = { numPages: 2, destroy: vi.fn(async () => {}) };
+    const secondDoc = { numPages: 5, destroy: vi.fn(async () => {}) };
+    const firstDeferred = deferred<typeof firstDoc>();
+    const firstLoadingTask = {
+      promise: firstDeferred.promise,
+      destroy: vi.fn(async () => {}),
+    };
+
+    getDocument.mockReturnValueOnce(firstLoadingTask);
+
+    const firstLoad = manager.loadDocument({ kind: 'file', path: 'C:\\papers\\first.pdf' });
+
+    await vi.waitFor(() => {
+      expect(getDocument).toHaveBeenCalledTimes(1);
+    });
+
+    (manager as unknown as { loadGeneration: number }).loadGeneration = 2;
+    (manager as unknown as { document: typeof secondDoc }).document = secondDoc;
+    (manager as unknown as { loadingTask: null }).loadingTask = null;
+
+    firstDeferred.resolve(firstDoc);
+    await expect(firstLoad).resolves.toBe(firstDoc);
+
+    expect(firstDoc.destroy).toHaveBeenCalledTimes(1);
+    expect(manager.getDocument()).toBe(secondDoc);
+    expect(manager.getNumPages()).toBe(5);
   });
 });

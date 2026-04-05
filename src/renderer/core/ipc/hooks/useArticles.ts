@@ -152,6 +152,20 @@ export function useUpdateArticle() {
   });
 }
 
+export function useDeleteArticle() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (articleId: string) => getAPI().db.articles.delete(articleId),
+    onSuccess: (_data, articleId) => {
+      queryClient.invalidateQueries({ queryKey: ['articles', 'outlines'] });
+      queryClient.removeQueries({ queryKey: ['articles', 'outline', articleId] });
+      queryClient.invalidateQueries({ queryKey: ['drafts'] });
+    },
+    onError: (err) => handleError(err),
+  });
+}
+
 // ── 节 CRUD ──
 
 export function useCreateSection() {

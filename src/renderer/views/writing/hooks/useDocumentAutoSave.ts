@@ -31,12 +31,22 @@ export function useDocumentAutoSave({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const knownHashRef = useRef<string>('');
   const savingRef = useRef(false);
+  /** Snapshot of the latest doc JSON — updated on every scheduleAutoSave so
+   *  we can still persist even after the editor is destroyed during unmount. */
+  const latestDocJsonRef = useRef<JSONContent | null>(null);
 
   const flushSave = useCallback(async () => {
-    if (!editor || !draftId || savingRef.current) return;
-    if (editor.isDestroyed) return;
+    if (!draftId || savingRef.current) return;
 
-    const docJson = editor.getJSON() as JSONContent;
+    // Prefer live editor state; fall back to the snapshot taken at schedule time.
+    let docJson: JSONContent | null = null;
+    if (editor && !editor.isDestroyed) {
+      docJson = editor.getJSON() as JSONContent;
+    } else {
+      docJson = latestDocJsonRef.current;
+    }
+
+    if (!docJson) return;
     const nextHash = contentHash(docJson);
     if (knownHashRef.current === nextHash) {
       useEditorStore.getState().setUnsavedChanges(false);
@@ -49,6 +59,7 @@ export function useDocumentAutoSave({
     try {
       await getAPI().db.drafts.saveDocument(draftId, serialized, 'auto');
       knownHashRef.current = nextHash;
+      latestDocJsonRef.current = null;
       void queryClient.invalidateQueries({ queryKey: ['drafts', 'outline', draftId] });
       void queryClient.invalidateQueries({ queryKey: ['drafts', 'versions', draftId] });
       void queryClient.invalidateQueries({ queryKey: ['drafts'] });
@@ -64,6 +75,11 @@ export function useDocumentAutoSave({
   const scheduleAutoSave = useCallback(() => {
     useEditorStore.getState().setUnsavedChanges(true);
 
+    // Snapshot while the editor is still alive so flushSave can use it on unmount.
+    if (editor && !editor.isDestroyed) {
+      latestDocJsonRef.current = editor.getJSON() as JSONContent;
+    }
+
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
     }
@@ -72,7 +88,7 @@ export function useDocumentAutoSave({
       timerRef.current = null;
       flushSave();
     }, debounceMs);
-  }, [flushSave, debounceMs]);
+  }, [editor, flushSave, debounceMs]);
 
   // Flush on unmount
   useEffect(() => {
@@ -87,6 +103,7 @@ export function useDocumentAutoSave({
 
   /** Reset known hash when loading a new document */
   const resetHashes = useCallback((documentJson: string | null) => {
+    latestDocJsonRef.current = null;
     if (!documentJson) {
       knownHashRef.current = '';
       return;

@@ -7,13 +7,11 @@
  * <AbyssalQueryProvider>
  *   <ThemeProvider>
  *     <LayoutProvider>
- *       <KeybindingProvider>
- *         <AppErrorBoundary>
- *           <PipelineListener />
- *           <Toaster />
- *           <MainLayout />    ← 包含 TitleBar, NavRail, MainStage, ContextPanel, StatusBar
- *         </AppErrorBoundary>
- *       </KeybindingProvider>
+ *       <AppErrorBoundary>
+ *         <PipelineListener />
+ *         <Toaster />
+ *         <MainLayout />    ← 包含 TitleBar, NavRail, MainStage, ContextPanel, StatusBar
+ *       </AppErrorBoundary>
  *     </LayoutProvider>
  *   </ThemeProvider>
  * </AbyssalQueryProvider>
@@ -30,7 +28,6 @@ import { PipelineListener } from './PipelineListener';
 import { AICommandListener } from './AICommandListener';
 import { ThemeProvider } from '../core/context/ThemeContext';
 import { LayoutProvider } from '../core/context/LayoutContext';
-import { KeybindingProvider } from '../core/context/KeybindingContext';
 import { MainLayout } from './shell/MainLayout';
 import { MemoQuickInput } from '../views/notes/memo/MemoQuickInput';
 import { useAppStore } from '../core/store';
@@ -61,11 +58,9 @@ export function App() {
       <AbyssalQueryProvider>
         <ThemeProvider>
           <LayoutProvider>
-            <KeybindingProvider>
-              <AppErrorBoundary>
-                <AppShell />
-              </AppErrorBoundary>
-            </KeybindingProvider>
+            <AppErrorBoundary>
+              <AppShell />
+            </AppErrorBoundary>
           </LayoutProvider>
         </ThemeProvider>
       </AbyssalQueryProvider>

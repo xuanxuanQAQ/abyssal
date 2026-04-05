@@ -122,10 +122,12 @@ async function generateSection(
   let followingSections: Array<{ title: string; seq: number }> = [];
   let currentDraftContent = '';
   let editedParagraphs: number[] = [];
+  let routeWritingStyle: string | null = null;
 
   if (draftId) {
     const draft = await dbProxy.getDraft(draftId);
     if (!draft) throw new Error(`Draft not found: ${draftId}`);
+    routeWritingStyle = (draft['writingStyle'] as string ?? draft['writing_style'] as string) ?? null;
 
     articleId = (draft['articleId'] as string) ?? (draft['article_id'] as string) ?? '';
     article = await dbProxy.getArticle(articleId);
@@ -356,7 +358,8 @@ async function generateSection(
   // ══ Step 6: Prompt assembly ══
   runner.reportProgress({ currentStage: 'prompting' });
 
-  const style = (article['style'] as string) ?? 'formal_paper';
+  // effectiveStyle: route (draft) style → article default style → system default
+  const style = routeWritingStyle ?? (article['style'] as string) ?? 'formal_paper';
   const systemPrompt = buildArticleSystemPrompt(style, current, precedingBlock, followingSections);
 
   // ══ Step 7: Paragraph protection injection (§4.4) ══

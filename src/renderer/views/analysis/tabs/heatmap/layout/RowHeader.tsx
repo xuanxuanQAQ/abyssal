@@ -8,7 +8,7 @@
  * Hovered row gets var(--bg-hover) background.
  */
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import {
   ROW_HEADER_WIDTH,
   CELL_HEIGHT,
@@ -41,6 +41,7 @@ interface RowHeaderProps {
   scrollTop: number;
   hoveredRow: number | null;
   rowOffsets: number[];
+  effectiveWidth?: number;
 }
 
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
@@ -59,30 +60,15 @@ export const RowHeader = React.memo(function RowHeader({
   scrollTop,
   hoveredRow,
   rowOffsets,
+  effectiveWidth,
 }: RowHeaderProps) {
+  const headerWidth = effectiveWidth ?? ROW_HEADER_WIDTH;
   const handleToggle = useCallback(
     (groupId: string) => {
       onToggleGroup(groupId);
     },
     [onToggleGroup],
   );
-
-  // Build a map from concept index to group membership for group-header rendering
-  const groupStartIndices = useMemo(() => {
-    const result = new Map<number, ConceptGroup>();
-    let idx = 0;
-    for (const group of groups) {
-      if (!collapsedGroups.has(group.id)) {
-        result.set(idx, group);
-        idx += group.conceptIds.length;
-      } else {
-        result.set(idx, group);
-        // collapsed: only the header row counts, concepts are hidden
-        idx += 0;
-      }
-    }
-    return result;
-  }, [groups, collapsedGroups]);
 
   // Total height for the inner container
   const totalHeight =
@@ -97,7 +83,7 @@ export const RowHeader = React.memo(function RowHeader({
         left: 0,
         zIndex: 2,
         overflow: 'hidden',
-        width: ROW_HEADER_WIDTH,
+        width: headerWidth,
         backgroundColor: 'var(--bg-surface)',
         borderRight: '1px solid var(--border-subtle)',
       }}
@@ -105,7 +91,7 @@ export const RowHeader = React.memo(function RowHeader({
       <div
         style={{
           position: 'relative',
-          width: ROW_HEADER_WIDTH,
+          width: headerWidth,
           height: totalHeight,
           transform: `translateY(${-scrollTop}px)`,
           willChange: 'transform',
@@ -113,6 +99,8 @@ export const RowHeader = React.memo(function RowHeader({
       >
         {/* Group headers */}
         {groups.map((group) => {
+          if (group.conceptIds.length <= 1) return null;
+
           const firstConceptIdx = concepts.findIndex(
             (c) => c.id === group.conceptIds[0],
           );
@@ -130,7 +118,7 @@ export const RowHeader = React.memo(function RowHeader({
                 position: 'absolute',
                 top: Math.max(0, yOffset),
                 left: 0,
-                width: ROW_HEADER_WIDTH,
+                width: headerWidth,
                 height: CONCEPT_GROUP_GAP > 0 ? CONCEPT_GROUP_GAP + 4 : 20,
                 display: 'flex',
                 alignItems: 'center',
@@ -179,7 +167,7 @@ export const RowHeader = React.memo(function RowHeader({
                 position: 'absolute',
                 top: yOffset,
                 left: 0,
-                width: ROW_HEADER_WIDTH,
+                width: headerWidth,
                 height: CELL_HEIGHT,
                 display: 'flex',
                 alignItems: 'center',
@@ -215,5 +203,6 @@ export const RowHeader = React.memo(function RowHeader({
   prev.hoveredRow === next.hoveredRow &&
   prev.rowOffsets === next.rowOffsets &&
   prev.onToggleGroup === next.onToggleGroup &&
+  prev.effectiveWidth === next.effectiveWidth &&
   setsEqual(prev.collapsedGroups, next.collapsedGroups),
 );

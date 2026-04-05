@@ -13,6 +13,28 @@
  */
 
 import type { LlmConfig, ApiKeysConfig } from '../../core/types/config';
+import { normalizeWorkflowOverrideKey } from '../../core/config/workflow-override-keys';
+
+const LEGACY_WORKFLOW_OVERRIDE_KEYS: Record<string, string[]> = {
+  discover: ['discovery'],
+  analyze: ['analysis'],
+  article: ['generate'],
+};
+
+function lookupWorkflowOverride(
+  overrides: LlmConfig['workflowOverrides'],
+  workflowKey: string,
+) {
+  const normalizedKey = normalizeWorkflowOverrideKey(workflowKey);
+  const candidates = [workflowKey, normalizedKey, ...(LEGACY_WORKFLOW_OVERRIDE_KEYS[normalizedKey] ?? [])];
+
+  for (const candidate of candidates) {
+    const override = overrides[candidate];
+    if (override) return override;
+  }
+
+  return null;
+}
 
 // ─── Types ───
 
@@ -106,12 +128,12 @@ export class ModelRouter {
 
     if (workflowId) {
       // 1. Exact match in config overrides
-      const exact = llmConfig.workflowOverrides[workflowId];
+      const exact = lookupWorkflowOverride(llmConfig.workflowOverrides, workflowId);
       if (exact) return { provider: exact.provider, model: exact.model };
 
       // 2. Prefix match
       const prefix = workflowId.split('.')[0]!;
-      const prefixMatch = llmConfig.workflowOverrides[prefix];
+      const prefixMatch = lookupWorkflowOverride(llmConfig.workflowOverrides, prefix);
       if (prefixMatch) return { provider: prefixMatch.provider, model: prefixMatch.model };
     }
 

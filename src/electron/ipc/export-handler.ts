@@ -14,6 +14,8 @@ import type { AppContext } from '../app-context';
 import type { ExportFormat, CitationStyle } from '../../shared-types/enums';
 import type { ExportProgress, FullDocumentSection } from '../../shared-types/models';
 import { buildDocumentProjection, parseArticleDocument, serializeArticleDocument } from '../../shared/writing/documentOutline';
+import type { PaperId } from '../../core/types/common';
+import type { PaperMetadata } from '../../core/types/paper';
 
 interface ExportOptions {
   articleId: string;
@@ -106,6 +108,7 @@ export async function exportArticle(
 
   // Load paper metadata for cited papers
   const papers = new Map<string, PaperInfo>();
+  const paperMetadataMap = new Map<PaperId, PaperMetadata>();
   for (const pid of citationIds) {
     try {
       const paper = (await ctx.dbProxy.getPaper(pid as any)) as Record<string, unknown> | null;
@@ -116,11 +119,15 @@ export async function exportArticle(
           authors: parsePaperAuthors(paper['authors']),
           year: (paper['year'] as number) ?? 0,
         });
+        // Also store full metadata for bibliography module
+        paperMetadataMap.set(pid as PaperId, paper as unknown as PaperMetadata);
       }
     } catch {
       // Paper not found — will show placeholder
     }
   }
+
+  const useCslEngine = !!(ctx.bibliographyModule?.engineReady && paperMetadataMap.size > 0);
 
   emitProgress('formatting_citations', 60, `已处理 ${papers.size} 条引文`);
 
@@ -129,13 +136,24 @@ export async function exportArticle(
 
   let content: string;
   let ext: string;
+  let bibContent: string | null = null;
 
   if (format === 'latex') {
-    content = generateLaTeX(title, sections, papers, citationStyle, article);
+    if (useCslEngine) {
+      const result = generateLaTeXWithCsl(ctx, title, sections, paperMetadataMap, article);
+      content = result.tex;
+      bibContent = result.bib;
+    } else {
+      content = generateLaTeX(title, sections, papers, citationStyle, article);
+    }
     ext = 'tex';
   } else {
     // Markdown (also used as base for docx/pdf)
-    content = generateMarkdown(title, sections, papers, citationStyle);
+    if (useCslEngine) {
+      content = generateMarkdownWithCsl(ctx, title, sections, paperMetadataMap);
+    } else {
+      content = generateMarkdown(title, sections, papers, citationStyle);
+    }
     ext = 'md';
   }
 
@@ -148,6 +166,12 @@ export async function exportArticle(
   const safeName = title.replace(/[/\\?%*:|"<>]/g, '_');
   const exportPath = path.join(exportDir, `${safeName}.${ext}`);
   await fs.writeFile(exportPath, content, 'utf-8');
+
+  // Write companion .bib file for LaTeX CSL export
+  if (bibContent) {
+    const bibPath = path.join(exportDir, 'references.bib');
+    await fs.writeFile(bibPath, bibContent, 'utf-8');
+  }
 
   emitProgress('writing', 100, '导出完成');
   logger.info('Article exported', { articleId, draftId, format, exportPath });
@@ -179,6 +203,52 @@ function generateMarkdown(
   }
 
   return lines.join('\n');
+}
+
+// ── CSL-powered Markdown generation ──
+
+function generateMarkdownWithCsl(
+  ctx: AppContext,
+  title: string,
+  sections: FullDocumentSection[],
+  paperMap: Map<PaperId, PaperMetadata>,
+): string {
+  const lines: string[] = [`# ${title}`, ''];
+
+  // Build hierarchy and collect all section text with headings
+  const roots = buildHierarchy(sections);
+  renderMarkdownSectionsRaw(roots, 1, lines);
+
+  const rawBody = lines.join('\n');
+
+  // Use bibliography module's scanAndReplace for CSL-formatted citations + reference list
+  const result = ctx.bibliographyModule!.scanAndReplace(rawBody, paperMap);
+  const parts = [result.text];
+  if (result.bibliography) {
+    parts.push('', '---', '', '## References', '', result.bibliography);
+  }
+  return parts.join('\n');
+}
+
+/** Render sections as markdown with raw [@id] markers (no citation replacement). */
+function renderMarkdownSectionsRaw(
+  sections: HierarchicalSection[],
+  depth: number,
+  lines: string[],
+): void {
+  for (const sec of sections) {
+    const heading = '#'.repeat(Math.min(depth + 1, 6));
+    lines.push(`${heading} ${sec.title || '未命名节'}`);
+    lines.push('');
+    const sectionText = getSectionPlainText(sec);
+    if (sectionText) {
+      lines.push(sectionText);
+      lines.push('');
+    }
+    if (sec.children.length > 0) {
+      renderMarkdownSectionsRaw(sec.children, depth + 1, lines);
+    }
+  }
 }
 
 function renderMarkdownSections(
@@ -370,6 +440,78 @@ function renderLaTeXSections(
       renderLaTeXSections(sec.children, depth + 1, lines, papers);
     }
   }
+}
+
+// ── CSL-powered LaTeX generation ──
+
+function generateLaTeXWithCsl(
+  ctx: AppContext,
+  title: string,
+  sections: FullDocumentSection[],
+  paperMap: Map<PaperId, PaperMetadata>,
+  article: Record<string, unknown>,
+): { tex: string; bib: string } {
+  // Collect raw markdown from all sections
+  const bodyLines: string[] = [];
+  const roots = buildHierarchy(sections);
+  renderMarkdownSectionsRaw(roots, 1, bodyLines);
+  const rawMarkdown = bodyLines.join('\n');
+
+  // Use bibliography module for proper BibTeX keys + .bib generation
+  const exported = ctx.bibliographyModule!.exportForLatex(rawMarkdown, paperMap);
+
+  const lines: string[] = [];
+
+  // Preamble
+  lines.push('\\documentclass{article}');
+  lines.push('');
+  lines.push('\\usepackage[utf8]{inputenc}');
+  lines.push('\\usepackage[T1]{fontenc}');
+  lines.push('\\usepackage{amsmath,amssymb,amsfonts}');
+  lines.push('\\usepackage{graphicx}');
+  lines.push('\\usepackage{hyperref}');
+  lines.push('\\usepackage{booktabs}');
+  lines.push('\\usepackage{listings}');
+  lines.push('\\usepackage{xcolor}');
+  lines.push('\\usepackage{natbib}');
+  lines.push('');
+
+  lines.push(`\\title{${escapeLatex(title)}}`);
+
+  const authors = parseArticleAuthors(article['authors']);
+  if (authors.length > 0) {
+    const authorStr = authors.map((a) => escapeLatex(a)).join(' \\and ');
+    lines.push(`\\author{${authorStr}}`);
+  }
+
+  lines.push('\\date{}');
+  lines.push('');
+  lines.push('\\begin{document}');
+  lines.push('\\maketitle');
+
+  const abstract = (article['abstract'] as string) ?? '';
+  if (abstract) {
+    lines.push('');
+    lines.push('\\begin{abstract}');
+    lines.push(escapeLatex(abstract));
+    lines.push('\\end{abstract}');
+  }
+
+  const keywords = parseKeywords(article['keywords']);
+  if (keywords.length > 0) {
+    lines.push('');
+    lines.push(`\\textbf{Keywords:} ${keywords.map(escapeLatex).join(', ')}`);
+  }
+
+  lines.push('');
+  lines.push(exported.tex);
+  lines.push('');
+  lines.push('\\bibliographystyle{plainnat}');
+  lines.push('\\bibliography{references}');
+  lines.push('');
+  lines.push('\\end{document}');
+
+  return { tex: lines.join('\n'), bib: exported.bib };
 }
 
 // ── Citation processing ──

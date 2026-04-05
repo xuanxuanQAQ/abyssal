@@ -59,7 +59,6 @@ function makeCtx(overrides?: Record<string, unknown>) {
     dbProxy: { getArticle: vi.fn(), getChatHistory: vi.fn().mockResolvedValue([]) },
     pushManager: {
       pushCopilotEvent: vi.fn(),
-      pushAgentStream: vi.fn(),
       pushCopilotSessionChanged: vi.fn(),
       pushAiCommand: vi.fn(),
     },
@@ -264,9 +263,66 @@ describe('copilot-handler — dependency injection contracts', () => {
           activeView: 'library',
           selectedPaperId: 'p-1',
         }),
+        expect.objectContaining({
+          bundles: ['project_meta', 'active_focus', 'working_memory_light'].filter(
+            (bundle) => bundle === 'project_meta' || bundle === 'active_focus' || bundle === 'capability_hints',
+          ),
+          interactionMode: 'default',
+        }),
       );
       expect(result).toContain('zh-CN');
       expect(result).not.toBe('You are a research writing assistant.');
+    });
+
+    it('uses greeting interaction mode for a plain hello', async () => {
+      await triggerRuntimeInit().promise;
+
+      await capturedDeps.agent.buildSystemPrompt({
+        id: 'op-greeting',
+        sessionId: 'sess-1',
+        surface: 'chat',
+        intent: 'ask',
+        prompt: '你好',
+        context: {
+          activeView: 'library',
+          focusEntities: { paperIds: [], conceptIds: [] },
+          selection: null,
+        },
+        outputTarget: { type: 'chat-message' },
+      });
+
+      expect(mockBuildChatSystemPrompt).toHaveBeenLastCalledWith(
+        ctx,
+        expect.objectContaining({ activeView: 'library' }),
+        expect.objectContaining({ bundles: [], interactionMode: 'greeting' }),
+      );
+    });
+
+    it('uses assistant-profile interaction mode for identity questions', async () => {
+      await triggerRuntimeInit().promise;
+
+      await capturedDeps.agent.buildSystemPrompt({
+        id: 'op-profile',
+        sessionId: 'sess-1',
+        surface: 'chat',
+        intent: 'ask',
+        prompt: '你是谁？',
+        context: {
+          activeView: 'library',
+          focusEntities: { paperIds: [], conceptIds: [] },
+          selection: null,
+        },
+        outputTarget: { type: 'chat-message' },
+      });
+
+      expect(mockBuildChatSystemPrompt).toHaveBeenLastCalledWith(
+        ctx,
+        expect.objectContaining({ activeView: 'library' }),
+        expect.objectContaining({
+          bundles: ['project_meta', 'capability_hints'],
+          interactionMode: 'assistant_profile',
+        }),
+      );
     });
   });
 
@@ -285,46 +341,6 @@ describe('copilot-handler — dependency injection contracts', () => {
           sectionId: 'section-2',
         }),
       );
-    });
-  });
-
-  describe('legacy pipeline:start translation', () => {
-    it('preserves article and section context when generate is routed into copilot runtime', async () => {
-      await triggerRuntimeInit().promise;
-
-      const startHandler = registeredHandlers.get('pipeline:start');
-      await startHandler?.({} as any, 'generate', {
-        articleId: 'article-9',
-        draftId: 'draft-2',
-        sectionId: 'section-7',
-        selectedText: 'seed text',
-      });
-
-      const envelope = capturedRuntimeInstance.execute.mock.calls.at(-1)?.[0];
-      expect(envelope.operation.intent).toBe('generate-section');
-      expect(envelope.operation.outputTarget).toEqual({
-        type: 'section-replace',
-        articleId: 'article-9',
-        sectionId: 'section-7',
-      });
-      expect(envelope.operation.context.article).toEqual({
-        articleId: 'article-9',
-        sectionId: 'section-7',
-      });
-      expect(envelope.operation.context.writing).toEqual({
-        editorId: 'main',
-        articleId: 'article-9',
-        sectionId: 'section-7',
-        unsavedChanges: false,
-      });
-      expect(envelope.operation.context.selection).toEqual({
-        kind: 'editor',
-        articleId: 'article-9',
-        sectionId: 'section-7',
-        selectedText: 'seed text',
-        from: 0,
-        to: 0,
-      });
     });
   });
 
@@ -358,49 +374,7 @@ describe('copilot-handler — dependency injection contracts', () => {
 
   // ── Event listener: assistant text accumulation ──
 
-  describe('legacy chat compatibility', () => {
-    it('aborts the active operation rather than the session id returned by chat:send', async () => {
-      const sendHandler = registeredHandlers.get('chat:send');
-      const abortHandler = registeredHandlers.get('chat:abort');
-
-      const returnedConversationId = await sendHandler?.({} as any, 'Hello legacy');
-      expect(returnedConversationId).toBe('sess-1');
-
-      await abortHandler?.({} as any, returnedConversationId);
-
-      expect(capturedRuntimeInstance.abort).toHaveBeenCalledWith('op-1');
-    });
-  });
-
   describe('event listener — conversation assembly', () => {
-    it('pushes a legacy done event so assistant messages can finalize and persist', async () => {
-      const { promise, operationId } = triggerRuntimeInit();
-      await promise;
-
-      capturedEventListener?.({
-        type: 'model.delta',
-        operationId,
-        channel: 'chat',
-        text: 'persist me',
-        sequence: 1,
-        emittedAt: Date.now(),
-      });
-      capturedEventListener?.({
-        type: 'operation.completed',
-        operationId,
-        sequence: 2,
-        emittedAt: Date.now(),
-      });
-
-      expect(ctx.pushManager.pushAgentStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'done',
-          conversationId: operationId,
-          fullText: 'persist me',
-        }),
-      );
-    });
-
     it('pushes copilotSessionChanged with the concrete session id on completion', async () => {
       const { promise, operationId, sessionId } = triggerRuntimeInit();
       await promise;

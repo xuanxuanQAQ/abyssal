@@ -46,6 +46,48 @@ export default defineConfig({
           setupFiles: ['src/__test-utils__/setup-renderer.ts'],
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'smoke',
+          include: ['tests/e2e/**/*.test.ts'],
+          environment: 'node',
+          setupFiles: ['src/__test-utils__/setup-integration.ts'],
+          testTimeout: 30_000,
+          pool: 'forks',
+        },
+      },
+      // ── 黄金样本测试：冻结关键输出结构，防止重构漂移 ──
+      {
+        extends: true,
+        test: {
+          name: 'golden',
+          include: ['tests/golden/**/*.test.ts'],
+          environment: 'node',
+          setupFiles: ['src/__test-utils__/setup-unit.ts'],
+        },
+      },
+      // ── 鲁棒性测试：故障注入、异常输入、边界条件 ──
+      {
+        extends: true,
+        test: {
+          name: 'robustness',
+          include: ['tests/robustness/**/*.test.ts'],
+          environment: 'node',
+          setupFiles: ['src/__test-utils__/setup-unit.ts'],
+        },
+      },
+      // ── 模型评估测试：低频执行，真实 provider 质量监控 ──
+      {
+        extends: true,
+        test: {
+          name: 'evaluation',
+          include: ['tests/evaluation/**/*.test.ts'],
+          environment: 'node',
+          setupFiles: ['src/__test-utils__/setup-unit.ts'],
+          testTimeout: 60_000,
+        },
+      },
     ],
   },
 });

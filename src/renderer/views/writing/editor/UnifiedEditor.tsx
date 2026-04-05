@@ -15,13 +15,36 @@ import { useAppStore } from '../../../core/store';
 import { useEditorStore } from '../../../core/store/useEditorStore';
 import { useAIOperations } from '../ai/useAIOperations';
 import { useEditorCommandBridge } from '../ai/useEditorCommandBridge';
+import { useSelectionPreview } from '../ai/useSelectionPreview';
 import { EditorToolbar } from './EditorToolbar';
 import { TiptapEditor } from './TiptapEditor';
 import { FloatingToolbar } from './FloatingToolbar';
+import { SelectionPreviewOverlay } from './SelectionPreviewOverlay';
 import { useDocumentAutoSave } from '../hooks/useDocumentAutoSave';
 import { useImageUpload } from './ImageUploadHandler';
+import { onCitationInsertRequest } from '../shared/citationActions';
+import { useDraftOutline } from '../../../core/ipc/hooks/useDrafts';
 import { getAPI } from '../../../core/ipc/bridge';
 import { contentHash } from '../../../../shared/writing/documentOutline';
+
+function resolveActiveSectionId(editor: Editor, selectionPos: number): string | null {
+  let activeSectionId: string | null = null;
+
+  editor.state.doc.descendants((node, pos) => {
+    if (pos > selectionPos) return false;
+    if (
+      node.type.name === 'heading' &&
+      Number(node.attrs.level ?? 0) >= 1 &&
+      Number(node.attrs.level ?? 0) <= 3 &&
+      typeof node.attrs.sectionId === 'string'
+    ) {
+      activeSectionId = node.attrs.sectionId as string;
+    }
+    return true;
+  });
+
+  return activeSectionId;
+}
 
 interface UnifiedEditorProps {
   articleId: string;
@@ -34,9 +57,9 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
   const selectedSectionId = useAppStore((s) => s.selectedSectionId);
   const selectSection = useAppStore((s) => s.selectSection);
   const aiGenerating = useEditorStore((s) => s.aiGenerating);
-  const unsavedChanges = useEditorStore((s) => s.unsavedChanges);
   const setLiveDocumentState = useEditorStore((s) => s.setLiveDocumentState);
   const clearLiveDocumentState = useEditorStore((s) => s.clearLiveDocumentState);
+  const setEditorSelection = useEditorStore((s) => s.setEditorSelection);
 
   const [documentJson, setDocumentJson] = useState<JSONContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,6 +74,13 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
   const { scheduleAutoSave, flushSave, resetHashes } = useDocumentAutoSave({
     editor,
     draftId,
+  });
+
+  // Selection preview intercepts replace-range patches (Phase 2)
+  // Must be registered BEFORE useEditorCommandBridge so stopImmediatePropagation works
+  const { preview: selectionPreview, accept: acceptPreview, reject: rejectPreview } = useSelectionPreview({
+    editor,
+    articleId,
   });
 
   useEditorCommandBridge({
@@ -152,24 +182,64 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
   // ── Find which section the cursor is in ──
   const currentSectionId = useMemo<string | null>(() => {
     if (!editor) return null;
-    const selectionPos = editor.state.selection.from;
-    let activeSectionId: string | null = null;
-
-    editor.state.doc.descendants((node, pos) => {
-      if (pos > selectionPos) return false;
-      if (
-        node.type.name === 'heading' &&
-        Number(node.attrs.level ?? 0) >= 1 &&
-        Number(node.attrs.level ?? 0) <= 3 &&
-        typeof node.attrs.sectionId === 'string'
-      ) {
-        activeSectionId = node.attrs.sectionId as string;
-      }
-      return true;
-    });
-
-    return activeSectionId;
+    return resolveActiveSectionId(editor, editor.state.selection.from);
   }, [editor, editor?.state.selection]);
+
+  // ── Section paper IDs for citation autocomplete prioritization ──
+  const { data: draftOutline } = useDraftOutline(draftId);
+  const currentSectionPaperIds = useMemo<string[]>(() => {
+    if (!currentSectionId || !draftOutline?.sections) return [];
+    const findSection = (nodes: typeof draftOutline.sections): string[] => {
+      for (const node of nodes) {
+        if (node.id === currentSectionId) return node.paperIds ?? [];
+        const found = findSection(node.children);
+        if (found.length > 0) return found;
+      }
+      return [];
+    };
+    return findSection(draftOutline.sections);
+  }, [currentSectionId, draftOutline]);
+
+  useEffect(() => {
+    if (!editor) {
+      setEditorSelection(null);
+      return;
+    }
+
+    const syncEditorSelection = () => {
+      const { from, to } = editor.state.selection;
+      const sectionId = resolveActiveSectionId(editor, from);
+      if (from === to || !sectionId) {
+        setEditorSelection(null);
+        return;
+      }
+
+      const selectedText = editor.state.doc.textBetween(from, to, '\n').trim();
+      if (selectedText.length === 0) {
+        setEditorSelection(null);
+        return;
+      }
+
+      setEditorSelection({
+        articleId,
+        draftId,
+        sectionId,
+        from,
+        to,
+        selectedText,
+      });
+    };
+
+    syncEditorSelection();
+    editor.on('selectionUpdate', syncEditorSelection);
+    editor.on('transaction', syncEditorSelection);
+
+    return () => {
+      editor.off('selectionUpdate', syncEditorSelection);
+      editor.off('transaction', syncEditorSelection);
+      setEditorSelection(null);
+    };
+  }, [articleId, draftId, editor, setEditorSelection]);
 
   // ── AI Operations ──
   const aiOps = useAIOperations({
@@ -184,6 +254,25 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
     editor,
     articleId,
   });
+
+  // ── External citation insert listener ──
+  useEffect(() => {
+    if (!editor) return;
+    return onCitationInsertRequest(({ paperId, displayText }) => {
+      const { view } = editor;
+      if (!view || editor.isDestroyed) return;
+      const nodeType = view.state.schema.nodes.citationNode;
+      if (!nodeType) return;
+      const node = nodeType.create({
+        paperId,
+        displayText: displayText ?? `@${paperId}`,
+      });
+      editor.chain().focus().insertContent({
+        type: 'citationNode',
+        attrs: { paperId, displayText: displayText ?? `@${paperId}` },
+      }).run();
+    });
+  }, [editor]);
 
   // ── Editor callbacks ──
   const handleContentUpdate = useCallback(
@@ -207,10 +296,9 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
     [articleId, draftId, onDocumentJsonChange, setLiveDocumentState],
   );
 
-  const handleAIGenerate = useCallback(() => aiOps.generate(), [aiOps]);
+  const handleAICancel = useCallback(() => aiOps.cancel(), [aiOps]);
   const handleAIRewrite = useCallback(() => aiOps.rewrite(), [aiOps]);
   const handleAIExpand = useCallback(() => aiOps.expand(), [aiOps]);
-  const handleAICancel = useCallback(() => aiOps.cancel(), [aiOps]);
   const handleAICompress = useCallback(() => aiOps.compress(), [aiOps]);
 
   const handleInsertCitation = useCallback(() => {
@@ -253,7 +341,7 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, height: '100%', overflow: 'hidden', position: 'relative' }}>
       <div
         style={{
           flexShrink: 0,
@@ -264,28 +352,10 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
           borderBottom: '1px solid var(--border-subtle)',
         }}
       >
-        {/* ── Title bar ── */}
-        <div style={{ padding: '12px 24px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            {currentSectionId ? `当前节: ${currentSectionId.slice(0, 8)}…` : '全文编辑模式'}
-          </span>
-          {unsavedChanges && (
-            <span style={{
-              fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
-              whiteSpace: 'nowrap', flexShrink: 0, userSelect: 'none',
-            }} title="有未保存的更改">
-              ● 未保存
-            </span>
-          )}
-        </div>
-
         {/* ── Toolbar ── */}
         <EditorToolbar
           editor={editor}
           aiGenerating={aiGenerating}
-          onAIGenerate={handleAIGenerate}
-          onAIRewrite={handleAIRewrite}
-          onAIExpand={handleAIExpand}
           onAICancel={handleAICancel}
           onInsertCitation={handleInsertCitation}
           onInsertMath={handleInsertMath}
@@ -301,6 +371,7 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
         onJsonUpdate={handleJsonUpdate}
         onEditorReady={handleEditorReady}
         unifiedMode
+        sectionPaperIds={currentSectionPaperIds}
       />
 
       {/* ── Floating toolbar ── */}
@@ -310,6 +381,15 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
           onAIRewrite={handleAIRewrite}
           onAIExpand={handleAIExpand}
           onAICompress={handleAICompress}
+        />
+      )}
+
+      {/* ── Selection preview (Phase 2: in-place accept/reject) ── */}
+      {selectionPreview && (
+        <SelectionPreviewOverlay
+          preview={selectionPreview}
+          onAccept={acceptPreview}
+          onReject={rejectPreview}
         />
       )}
     </div>

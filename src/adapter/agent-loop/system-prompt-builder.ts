@@ -67,8 +67,11 @@ export interface SystemPromptContext {
 
 export type SystemPromptBundle = 'project_meta' | 'active_focus' | 'capability_hints';
 
+export type SystemPromptInteractionMode = 'default' | 'greeting' | 'assistant_profile';
+
 export interface SystemPromptBuildOptions {
   bundles?: SystemPromptBundle[];
+  interactionMode?: SystemPromptInteractionMode;
 }
 
 // ─── Builder ───
@@ -77,16 +80,28 @@ export function buildSystemPrompt(
   ctx: SystemPromptContext,
   opts: SystemPromptBuildOptions = {},
 ): string {
+  const interactionMode = opts.interactionMode ?? 'default';
   const enabled = new Set<SystemPromptBundle>(
     opts.bundles ?? ['project_meta', 'active_focus', 'capability_hints'],
   );
   const lines: string[] = [];
 
-  if (enabled.has('project_meta')) {
-    // ── Role (compact) ──
-    lines.push('You are an AI research assistant for the Abyssal academic workstation.');
-    lines.push('');
+  lines.push('You are an AI research assistant for the Abyssal academic workstation.');
+  lines.push('');
 
+  if (interactionMode === 'greeting') {
+    lines.push('<!-- cache-boundary -->');
+    lines.push('');
+    lines.push('## Rules');
+    for (const rule of buildBaseRules(ctx)) {
+      lines.push(`- ${rule}`);
+    }
+    lines.push('- The user only sent a greeting or light social opener. Reply briefly in 1-2 sentences.');
+    lines.push('- Do NOT list capabilities, project statistics, tools, concepts, or suggested workflows unless the user explicitly asks who you are or what you can do.');
+    return lines.join('\n');
+  }
+
+  if (enabled.has('project_meta')) {
     // ── Project context (stable across calls — cached separately by Claude adapter) ──
     lines.push(`## Project: ${ctx.projectName}`);
     lines.push(`${ctx.totalPapers} papers (${ctx.analyzedPapers} analyzed, ${ctx.acquiredPapers} acquired) · ${ctx.conceptCount} concepts (${ctx.tentativeCount}t/${ctx.workingCount}w/${ctx.establishedCount}e) · ${ctx.memoCount} memos · ${ctx.noteCount} notes`);
@@ -176,13 +191,7 @@ export function buildSystemPrompt(
 
     // ── Guidelines (compact, context-aware) ──
     lines.push('## Rules');
-    const rules: string[] = [];
-
-    if (ctx.defaultOutputLanguage) {
-      rules.push(`Always respond in ${ctx.defaultOutputLanguage}`);
-    } else {
-      rules.push('Respond in the same language as the user');
-    }
+    const rules = buildBaseRules(ctx);
 
     if (enabled.has('active_focus')) {
       if (ctx.activePapers && ctx.activePapers.length > 1) {
@@ -197,7 +206,10 @@ export function buildSystemPrompt(
 
     rules.push('Use `retrieve` for fulltext search, `get_paper`/`get_concept` for other entities');
     rules.push('Cite paper IDs when referencing papers');
-    rules.push('When the user only sends a greeting, avoid proactively restating historical user behavior until they ask a concrete task.');
+    rules.push('When the user only sends a greeting, reply briefly and do not proactively list capabilities or project state.');
+    if (interactionMode === 'assistant_profile') {
+      rules.push('The user is explicitly asking who you are or what you can do. Introduce yourself as the Abyssal academic workstation AI research assistant, summarize your core capabilities, and keep any current project snapshot brief.');
+    }
     rules.push(`${ctx.toolCount} tools available (mostly read-only; you can also create memos, annotations, import papers, and trigger fulltext acquisition)`);
 
     for (const r of rules) {
@@ -211,4 +223,11 @@ export function buildSystemPrompt(
   }
 
   return lines.join('\n');
+}
+
+function buildBaseRules(ctx: SystemPromptContext): string[] {
+  if (ctx.defaultOutputLanguage) {
+    return [`Always respond in ${ctx.defaultOutputLanguage}`];
+  }
+  return ['Respond in the same language as the user'];
 }

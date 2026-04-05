@@ -34,7 +34,7 @@ describe('shouldUseCompactMode', () => {
 describe('compactConceptFormat', () => {
   it('formats concepts with name and truncated definition', () => {
     const concepts: ConceptForSubset[] = [
-      { id: 'c-1', nameEn: 'Goal Setting', nameZh: '目标设定', definition: 'The process of establishing targets', searchKeywords: ['goal'], maturity: 'working' },
+      { id: 'c-1', nameEn: 'Goal Setting', nameZh: '目标设定', definition: 'The process of establishing targets', searchKeywords: ['goal'], maturity: 'working', parentId: null },
     ];
     const result = compactConceptFormat(concepts);
     expect(result).toContain('# Concepts (compact)');
@@ -45,7 +45,7 @@ describe('compactConceptFormat', () => {
   it('truncates definition at 200 chars', () => {
     const longDef = 'x'.repeat(300);
     const concepts: ConceptForSubset[] = [
-      { id: 'c-1', nameEn: 'Test', nameZh: '测试', definition: longDef, searchKeywords: [], maturity: 'working' },
+      { id: 'c-1', nameEn: 'Test', nameZh: '测试', definition: longDef, searchKeywords: [], maturity: 'working', parentId: null },
     ];
     const result = compactConceptFormat(concepts);
     expect(result).toContain('x'.repeat(200));
@@ -58,20 +58,24 @@ describe('compactConceptFormat', () => {
 describe('compactMemos', () => {
   it('limits to 3 memos', () => {
     const memos: MemoForInjection[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `memo-${i}`,
       text: `Memo ${i}`,
       createdAt: '2025-01-01',
       conceptIds: [],
       paperIds: [],
+      annotationId: null,
     }));
     expect(compactMemos(memos)).toHaveLength(3);
   });
 
   it('truncates memo text to 120 chars + ellipsis', () => {
     const memos: MemoForInjection[] = [{
+      id: 'memo-1',
       text: 'a'.repeat(200),
       createdAt: '2025-01-01',
       conceptIds: [],
       paperIds: [],
+      annotationId: null,
     }];
     const result = compactMemos(memos);
     expect(result[0]!.text).toBe('a'.repeat(120) + '...');
@@ -79,10 +83,12 @@ describe('compactMemos', () => {
 
   it('does not add ellipsis if text is within limit', () => {
     const memos: MemoForInjection[] = [{
+      id: 'memo-1',
       text: 'Short memo',
       createdAt: '2025-01-01',
       conceptIds: [],
       paperIds: [],
+      annotationId: null,
     }];
     const result = compactMemos(memos);
     expect(result[0]!.text).toBe('Short memo');

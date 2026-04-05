@@ -114,6 +114,11 @@ export function createBodyDocumentFromText(text: string): JSONContent {
 
 export function extractTextContent(node: JsonNode | undefined): string {
   if (!node) return '';
+  // Handle citation atom nodes by emitting [@paperId] so plain text preserves citation markers
+  if (node.type === 'citationNode') {
+    const paperId = (node.attrs as Record<string, unknown>)?.paperId;
+    return typeof paperId === 'string' && paperId.length > 0 ? `[@${paperId}]` : '';
+  }
   if (typeof node.text === 'string') return node.text;
   if (!Array.isArray(node.content)) return '';
   return node.content.map((child) => extractTextContent(child)).join('');
@@ -126,6 +131,45 @@ export function extractPlainText(nodes: JsonNode[]): string {
     if (text.length > 0) parts.push(text);
   }
   return parts.join('\n\n');
+}
+
+/**
+ * Extract all cited paper IDs from a ProseMirror JSON document by scanning
+ * for `citationNode` atom nodes. This is more reliable than regex on plain text
+ * because CitationNode is an atom (no text representation in plain extraction).
+ *
+ * Also falls back to regex `[@paperId]` matching on text nodes to catch
+ * citations in raw markdown that hasn't been parsed into nodes yet.
+ */
+export function extractCitedPaperIdsFromDocument(document: JSONContent): string[] {
+  const ids = new Set<string>();
+  const citationRegex = /\[@([a-zA-Z0-9_-]+)\]/g;
+
+  function walk(node: JSONContent): void {
+    if (node.type === 'citationNode') {
+      const paperId = (node.attrs as Record<string, unknown>)?.paperId;
+      if (typeof paperId === 'string' && paperId.length > 0) {
+        ids.add(paperId);
+      }
+      return;
+    }
+    // Also scan text content for [@paperId] patterns
+    if (typeof node.text === 'string') {
+      let match: RegExpExecArray | null;
+      citationRegex.lastIndex = 0;
+      while ((match = citationRegex.exec(node.text)) !== null) {
+        if (match[1]) ids.add(match[1]);
+      }
+    }
+    if (Array.isArray(node.content)) {
+      for (const child of node.content) {
+        walk(child);
+      }
+    }
+  }
+
+  walk(document);
+  return [...ids];
 }
 
 function countWords(text: string): number {

@@ -4,6 +4,7 @@ import type {
 } from '../types/config';
 import { ConfigParseError, MissingFieldError } from '../types/errors';
 import { loadUnifiedConfig, deepMerge as configDeepMerge, DEFAULT_CONFIG, deepFreeze as configDeepFreeze } from '../config/config-loader';
+import { normalizeWorkflowOverrideKey } from '../config/workflow-override-keys';
 
 // Re-export canonical defaults from config-loader for backward compatibility
 export {
@@ -23,7 +24,7 @@ function stripBom(text: string): string {
 // ═══ TOML 节展平 ═══
 
 /**
- * §1.2: [llm.analysis] 等子节映射到 llm.workflowOverrides.analysis
+ * §1.2: [llm.discovery] / [llm.analysis] 等子节映射到 canonical workflowOverrides.*
  *
  * smol-toml 将 [llm.analysis] 解析为 { llm: { analysis: { ... } } }。
  * 需要将 workflow 子键提升到 workflowOverrides 中。
@@ -33,12 +34,12 @@ function flattenTomlSections(parsed: Record<string, unknown>): Record<string, un
 
   if (result['llm'] && typeof result['llm'] === 'object') {
     const llm = { ...(result['llm'] as Record<string, unknown>) };
-    const workflowKeys = ['discovery', 'analysis', 'synthesize', 'article', 'agent'];
+    const workflowKeys = ['discover', 'discovery', 'analyze', 'analysis', 'synthesize', 'article', 'agent', 'vision', 'generate'];
     const overrides: Record<string, unknown> = (llm['workflowOverrides'] as Record<string, unknown>) ?? {};
 
     for (const key of workflowKeys) {
       if (llm[key] && typeof llm[key] === 'object') {
-        overrides[key] = llm[key];
+        overrides[normalizeWorkflowOverrideKey(key)] = llm[key];
         delete llm[key];
       }
     }

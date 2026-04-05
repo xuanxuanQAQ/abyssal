@@ -1,8 +1,8 @@
 /**
- * NoteEditor — 结构化笔记编辑器（§3.3）
+ * NoteEditor — 研究笔记编辑器
  *
- * Uses Tiptap for rich-text editing with ProseMirror JSON storage in DB.
- * Includes metadata editing panel (title, tags, linked papers/concepts).
+ * Tiptap 富文本编辑，ProseMirror JSON 持久化。
+ * 标题始终可见，元数据面板按需展开。
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
@@ -20,6 +20,7 @@ import { useNote, useNoteContent, useSaveNoteContent, useUpdateNoteMeta } from '
 import { useConceptList } from '../../../core/ipc/hooks/useConcepts';
 import { usePaperList } from '../../../core/ipc/hooks/usePapers';
 import { mathExtension } from '../../writing/editor/extensions/mathExtension';
+import { UpgradeToConceptDialog } from './UpgradeToConceptDialog';
 
 interface NoteEditorProps {
   noteId: string;
@@ -52,6 +53,7 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
   const updateMetaMutation = useUpdateNoteMeta();
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const contentInitialized = useRef(false);
+  const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
 
   // ── Metadata editing state ──
   const [metaOpen, setMetaOpen] = useState(false);
@@ -197,66 +199,68 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
     })
     .slice(0, 5);
 
+  const metadataCount = editTags.length + editPaperIds.length + editConceptIds.length;
+
   if (isLoading || !editor) {
     return <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>{t('common.loading')}</div>;
   }
+
+  const notePlainText = editor.getText({ blockSeparator: '\n\n' }).trim();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-        borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
+        padding: '8px 14px',
+        borderBottom: '1px solid var(--border-subtle)',
+        display: 'flex', flexDirection: 'column', gap: 8,
+        flexShrink: 0,
       }}>
-        <button onClick={onBack} style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 13,
-        }}>
-          <ArrowLeft size={14} /> {t('notes.note.backToList')}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button onClick={onBack} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, fontSize: 13,
+          }}>
+            <ArrowLeft size={14} /> {t('notes.note.back', '返回列表')}
+          </button>
 
-        <div style={{ flex: 1 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {saveMutation.isPending || updateMetaMutation.isPending
+                ? t('notes.note.saving', '保存中...')
+                : t('notes.note.autoSave', '自动保存已开启')}
+            </span>
+            <button onClick={() => setShowUpgradeDialog(true)} style={headerActionStyle}>
+              <Lightbulb size={12} />
+              {t('notes.note.upgradeToConcept')}
+            </button>
+            <button
+              onClick={() => setMetaOpen(!metaOpen)}
+              style={headerActionStyle}
+            >
+              {t('notes.note.metadata', '属性')}
+              {metadataCount > 0 && <span style={countBadgeStyle}>{metadataCount}</span>}
+              {metaOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+          </div>
+        </div>
 
-        {saveMutation.isPending && (
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('notes.note.saving')}</span>
-        )}
-        {updateMetaMutation.isPending && (
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('notes.note.saving', '保存中...')}</span>
-        )}
-
-        {/* Metadata toggle */}
-        <button
-          onClick={() => setMetaOpen(!metaOpen)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px',
-            border: '1px solid var(--border-subtle)', borderRadius: 4,
-            background: metaOpen ? 'var(--bg-surface-high, var(--bg-surface))' : 'transparent',
-            color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer',
-          }}
-        >
-          {t('notes.note.metadata', '属性')}
-          {metaOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
+        <input
+          type="text"
+          value={editTitle}
+          onChange={(e) => handleTitleChange(e.target.value)}
+          placeholder={t('notes.note.titlePlaceholder', '笔记标题…')}
+          style={titleInputStyle}
+        />
       </div>
 
       {/* ── Metadata editing panel ── */}
       {metaOpen && (
         <div style={{
-          padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)',
+          padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)',
           backgroundColor: 'var(--bg-surface-low, var(--bg-surface))',
-          display: 'flex', flexDirection: 'column', gap: 10, flexShrink: 0,
+          display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0,
         }}>
-          {/* Title */}
-          <div>
-            <label style={labelStyle}>{t('notes.note.titleLabel', '标题')}</label>
-            <input
-              type="text"
-              value={editTitle}
-              onChange={(e) => handleTitleChange(e.target.value)}
-              style={inputStyle}
-            />
-          </div>
-
           {/* Tags */}
           <div>
             <label style={labelStyle}>
@@ -390,6 +394,15 @@ export function NoteEditor({ noteId, onBack }: NoteEditorProps) {
           <EditorContent editor={editor} />
         </div>
       </div>
+
+      <UpgradeToConceptDialog
+        open={showUpgradeDialog}
+        onOpenChange={setShowUpgradeDialog}
+        prefillNameEn={editTitle.trim() || noteMeta?.title || ''}
+        prefillDefinition={notePlainText.slice(0, 500)}
+        prefillKeywords={editTags}
+        noteId={noteId}
+      />
     </div>
   );
 }
@@ -405,6 +418,42 @@ const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 10px', border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm, 4px)', fontSize: 13, color: 'var(--text-primary)',
   backgroundColor: 'var(--bg-surface)', outline: 'none', boxSizing: 'border-box',
+};
+
+const headerActionStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 4, padding: '5px 8px',
+  border: '1px solid var(--border-subtle)', borderRadius: 6,
+  background: 'transparent', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer',
+  fontWeight: 500,
+};
+
+const titleInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '6px 0',
+  border: 'none',
+  borderBottom: '1px solid var(--border-subtle)',
+  borderRadius: 0,
+  fontSize: 18,
+  fontWeight: 700,
+  lineHeight: 1.3,
+  color: 'var(--text-primary)',
+  backgroundColor: 'transparent',
+  outline: 'none',
+  boxSizing: 'border-box' as const,
+};
+
+const countBadgeStyle: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 600,
+  minWidth: 16,
+  height: 16,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 999,
+  padding: '0 4px',
+  backgroundColor: 'var(--bg-surface-high, rgba(0,0,0,0.06))',
+  color: 'var(--text-primary)',
 };
 
 function chipStyle(color: string): React.CSSProperties {

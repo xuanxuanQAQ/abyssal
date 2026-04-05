@@ -12,11 +12,14 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import type { Editor } from '@tiptap/react';
 import { Z_INDEX } from '../../../../styles/zIndex';
 import { CITATION_PARTIAL_REGEX } from '../../shared/citationPattern';
 import { usePaperList } from '../../../../core/ipc/hooks/usePapers';
+import { useViewActive } from '../../../../core/context/ViewActiveContext';
+import { getFirstAuthorName } from './citationPaperMeta';
 
 // ─── Types ───
 
@@ -47,8 +50,13 @@ export const citationAutocompletePluginKey = new PluginKey<AutocompleteState>(
  */
 export function createCitationAutocompletePlugin(
   onStateChange: (state: AutocompleteState) => void,
-): Plugin<AutocompleteState> {
-  return new Plugin<AutocompleteState>({
+) {
+  return Extension.create({
+    name: 'citationAutocomplete',
+
+    addProseMirrorPlugins() {
+      return [
+        new Plugin<AutocompleteState>({
     key: citationAutocompletePluginKey,
 
     state: {
@@ -140,6 +148,9 @@ export function createCitationAutocompletePlugin(
         return false;
       },
     },
+  }),
+      ];
+    },
   });
 }
 
@@ -151,6 +162,8 @@ interface CitationAutocompletePanelProps {
   editor: Editor;
   state: AutocompleteState;
   onDismiss: () => void;
+  /** Paper IDs associated with current section — shown first in results */
+  sectionPaperIds?: string[] | undefined;
 }
 
 /** Map raw paper data from IPC into PaperItem shape for autocomplete. */
@@ -158,41 +171,59 @@ function usePaperItems(): PaperItem[] {
   const { data: rawPapers } = usePaperList();
   return useMemo(() => {
     if (!rawPapers) return [];
-    return rawPapers.map((p) => {
-      const pr = p as unknown as Record<string, unknown>;
-      return {
-        id: (pr['id'] as string) ?? '',
-        title: (pr['title'] as string) ?? '',
-        firstAuthor: ((pr['authors'] as string) ?? '').split(/[,;]/)[0]?.trim() ?? '',
-        year: (pr['year'] as number) ?? 0,
-      };
-    });
+    return rawPapers.map((paper) => ({
+      id: paper.id,
+      title: paper.title,
+      firstAuthor: getFirstAuthorName(paper.authors),
+      year: paper.year,
+    }));
   }, [rawPapers]);
 }
 
-function filterPapers(papers: PaperItem[], query: string): PaperItem[] {
-  if (!query) return papers.slice(0, MAX_RESULTS);
+function filterPapers(papers: PaperItem[], query: string, sectionPaperIds?: string[]): PaperItem[] {
+  const sectionSet = sectionPaperIds?.length ? new Set(sectionPaperIds) : null;
 
-  const lowerQuery = query.toLowerCase();
-  return papers
-    .filter(
+  let filtered: PaperItem[];
+  if (!query) {
+    filtered = papers;
+  } else {
+    const lowerQuery = query.toLowerCase();
+    filtered = papers.filter(
       (p) =>
         p.id.toLowerCase().includes(lowerQuery) ||
         p.title.toLowerCase().includes(lowerQuery) ||
         p.firstAuthor.toLowerCase().includes(lowerQuery),
-    )
-    .slice(0, MAX_RESULTS);
+    );
+  }
+
+  // Prioritize section papers when no query or weak match
+  if (sectionSet && sectionSet.size > 0) {
+    const inSection: PaperItem[] = [];
+    const other: PaperItem[] = [];
+    for (const p of filtered) {
+      if (sectionSet.has(p.id)) {
+        inSection.push(p);
+      } else {
+        other.push(p);
+      }
+    }
+    return [...inSection, ...other].slice(0, MAX_RESULTS);
+  }
+
+  return filtered.slice(0, MAX_RESULTS);
 }
 
 export function CitationAutocompletePanel({
   editor,
   state,
   onDismiss,
+  sectionPaperIds,
 }: CitationAutocompletePanelProps): React.ReactElement | null {
+  const viewActive = useViewActive();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const papers = usePaperItems();
-  const filteredPapers = filterPapers(papers, state.query);
+  const filteredPapers = filterPapers(papers, state.query, sectionPaperIds);
 
   // Reset index when query changes
   useEffect(() => {
@@ -226,7 +257,7 @@ export function CitationAutocompletePanel({
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
-      if (!state.active) return;
+      if (!state.active || !viewActive) return;
 
       switch (event.key) {
         case 'ArrowUp': {
@@ -260,7 +291,7 @@ export function CitationAutocompletePanel({
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, [state.active, filteredPapers, selectedIndex, insertCitation, onDismiss]);
+  }, [state.active, viewActive, filteredPapers, selectedIndex, insertCitation, onDismiss]);
 
   if (!state.active) return null;
 

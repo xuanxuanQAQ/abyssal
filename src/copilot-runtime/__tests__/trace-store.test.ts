@@ -31,12 +31,12 @@ describe('TraceStore', () => {
   describe('phase lifecycle', () => {
     it('tracks phase start → complete', () => {
       store.createTrace('op-1', 'sess-1');
-      store.startPhase('op-1', 'intent_routing');
-      store.completePhase('op-1', 'intent_routing', { matched: true });
+      store.startPhase('op-1', 'normalize');
+      store.completePhase('op-1', 'normalize', { matched: true });
 
       const trace = store.getTrace('op-1')!;
       expect(trace.phases).toHaveLength(1);
-      expect(trace.phases[0]!.name).toBe('intent_routing');
+      expect(trace.phases[0]!.name).toBe('normalize');
       expect(trace.phases[0]!.status).toBe('completed');
       expect(trace.phases[0]!.finishedAt).toBeGreaterThan(0);
       expect(trace.phases[0]!.detail).toEqual({ matched: true });
@@ -44,8 +44,8 @@ describe('TraceStore', () => {
 
     it('tracks phase start → fail', () => {
       store.createTrace('op-1', 'sess-1');
-      store.startPhase('op-1', 'generation');
-      store.failPhase('op-1', 'generation', { code: 'ERR', message: 'timeout' });
+      store.startPhase('op-1', 'execute');
+      store.failPhase('op-1', 'execute', { code: 'ERR', message: 'timeout' });
 
       const trace = store.getTrace('op-1')!;
       expect(trace.phases[0]!.status).toBe('failed');
@@ -54,12 +54,12 @@ describe('TraceStore', () => {
 
     it('handles multiple phases', () => {
       store.createTrace('op-1', 'sess-1');
-      store.startPhase('op-1', 'intent_routing');
-      store.completePhase('op-1', 'intent_routing');
-      store.startPhase('op-1', 'recipe_resolution');
-      store.completePhase('op-1', 'recipe_resolution');
-      store.startPhase('op-1', 'generation');
-      store.failPhase('op-1', 'generation', { code: 'E', message: 'err' });
+      store.startPhase('op-1', 'normalize');
+      store.completePhase('op-1', 'normalize');
+      store.startPhase('op-1', 'recipe');
+      store.completePhase('op-1', 'recipe');
+      store.startPhase('op-1', 'execute');
+      store.failPhase('op-1', 'execute', { code: 'E', message: 'err' });
 
       const trace = store.getTrace('op-1')!;
       expect(trace.phases).toHaveLength(3);

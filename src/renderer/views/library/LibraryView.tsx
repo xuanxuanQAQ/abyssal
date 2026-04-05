@@ -1,18 +1,24 @@
 /**
  * LibraryView — Library 视图顶层容器（§1.1）
  *
- * 水平 PanelGroup：LibrarySidebar（230px 默认）+ PaperTable（弹性填满）。
+ * 水平 PanelGroup：LibrarySidebar + PaperTable（弹性填满）。
  * 视图级快捷键：Ctrl+Shift+B 折叠 Sidebar。
  */
 
-import React, { useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
+import { useHotkey } from '../../core/hooks/useHotkey';
 import { LibrarySidebar } from './sidebar/LibrarySidebar';
 import { PaperTable } from './table/PaperTable';
 import { ExternalFileDrop } from './dnd/ExternalFileDrop';
 import { usePaperList, usePaperCounts } from '../../core/ipc/hooks/usePapers';
+import { useLibrarySidebarWidthPreference } from './hooks/useLibrarySidebarPreferences';
 import type { PaperFilter } from '../../../shared-types/ipc';
+
+function toPercent(value: number): string {
+  return `${Math.max(0, Math.min(100, value))}%`;
+}
 
 /**
  * 根据 activeGroupId/Type/TagIds 构建 PaperFilter
@@ -64,22 +70,15 @@ function useLibraryFilter(): PaperFilter | undefined {
 export function LibraryView() {
   const librarySidebarOpen = useAppStore((s) => s.librarySidebarOpen);
   const toggleLibrarySidebar = useAppStore((s) => s.toggleLibrarySidebar);
+  const [librarySidebarWidth, setLibrarySidebarWidth] = useLibrarySidebarWidthPreference();
 
   const filter = useLibraryFilter();
   const { data: papers, isLoading } = usePaperList(filter);
   const { data: counts } = usePaperCounts();
 
-  // 视图级快捷键：Ctrl+Shift+B 折叠 Sidebar
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === 'B') {
-        e.preventDefault();
-        toggleLibrarySidebar();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [toggleLibrarySidebar]);
+  useHotkey('Ctrl+Shift+B', () => {
+    toggleLibrarySidebar();
+  });
 
   return (
     <div className="workspace-view workspace-view--library" style={{ height: '100%', position: 'relative' }}>
@@ -92,12 +91,19 @@ export function LibraryView() {
             <>
               <Panel
                 id="library-sidebar"
-                defaultSize="20%"
+                defaultSize={toPercent(librarySidebarWidth)}
                 minSize="10%"
                 maxSize="25%"
                 collapsible
                 onResize={(size) => {
-                  if (size.asPercentage === 0 && librarySidebarOpen) toggleLibrarySidebar();
+                  if (size.asPercentage === 0) {
+                    if (librarySidebarOpen) {
+                      toggleLibrarySidebar();
+                    }
+                    return;
+                  }
+
+                  setLibrarySidebarWidth(size.asPercentage);
                 }}
               >
                 <div className="workspace-side-stage library-sidebar-stage">

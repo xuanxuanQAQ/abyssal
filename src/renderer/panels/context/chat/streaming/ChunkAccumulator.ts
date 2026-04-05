@@ -48,6 +48,12 @@ export class ChunkAccumulator {
   pushToolCall(toolCall: ToolCallInfo): void {
     if (!this.messageId || !this.sessionKey) return;
     useChatStore.getState().updateMessageInSession(this.sessionKey, this.messageId, (msg) => {
+      const sanitizedContent = stripTrailingToolLeadIn(msg.streamBuffer ?? msg.content);
+      msg.content = sanitizedContent;
+      if (msg.streamBuffer !== undefined) {
+        msg.streamBuffer = sanitizedContent;
+      }
+
       if (!msg.toolCalls) msg.toolCalls = [];
       const existing = msg.toolCalls.find((tc) => tc.name === toolCall.name);
       if (existing) {
@@ -137,4 +143,8 @@ export class ChunkAccumulator {
     this.messageId = null;
     this.sessionKey = null;
   }
+}
+
+function stripTrailingToolLeadIn(text: string): string {
+  return text.replace(/[：:]\s*$/u, '');
 }

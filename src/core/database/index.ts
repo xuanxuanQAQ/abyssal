@@ -328,6 +328,17 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => conceptsDao.getAllConcepts(this.db, includeDeprecated));
   }
 
+  /**
+   * Sync concepts from YAML definitions into the database.
+   * Delegates to the concept-sync module using the raw DB handle.
+   */
+  syncConceptsFromYaml(
+    yamlConcepts: ConceptDefinition[],
+  ): import('../config/hot-reload/concept-sync').SyncReport {
+    const { syncConceptsFromYaml: doSync } = require('../config/hot-reload/concept-sync') as typeof import('../config/hot-reload/concept-sync');
+    return this.withOp(() => doSync(yamlConcepts, this.db, this.logger));
+  }
+
   // ════════════════════════════════════════
   // 论文-概念映射
   // ════════════════════════════════════════
@@ -702,6 +713,14 @@ export class DatabaseService implements IDbService {
 
   getSuggestedConceptsStats(): suggestionsDao.SuggestedConceptsStatsResult {
     return this.withOp(() => suggestionsDao.getSuggestedConceptsStats(this.db));
+  }
+
+  getSuggestedConceptByTerm(termNormalized: string): SuggestedConcept | null {
+    return this.withOp(() => suggestionsDao.getSuggestedConceptByTerm(this.db, termNormalized));
+  }
+
+  updateSuggestedConcept(id: SuggestionId, updates: Record<string, unknown>): number {
+    return this.withOp(() => suggestionsDao.updateSuggestedConcept(this.db, id, updates));
   }
 
   // ════════════════════════════════════════

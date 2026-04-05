@@ -16,8 +16,21 @@ import { typedHandler } from './register';
 import type { ConceptDefinition } from '../../core/types/concept';
 import { asConceptId } from '../../core/types/common';
 import type { UpdateConceptFields, ConflictResolution } from '../../core/database/dao/concepts';
-import type { Concept } from '../../shared-types/models';
+import type { Concept, HistoryEntry } from '../../shared-types/models';
 import { buildHeatmapMatrix } from './shared/build-heatmap-matrix';
+import { createConceptFromDraft } from './shared/create-concept';
+
+function historyEntryToFrontend(entry: ConceptDefinition['history'][number]): HistoryEntry {
+  return {
+    timestamp: entry.timestamp,
+    type: entry.changeType,
+    details: {
+      summary: entry.oldValueSummary,
+      reason: entry.reason,
+      ...(entry.metadata ?? {}),
+    },
+  };
+}
 
 /** Convert backend ConceptDefinition to frontend Concept shape */
 function conceptToFrontend(c: ConceptDefinition): Concept {
@@ -31,7 +44,7 @@ function conceptToFrontend(c: ConceptDefinition): Concept {
     level: 0,
     maturity: c.maturity,
     keywords: c.searchKeywords,
-    history: [],
+    history: Array.isArray(c.history) ? c.history.map(historyEntryToFrontend) : [],
   };
 }
 
@@ -79,10 +92,13 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:create ──
   typedHandler('db:concepts:create', logger, async (_e, draft) => {
-    const d = draft as unknown as ConceptDefinition;
-    await ctx.dbProxy.addConcept(d);
+    const conceptId = await createConceptFromDraft(
+      ctx.dbProxy,
+      draft,
+      typeof draft.definition === 'string' ? draft.definition : '',
+    );
     await afterMutation(['concepts'], 'insert');
-    const created = (await ctx.dbProxy.getConcept(d.id)) as ConceptDefinition | null;
+    const created = (await ctx.dbProxy.getConcept(asConceptId(conceptId))) as ConceptDefinition | null;
     return created ? conceptToFrontend(created) : null;
   });
 
@@ -103,7 +119,10 @@ export function registerConceptsHandlers(ctx: AppContext): void {
       { definition: newDef } as UpdateConceptFields,
     )) as any;
     await afterMutation(['concepts'], 'update');
-    return { updated: true, semanticDrift: result?.['requiresSynthesizeRefresh'] } as any;
+    return {
+      changeType: result?.['requiresSynthesizeRefresh'] ? 'breaking' : 'additive',
+      affectedMappings: result?.['affectedMappings'] ?? 0,
+    } as any;
   });
 
   // ── db:concepts:updateKeywords ──
@@ -136,7 +155,8 @@ export function registerConceptsHandlers(ctx: AppContext): void {
   // ── db:concepts:getHistory ──
   typedHandler('db:concepts:getHistory', logger, async (_e, conceptId) => {
     const concept = (await ctx.dbProxy.getConcept(asConceptId(conceptId))) as Record<string, unknown> | null;
-    return ((concept?.['history'] as unknown[]) ?? []) as any;
+    const history = (concept?.['history'] as ConceptDefinition['history'] | undefined) ?? [];
+    return history.map(historyEntryToFrontend) as any;
   });
 
   // ── db:concepts:merge ──

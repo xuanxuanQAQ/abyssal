@@ -34,9 +34,7 @@ import type {
 
 import type {
   PaperFilter, GraphFilter, RAGFilter,
-  WorkflowConfig,
-  PipelineProgressEvent, StreamChunkEvent, ChatResponseEvent,
-  AgentStreamEvent,
+  PipelineProgressEvent, StreamChunkEvent,
   ChatContext, WindowMaximizedEvent, SectionSearchResult,
   AcquireStatusInfo,
   InstitutionalSessionStatus, InstitutionListItem, InstitutionalLoginResult,
@@ -144,6 +142,7 @@ export interface IpcContract {
   'db:articles:listOutlines':         { args: [];                                        result: ArticleOutline[] };
   'db:articles:create':               { args: [title: string];                           result: ArticleOutline };
   'db:articles:update':               { args: [articleId: string, patch: Partial<ArticleOutline>]; result: void };
+  'db:articles:delete':               { args: [articleId: string];                       result: void };
   'db:articles:getDocument':          { args: [articleId: string];                       result: ArticleDocumentPayload };
   'db:articles:saveDocument':         { args: [articleId: string, documentJson: string, source?: 'manual' | 'auto' | 'ai-generate' | 'ai-rewrite']; result: void };
   'db:articles:getOutline':           { args: [articleId: string];                       result: ArticleOutline };
@@ -226,14 +225,6 @@ export interface IpcContract {
   'copilot:getSession':               { args: [sessionId: string];                       result: CopilotSessionState | null };
   'copilot:clearSession':             { args: [sessionId: string];                       result: void };
 
-  // ── pipeline (legacy → copilot:execute) ──
-  'pipeline:start':                   { args: [workflow: WorkflowType, config?: WorkflowConfig]; result: string };
-  'pipeline:cancel':                  { args: [taskId: string];                          result: void };
-
-  // ── chat (legacy → copilot:execute) ──
-  'chat:send':                        { args: [message: string, context?: ChatContext, conversationKey?: string];  result: string };
-  'chat:abort':                       { args: [conversationId?: string];                 result: void };
-
   // ── fs ──
   'fs:openPDF':                       { args: [paperId: string];                         result: { path: string; data: Uint8Array } };
   'fs:savePDFAnnotations':            { args: [paperId: string, annotations: PDFAnnotation[]]; result: void };
@@ -305,8 +296,6 @@ export interface IpcEventContract {
   'pipeline:streamChunk$event':           StreamChunkEvent;
   'app:workflowComplete$event':           { workflow: WorkflowType; taskId: string };
   'app:sectionQuality$event':             { sectionId: string; coverage: string; gaps: string[] };
-  /** @deprecated — agent streaming uses push:agentStream instead */
-  'chat:response$event':                  ChatResponseEvent;
   'app:window:maximizedChange$event':     WindowMaximizedEvent;
   'advisory:notificationsUpdated$event':  AdvisoryNotification[];
   'workspace:switched$event':             { rootDir: string; name: string };
@@ -318,7 +307,6 @@ export interface IpcEventContract {
 
 export interface IpcPushContract {
   'push:workflowProgress':    PipelineProgressEvent;
-  'push:agentStream':         AgentStreamEvent;
   'push:copilotEvent':        CopilotOperationEvent;
   'push:copilotSessionChanged': { sessionId: string; operationId?: string };
   'push:dbChanged':           { tables: string[]; operation: string };

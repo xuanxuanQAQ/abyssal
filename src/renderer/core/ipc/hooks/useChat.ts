@@ -6,9 +6,9 @@
  */
 
 import { useMutation } from '@tanstack/react-query';
-import { getAPI } from '../bridge';
 import type { ChatContext } from '../../../../shared-types/ipc';
 import { handleError } from '../../errors/errorHandlers';
+import { executeCopilotTextRequest } from '../../../panels/context/chat/copilotBridge';
 
 export function useSendChatMessage() {
   return useMutation({
@@ -18,7 +18,11 @@ export function useSendChatMessage() {
     }: {
       message: string;
       context?: ChatContext;
-    }) => getAPI().chat.send(message, context),
+    }) => executeCopilotTextRequest({
+      prompt: message,
+      context,
+      sessionId: context?.conversationKey,
+    }),
 
     onError: (err) => handleError(err),
   });

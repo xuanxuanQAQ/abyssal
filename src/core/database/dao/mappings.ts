@@ -333,6 +333,7 @@ export interface ConceptMatrixEntry {
   relation: RelationType;
   confidence: number;
   reviewed: boolean;
+  decisionStatus: string | null;
 }
 
 export function getConceptMatrix(
@@ -340,7 +341,7 @@ export function getConceptMatrix(
 ): ConceptMatrixEntry[] {
   const rows = db
     .prepare(`
-      SELECT paper_id, concept_id, relation, confidence, reviewed
+      SELECT paper_id, concept_id, relation, confidence, reviewed, decision_status
       FROM paper_concept_map
       WHERE concept_id IN (SELECT id FROM concepts WHERE deprecated = 0)
       ORDER BY paper_id, concept_id

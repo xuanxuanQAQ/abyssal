@@ -1,7 +1,6 @@
-// ═══ frameworkState 推导与模式切换 ═══
-// §五: frameworkState 连续谱推导 + effectiveMode 计算
+// ═══ frameworkState 推导 ═══
+// §五: frameworkState 连续谱推导
 
-import type { ProjectMode } from '../types/config';
 import type { ConceptDefinition } from '../types/concept';
 import type { ConceptMaturity } from '../types/concept';
 
@@ -12,10 +11,6 @@ export type FrameworkState =
   | 'early_exploration'
   | 'framework_forming'
   | 'framework_mature';
-
-// ─── EffectiveMode ───
-
-export type EffectiveMode = 'anchored' | 'unanchored' | 'unanchored_natural';
 
 // ─── 推导 ───
 
@@ -74,21 +69,4 @@ export function computeConceptStats(concepts: ConceptDefinition[]): ConceptStats
     working,
     established,
   };
-}
-
-/**
- * §5.3: 根据配置 mode 和 frameworkState 计算运行时的有效模式。
- *
- * - unanchored：用户显式设置——即使有概念也不做锚定
- * - unanchored_natural：因为没有概念而自然退化为无锚定
- * - anchored：正常锚定模式
- * - auto：根据 frameworkState 自动判定
- */
-export function effectiveMode(configMode: ProjectMode, frameworkState: FrameworkState): EffectiveMode {
-  if (configMode === 'unanchored') return 'unanchored';
-
-  // mode == 'anchored' 或 'auto'
-  if (frameworkState === 'zero_concepts') return 'unanchored_natural';
-
-  return 'anchored';
 }

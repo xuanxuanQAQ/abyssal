@@ -75,7 +75,9 @@ export function DefinitionEditor({ conceptId, initialValue }: DefinitionEditorPr
           setError(
             err instanceof Error
               ? err.message
-              : t('analysis.concepts.definitionEditor.saveFailed'),
+              : t('analysis.concepts.definitionEditor.saveFailed', {
+                message: t('common.unknownError', { defaultValue: '未知错误' }),
+              }),
           );
         },
       },

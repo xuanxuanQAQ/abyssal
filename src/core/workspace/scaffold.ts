@@ -62,7 +62,6 @@ function defaultConfigToml(name: string): string {
 [project]
 name = "${name}"
 description = ""
-mode = "auto"   # anchored | unanchored | auto
 
 [analysis]
 maxTokensPerChunk = 1024

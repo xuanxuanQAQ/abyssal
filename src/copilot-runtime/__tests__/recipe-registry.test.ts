@@ -25,12 +25,12 @@ describe('RecipeRegistry', () => {
   });
 
   describe('resolve — no candidates', () => {
-    it('returns deferred_to_user when nothing matches', () => {
+    it('returns no_match when nothing matches', () => {
       registry.register(makeRecipe({ matchReturn: false }));
       const op = makeOperation();
       const result = registry.resolve(op, makeContext());
       expect(result.selected).toBeNull();
-      expect(result.resolution).toBe('deferred_to_user');
+      expect(result.resolution).toBe('no_match');
     });
   });
 

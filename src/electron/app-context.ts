@@ -24,7 +24,6 @@ import type { PushManager } from './ipc/push';
 import type { LlmClient } from '../adapter/llm-client/llm-client';
 import type { ContextBudgetManager } from '../adapter/context-budget/context-budget-manager';
 import type { WorkflowRunner } from '../adapter/orchestrator/workflow-runner';
-import type { AgentLoop } from '../adapter/agent-loop/agent-loop';
 import type { AdvisoryAgent } from '../adapter/advisory-agent/advisory-agent';
 import type { CookieJar } from '../core/infra/cookie-jar';
 import type { DlaProxy } from '../core/dla/dla-proxy';
@@ -37,8 +36,8 @@ import type { SessionOrchestrator } from '../adapter/orchestrator/session-orches
 // ─── FrameworkState (re-export from canonical location) ───
 
 import type { FrameworkState } from '../core/config/framework-state';
-import { deriveFrameworkState, effectiveMode } from '../core/config/framework-state';
-export { type FrameworkState, deriveFrameworkState, effectiveMode };
+import { deriveFrameworkState } from '../core/config/framework-state';
+export { type FrameworkState, deriveFrameworkState };
 
 // ─── WorkflowState (active workflow tracking) ───
 
@@ -86,8 +85,6 @@ export interface AppContext {
   contextBudgetManager: ContextBudgetManager | null;
   /** Orchestrator — deterministic workflow runner */
   orchestrator: WorkflowRunner | null;
-  /** Agent Loop — conversational AI with tool-use */
-  agentLoop: AgentLoop | null;
   /** Advisory Agent — read-only diagnostic guardian */
   advisoryAgent: AdvisoryAgent | null;
 
@@ -148,8 +145,8 @@ export interface CreateAppContextOpts {
 /**
  * Create a fresh AppContext instance.
  *
- * Upper-layer adapters (llmClient, orchestrator, agentLoop, advisoryAgent)
- * are injected as null — to be implemented when those modules exist.
+ * Upper-layer adapters (llmClient, orchestrator, advisoryAgent)
+ * are injected as null — populated during bootstrap.
  */
 export function createAppContext(opts: CreateAppContextOpts): AppContext {
   const ctx: AppContext = {
@@ -171,7 +168,6 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
     llmClient: null,
     contextBudgetManager: null,
     orchestrator: null,
-    agentLoop: null,
     advisoryAgent: null,
 
     // Runtime state

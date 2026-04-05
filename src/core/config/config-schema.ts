@@ -94,14 +94,6 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     default: '',
     required: false,
   },
-  'project.mode': {
-    type: 'enum',
-    default: 'auto',
-    required: false,
-    constraints: { enum: ['anchored', 'unanchored', 'auto'] },
-    cliFlag: '--mode',
-    envVar: 'ABYSSAL_PROJECT_MODE',
-  },
 
   // ── discovery ──
   'discovery.traversalDepth': {
@@ -679,6 +671,31 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
   'notes.notesDirectory': {
     type: 'string',
     default: 'notes',
+    required: false,
+  },
+
+  // ── appearance ──
+  'appearance.colorScheme': {
+    type: 'enum',
+    default: 'system',
+    required: false,
+    constraints: { enum: ['light', 'dark', 'system'] },
+  },
+  'appearance.accentColor': {
+    type: 'string',
+    default: '#3B82F6',
+    required: false,
+    constraints: { pattern: /^#[0-9a-fA-F]{6}$/ },
+  },
+  'appearance.fontSize': {
+    type: 'enum',
+    default: 'base',
+    required: false,
+    constraints: { enum: ['sm', 'base', 'lg'] },
+  },
+  'appearance.animationEnabled': {
+    type: 'boolean',
+    default: true,
     required: false,
   },
 };
