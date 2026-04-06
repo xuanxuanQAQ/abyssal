@@ -58,12 +58,17 @@ function SuggestionItem({ suggestion, onDismiss }: { suggestion: SuggestedConcep
             {suggestion.term}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            {t('analysis.concepts.suggestions.paperCount', { count: suggestion.paperCount })}
+            {t('analysis.concepts.suggestions.paperCount', { count: suggestion.sourcePaperCount })}
           </div>
           {suggestion.closestExisting && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 2 }}>
               <MaturityBadge maturity={suggestion.closestExisting.maturity} size="sm" />
               <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{suggestion.closestExisting.conceptName}</span>
+            </div>
+          )}
+          {(suggestion.suggestedDefinition ?? suggestion.reason).trim().length > 0 && (
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.4 }}>
+              {(suggestion.suggestedDefinition ?? suggestion.reason).trim()}
             </div>
           )}
         </div>
@@ -81,7 +86,7 @@ function SuggestionItem({ suggestion, onDismiss }: { suggestion: SuggestedConcep
         onOpenChange={setAdoptDialogOpen}
         suggestedId={String(suggestion.id)}
         prefillNameEn={suggestion.term}
-        prefillDefinition={suggestion.contextSnippets?.[0] ?? ''}
+        prefillDefinition={suggestion.suggestedDefinition ?? suggestion.reason}
         prefillKeywords={suggestion.suggestedKeywords}
       />
     </>

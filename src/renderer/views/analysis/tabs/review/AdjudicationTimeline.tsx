@@ -4,6 +4,7 @@
  */
 
 import React, { useMemo } from 'react';
+import { useConceptFramework } from '../../../../core/ipc/hooks/useConcepts';
 import type { ConceptMapping } from '../../../../../shared-types/models';
 import type { AdjudicationStatus, RelationType } from '../../../../../shared-types/enums';
 import { RELATION_LABELS_ZH } from '../../shared/relationTheme';
@@ -57,6 +58,16 @@ export function AdjudicationTimeline({
   mappings,
   timelineEntries,
 }: AdjudicationTimelineProps) {
+  const { data: framework } = useConceptFramework();
+
+  const conceptNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const concept of framework?.concepts ?? []) {
+      map.set(concept.id, concept.name);
+    }
+    return map;
+  }, [framework]);
+
   // Build a lookup from conceptId to most recent adjudication timestamp
   const timestampMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -157,9 +168,10 @@ export function AdjudicationTimeline({
           }}
         />
 
-        {adjudicatedMappings.map((mapping) => {
+        {adjudicatedMappings.map((mapping, index) => {
           const status = STATUS_MAP[mapping.adjudicationStatus];
           const timestamp = timestampMap.get(mapping.conceptId);
+          const conceptLabel = conceptNames.get(mapping.conceptId) ?? `Concept ${index + 1}`;
 
           return (
             <div
@@ -210,7 +222,7 @@ export function AdjudicationTimeline({
                     {status.icon} {status.label}
                   </span>
                   <span style={{ color: 'var(--text-primary)' }}>
-                    {mapping.conceptId}
+                    {conceptLabel}
                   </span>
                   <span style={{ color: 'var(--text-muted)' }}>
                     ({RELATION_LABELS_ZH[mapping.relationType] ?? mapping.relationType})

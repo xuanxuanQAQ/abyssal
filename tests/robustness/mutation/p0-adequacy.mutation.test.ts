@@ -101,22 +101,22 @@ describe('P0 mutation adequacy — intent router boundaries', () => {
 
   beforeEach(() => { seq = 0; vi.clearAllMocks(); });
 
-  it('KILL: removing rewrite keyword match would change classification', () => {
-    const result = router.classify(makeOp({ intent: 'ask', prompt: '改写这段话' }));
+  it('KILL: removing rewrite keyword match would change classification', async () => {
+    const result = await router.classify(makeOp({ intent: 'ask', prompt: '改写这段话' }));
     expect(result.intent).toBe('rewrite-selection');
     // If the 改写 keyword were removed, this would become 'ask'
     expect(result.intent).not.toBe('ask');
   });
 
-  it('KILL: changing confidence formula would break threshold', () => {
-    const result = router.classify(makeOp({ intent: 'ask', prompt: '改写' }));
+  it('KILL: changing confidence formula would break threshold', async () => {
+    const result = await router.classify(makeOp({ intent: 'ask', prompt: '改写' }));
     // confidence = 0.6 + priority * 0.03, for priority 10: ~0.9
     expect(result.confidence).toBeCloseTo(0.9, 10);
     expect(result.confidence).toBeGreaterThan(0.55); // CONFIDENCE_THRESHOLD
   });
 
-  it('KILL: swapping output target inference for editor selection', () => {
-    const result = router.classify(makeOp({
+  it('KILL: swapping output target inference for editor selection', async () => {
+    const result = await router.classify(makeOp({
       intent: 'ask',
       prompt: '改写',
       context: {
@@ -134,8 +134,8 @@ describe('P0 mutation adequacy — intent router boundaries', () => {
     expect(result.outputTarget.type).toBe('editor-selection-replace');
   });
 
-  it('KILL: removing navigate detection would fall through to ask', () => {
-    const result = router.classify(makeOp({ intent: 'ask', prompt: '跳转到图书馆' }));
+  it('KILL: removing navigate detection would fall through to ask', async () => {
+    const result = await router.classify(makeOp({ intent: 'ask', prompt: '跳转到图书馆' }));
     expect(result.intent).toBe('navigate');
     expect(result.outputTarget.type).toBe('navigate');
   });

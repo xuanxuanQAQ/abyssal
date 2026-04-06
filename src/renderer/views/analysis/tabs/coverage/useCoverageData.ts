@@ -44,7 +44,7 @@ interface CoverageComputationInput {
   heatmap: HeatmapMatrix;
   papers: Paper[];
   framework: ConceptFramework;
-  citedPaperIds?: string[];
+  citedPaperIds?: string[] | undefined;
 }
 
 function computeConceptScore(coverage: ConceptCoverage): number {

@@ -54,7 +54,7 @@ export function useOcrLines(opts: UseOcrLinesOptions): Map<number, OcrLineDTO[]>
         grouped.set(page.pageIndex, page.lines);
       }
 
-      console.log(`[OCR-Hook] Loaded OCR lines for ${grouped.size} pages (paper=${paperId.slice(0, 8)})`);
+      console.log(`[OCR-Hook] Loaded OCR lines for ${grouped.size} pages in current document`);
       setOcrLineMap(grouped);
     };
 

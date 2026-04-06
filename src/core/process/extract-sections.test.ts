@@ -271,4 +271,142 @@ describe('extractSections', () => {
     expect(sectionMapV2.get('unknown')!.charStart).toBe(0);
     expect(boundaries.some(b => b.label === 'unknown')).toBe(true);
   });
+
+  it('detects common Chinese academic headings', () => {
+    const lines = [
+      '摘要',
+      '本文提出一种新的图谱构建方法。',
+      '一、引言',
+      '介绍研究背景。',
+      '二、研究方法',
+      '详细说明模型设计。',
+      '三、实验结果',
+      '报告主要实验结果。',
+      '四、结论',
+      '总结全文。',
+    ];
+    const styled = lines.map((line, index) => {
+      if (index === 0 || index === 2 || index === 4 || index === 6 || index === 8) {
+        return baseStyled(line, 15, true);
+      }
+      return baseStyled(line, 12, false);
+    });
+
+    const { sectionMap, boundaries } = extractSections(lines.join('\n'), styled);
+
+    expect(sectionMap.get('abstract')).toContain('新的图谱构建方法');
+    expect(boundaries.some((boundary) => boundary.label === 'introduction')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'method')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'results')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'conclusion')).toBe(true);
+  });
+
+  it('detects standalone Chinese headings with font emphasis', () => {
+    const lines = [
+      '引言',
+      '这是引言内容。',
+      '相关工作',
+      '这里总结已有研究。',
+      '结论与展望',
+      '最后给出总结。',
+    ];
+    const styled = [
+      baseStyled(lines[0]!, 16, true),
+      baseStyled(lines[1]!),
+      baseStyled(lines[2]!, 16, true),
+      baseStyled(lines[3]!),
+      baseStyled(lines[4]!, 16, true),
+      baseStyled(lines[5]!),
+    ];
+
+    const { boundaries } = extractSections(lines.join('\n'), styled);
+
+    expect(boundaries.some((boundary) => boundary.label === 'introduction')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'literature_review')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'conclusion')).toBe(true);
+  });
+
+  it('does not treat short body lines containing keywords as standalone headings', () => {
+    const lines = [
+      '1 引言',
+      '其交易标的复杂性以及结果的不确定性显著上升。',
+      '采用VAR模型研究发现市场联动增强。',
+      '2 结论',
+      '总结全文。',
+    ];
+    const styled = [
+      baseStyled(lines[0]!, 16, true),
+      baseStyled(lines[1]!, 12, false),
+      baseStyled(lines[2]!, 12, false),
+      baseStyled(lines[3]!, 16, true),
+      baseStyled(lines[4]!, 12, false),
+    ];
+
+    const { boundaries } = extractSections(lines.join('\n'), styled);
+
+    expect(boundaries.filter((boundary) => boundary.label === 'results')).toHaveLength(0);
+    expect(boundaries.filter((boundary) => boundary.label === 'method')).toHaveLength(0);
+    expect(boundaries.some((boundary) => boundary.label === 'introduction')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'conclusion')).toBe(true);
+  });
+
+  it('detects full-width numbered Chinese headings and normalizes ideographic spacing', () => {
+    const lines = [
+      '〔摘要〕　这是摘要内容。',
+      '引　言',
+      '这里是引言。',
+      '１　理论分析与模型构建',
+      '这里是理论分析。',
+      '１ư２　模型构建',
+      '这里是模型构建。',
+      '参',
+      '考',
+      '文',
+      '献',
+      '[1] Zhang Y. Example[J]. Energy, 2020, 12: 1-3.',
+    ];
+    const styled = lines.map((line, index) => {
+      if ([0, 1, 3, 5, 7, 8, 9, 10].includes(index)) {
+        return baseStyled(line, 16, true);
+      }
+      return baseStyled(line, 12, false);
+    });
+
+    const { sectionMap, boundaries } = extractSections(lines.join('\n'), styled);
+
+    expect(sectionMap.has('abstract')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'introduction')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'background')).toBe(true);
+  });
+
+  it('ignores citation lines and formula-like lines that resemble numbered headings', () => {
+    const lines = [
+      '引 言',
+      '这里是引言。',
+      '1 理论分析与模型构建',
+      '这里是理论分析。',
+      '1.2 模型构建',
+      '这里是模型构建。',
+      '（2018）[4]运用Diebold和Yilmaz溢出指数研究发现……',
+      '（1）构建一个平稳的N变量p阶向量自回归模型。',
+      '1.ϑg',
+      '2 结论',
+      '总结全文。',
+    ];
+    const styled = lines.map((line, index) => {
+      if ([0, 2, 4, 9].includes(index)) {
+        return baseStyled(line, 16, true);
+      }
+      return baseStyled(line, 12, false);
+    });
+
+    const { boundaries } = extractSections(lines.join('\n'), styled);
+
+    expect(boundaries.some((boundary) => boundary.label === 'introduction')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'background')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'method')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.label === 'conclusion')).toBe(true);
+    expect(boundaries.some((boundary) => boundary.title.includes('（2018）[4]'))).toBe(false);
+    expect(boundaries.some((boundary) => boundary.title.includes('1.ϑg'))).toBe(false);
+  });
 });

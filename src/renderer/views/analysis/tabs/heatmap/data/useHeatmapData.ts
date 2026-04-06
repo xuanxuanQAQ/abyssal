@@ -68,16 +68,21 @@ interface ProcessedHeatmapData {
 }
 
 /**
- * Format an author name + year into a short label like "Chen 2024".
- * Falls back to first 15 chars of the paper ID if no author info available.
+ * Format a paper into a short label like "Chen 2024".
+ * Falls back to title or a generic paper label if no author info is available.
  */
 function makePaperLabel(
-  authors: Array<{ name: string }> | undefined,
-  year: number | undefined,
-  paperId: string,
+  paper: Paper | undefined,
+  fallbackIndex: number,
 ): string {
+  const authors = paper?.authors;
+  const year = paper?.year;
   if (!authors || authors.length === 0) {
-    return paperId.slice(0, 15);
+    const title = paper?.title?.trim();
+    if (title) {
+      return title.length > 36 ? `${title.slice(0, 33)}...` : title;
+    }
+    return `Paper ${fallbackIndex + 1}`;
   }
   const firstAuthor = authors[0]!.name;
   // Extract surname (last space-separated token)
@@ -96,16 +101,17 @@ function buildConceptGroups(
   const conceptInfoById = new Map<string, ConceptInfo>();
 
   if (!framework) {
-    const fallbackGroups = matrixConceptIds.map((conceptId) => {
+    const fallbackGroups = matrixConceptIds.map((conceptId, index) => {
+      const fallbackName = `Concept ${index + 1}`;
       conceptInfoById.set(conceptId, {
         id: conceptId,
-        name: conceptId,
+        name: fallbackName,
         parentId: null,
         level: 0,
       });
       return {
         id: conceptId,
-        name: conceptId,
+        name: fallbackName,
         conceptIds: [conceptId],
       };
     });
@@ -186,9 +192,10 @@ function buildConceptGroups(
     }
 
     if (!conceptInfoById.has(conceptId)) {
+      const fallbackName = `Concept ${conceptGroups.length + 1}`;
       conceptInfoById.set(conceptId, {
         id: conceptId,
-        name: conceptId,
+        name: fallbackName,
         parentId: null,
         level: 0,
       });
@@ -196,7 +203,7 @@ function buildConceptGroups(
 
     conceptGroups.push({
       id: conceptId,
-      name: conceptInfoById.get(conceptId)?.name ?? conceptId,
+      name: conceptInfoById.get(conceptId)?.name ?? `Concept ${conceptGroups.length + 1}`,
       conceptIds: [conceptId],
     });
   }
@@ -273,9 +280,9 @@ export function buildProcessedHeatmapSnapshot(args: {
     });
   }
 
-  const paperLabels = sortedPaperIds.map((paperId) => {
+  const paperLabels = sortedPaperIds.map((paperId, index) => {
     const paper = paperMap.get(paperId);
-    return makePaperLabel(paper?.authors, paper?.year, paperId);
+    return makePaperLabel(paper, index);
   });
 
   const {
@@ -295,10 +302,10 @@ export function buildProcessedHeatmapSnapshot(args: {
     orderedConceptIds.push(...group.conceptIds);
   }
 
-  const concepts = orderedConceptIds.map((conceptId) => (
+  const concepts = orderedConceptIds.map((conceptId, index) => (
     conceptInfoById.get(conceptId) ?? {
       id: conceptId,
-      name: conceptId,
+      name: `Concept ${index + 1}`,
       parentId: null,
       level: 0,
     }

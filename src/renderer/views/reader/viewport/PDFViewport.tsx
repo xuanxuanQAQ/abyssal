@@ -26,6 +26,7 @@ import {
 import { SelectionToolbar } from '../annotations/SelectionToolbar';
 import { NotePopover } from '../annotations/NotePopover';
 import { ConceptSelector } from '../annotations/ConceptSelector';
+import { CreateConceptDialog } from '../../analysis/tabs/concepts/CreateConceptDialog';
 import { MemoryBudget } from '../core/memoryBudget';
 import type { PageMetadataMap } from '../core/pageMetadataPreloader';
 import type { PDFDocumentManager } from '../core/pdfDocumentManager';
@@ -62,6 +63,10 @@ interface SelectionAnnotationEntry {
 interface PendingStructuredSelection {
   entries: SelectionAnnotationEntry[];
   selectedText: string;
+}
+
+function deriveConceptPrefillName(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
 function selectionClipKey(
@@ -437,6 +442,7 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
 
   // Pending concept tag state (supports cross-page selection)
   const [pendingConceptSelection, setPendingConceptSelection] = useState<PendingStructuredSelection | null>(null);
+  const [pendingConceptCreation, setPendingConceptCreation] = useState<PendingStructuredSelection | null>(null);
 
   // Render page callback — returns { promise, cancel } so callers can
   // abort the underlying pdfjs render task (critical for StrictMode double-invoke).
@@ -448,9 +454,18 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
       dpr: number,
     ): { promise: Promise<void>; cancel: () => void } => {
       let cancelled = false;
+      let frameId: number | null = null;
       let activeRenderTask: { cancel(): void; promise: Promise<void> } | null = null;
 
       const promise = (async () => {
+        await new Promise<void>((resolve) => {
+          frameId = window.requestAnimationFrame(() => {
+            frameId = null;
+            resolve();
+          });
+        });
+        if (cancelled) return;
+
         const doc = manager.getDocument();
         if (!doc) return;
 
@@ -462,7 +477,7 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
         const context = canvas.getContext('2d');
         if (!context) return;
 
-        context.scale(dpr, dpr);
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         // §5.4: Track render task for cancellation on document switch/destroy
         const renderTask = page.render({
@@ -484,6 +499,10 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
         promise,
         cancel() {
           cancelled = true;
+          if (frameId != null) {
+            window.cancelAnimationFrame(frameId);
+            frameId = null;
+          }
           if (activeRenderTask) {
             try { activeRenderTask.cancel(); } catch { /* already finished */ }
           }
@@ -665,6 +684,29 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
   // Show ConceptSelector
   const showConceptSelector = pendingConceptSelection != null;
 
+  const applyConceptSelection = useCallback((selection: PendingStructuredSelection, conceptId: string) => {
+    if (selection.entries.length === 1) {
+      const first = selection.entries[0]!;
+      annotationCRUD.createConceptTag(
+        first.page,
+        first.position,
+        first.selectedText,
+        highlightColor,
+        conceptId,
+      );
+      return;
+    }
+
+    annotationCRUD.createCrossPageAnnotations(
+      selection.entries.map((entry) => ({
+        ...entry,
+        conceptId,
+      })),
+      'conceptTag',
+      highlightColor,
+    );
+  }, [annotationCRUD, highlightColor]);
+
   return (
     <div
       ref={containerRef}
@@ -796,30 +838,28 @@ function PDFViewport({ paperId, pdfPath, manager, pageMetadataMap, scrollRef }: 
           anchorRect={selectionToolbarPosition}
           concepts={(conceptsData ?? []) as Concept[]}
           onSelect={(conceptId) => {
-            if (pendingConceptSelection.entries.length === 1) {
-              const first = pendingConceptSelection.entries[0]!;
-              annotationCRUD.createConceptTag(
-                first.page,
-                first.position,
-                first.selectedText,
-                highlightColor,
-                conceptId,
-              );
-            } else {
-              annotationCRUD.createCrossPageAnnotations(
-                pendingConceptSelection.entries.map((entry) => ({
-                  ...entry,
-                  conceptId,
-                })),
-                'conceptTag',
-                highlightColor,
-              );
-            }
+            applyConceptSelection(pendingConceptSelection, conceptId);
             setPendingConceptSelection(null);
           }}
           onCreateNew={() => {
-            // TODO: concept creation flow
+            setPendingConceptCreation(pendingConceptSelection);
             setPendingConceptSelection(null);
+          }}
+        />
+      )}
+
+      {pendingConceptCreation && (
+        <CreateConceptDialog
+          open={pendingConceptCreation != null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPendingConceptCreation(null);
+            }
+          }}
+          prefillNameEn={deriveConceptPrefillName(pendingConceptCreation.selectedText)}
+          onCreated={(conceptId) => {
+            applyConceptSelection(pendingConceptCreation, conceptId);
+            setPendingConceptCreation(null);
           }}
         />
       )}

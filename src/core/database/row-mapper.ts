@@ -43,6 +43,7 @@ const COLUMN_TYPES: Record<string, 'json' | 'boolean'> = {
   concept_ids: 'json',
   paper_ids: 'json',
   source_paper_ids: 'json',
+  suggested_keywords: 'json',
   linked_note_ids: 'json',
   linked_paper_ids: 'json',
   linked_concept_ids: 'json',

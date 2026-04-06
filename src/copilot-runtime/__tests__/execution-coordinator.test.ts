@@ -261,6 +261,42 @@ describe('ExecutionCoordinator', () => {
   });
 
   describe('execute — retrieval step', () => {
+    it('enriches context with retrieval results even when context is frozen', async () => {
+      const registry = new RecipeRegistry();
+      registry.register({
+        id: 'with-retrieval',
+        intents: ['ask'],
+        priority: 10,
+        specificity: 10,
+        matches: () => true,
+        buildPlan: async () => ({
+          recipeId: 'with-retrieval',
+          target: { type: 'chat-message' },
+          steps: [
+            { kind: 'retrieve', query: 'find evidence', source: 'rag' },
+            { kind: 'llm_generate', mode: 'chat' },
+          ],
+          confirmation: { mode: 'auto', reason: 'test', requiredFor: 'execution' },
+        }),
+      });
+
+      // Return a frozen context — like the real ContextSnapshotBuilder does
+      const frozenContext = Object.freeze(makeContext());
+      const deps = makeDeps({ recipeRegistry: registry });
+      (deps.contextBuilder.build as any).mockResolvedValue(frozenContext);
+
+      const coordinator = new ExecutionCoordinator(deps);
+      await coordinator.execute(makeEnvelope({ id: 'op-frozen', prompt: 'find info' }));
+
+      expect(deps.retrievalExecutor.execute).toHaveBeenCalled();
+      expect(deps.agentExecutor.execute).toHaveBeenCalled();
+      const routedOperation = (deps.agentExecutor.execute as any).mock.calls[0][0] as CopilotOperation;
+      expect(routedOperation.context.retrieval.lastQuery).toBe('test query');
+      expect(routedOperation.context.retrieval.evidence).toEqual([
+        { chunkId: 'c1', paperId: 'p1', text: 'evidence text', score: 0.9 },
+      ]);
+    });
+
     it('enriches context with retrieval results', async () => {
       const registry = new RecipeRegistry();
       registry.register({
@@ -618,7 +654,7 @@ describe('ExecutionCoordinator', () => {
   describe('execute — ambiguous intent triggers clarification', () => {
     it('emits clarification-style events for ambiguous intents', async () => {
       const mockRouter = {
-        classify: vi.fn().mockReturnValue({
+        classify: vi.fn().mockResolvedValue({
           intent: 'rewrite-selection',
           confidence: 0.7,
           outputTarget: { type: 'chat-message' },
@@ -646,7 +682,7 @@ describe('ExecutionCoordinator', () => {
 
     it('keeps the operation in clarification_required instead of completed', async () => {
       const mockRouter = {
-        classify: vi.fn().mockReturnValue({
+        classify: vi.fn().mockResolvedValue({
           intent: 'rewrite-selection',
           confidence: 0.7,
           outputTarget: { type: 'chat-message' },

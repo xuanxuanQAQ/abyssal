@@ -149,7 +149,10 @@ describe('copilot-handler integration — AI note creation', () => {
         config: {
           language: { defaultOutputLanguage: 'zh-CN' },
           project: { name: 'Test Workspace' },
+          rag: { embeddingModel: 'BAAI/bge-m3', embeddingProvider: 'siliconflow', embeddingDimension: 1024 },
+          apiKeys: { siliconflowApiKey: 'sk-test' },
         },
+        onChange: vi.fn().mockReturnValue(() => {}),
       },
     } as any);
 

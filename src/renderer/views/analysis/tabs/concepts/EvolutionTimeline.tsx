@@ -7,6 +7,8 @@ import { useTranslation } from 'react-i18next';
 import type { HistoryEntry } from '../../../../../shared-types/models';
 import type { ConceptHistoryEventType } from '../../../../../shared-types/enums';
 
+type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
+
 const EVENT_ICONS: Record<ConceptHistoryEventType, string> = {
   created: '🌱',
   definition_refined: '✏️',
@@ -21,7 +23,7 @@ const EVENT_ICONS: Record<ConceptHistoryEventType, string> = {
   deprecated: '🗑️',
 };
 
-function formatRelativeTime(isoDate: string, t: (key: string, params?: Record<string, unknown>) => string): string {
+function formatRelativeTime(isoDate: string, t: TranslateFn): string {
   const diff = Date.now() - new Date(isoDate).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return t('context.activity.justNow');
@@ -47,7 +49,7 @@ function formatList(value: unknown, fallback?: unknown): string {
 
 function getSummary(
   entry: HistoryEntry,
-  t: (key: string, params?: Record<string, unknown>) => string,
+  t: TranslateFn,
 ): string {
   const d = entry.details as Record<string, unknown>;
   const summary = typeof d.summary === 'string' ? d.summary : '';
@@ -81,11 +83,11 @@ function getSummary(
       });
     case 'merged_from':
       return t('analysis.concepts.history.events.mergedFrom', {
-        source: summary || formatList(d.sourceConceptId) || t('analysis.concepts.history.events.unknownValue'),
+        source: summary || t('common.concept'),
       });
     case 'split_into':
       return t('analysis.concepts.history.events.splitInto', {
-        targets: formatList(d.newConceptIds, summary) || t('analysis.concepts.history.events.unknownValue'),
+        targets: summary || t('common.concepts'),
       });
     case 'parent_changed':
       return t('analysis.concepts.history.events.parentChanged', {
@@ -112,6 +114,13 @@ interface EvolutionTimelineProps {
 
 export function EvolutionTimeline({ history }: EvolutionTimelineProps) {
   const { t } = useTranslation();
+  const translate: TranslateFn = (key, params) => (
+    String(
+      params === undefined
+        ? t(key)
+        : t(key, params as never)
+    )
+  );
   const [showAll, setShowAll] = useState(false);
   const sorted = [...history].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   const visible = showAll ? sorted : sorted.slice(0, 5);
@@ -135,10 +144,10 @@ export function EvolutionTimeline({ history }: EvolutionTimelineProps) {
 
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.4 }}>
-              {getSummary(entry, t)}
+              {getSummary(entry, translate)}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)' }} title={entry.timestamp}>
-              {formatRelativeTime(entry.timestamp, t)}
+              {formatRelativeTime(entry.timestamp, translate)}
             </div>
           </div>
         </div>

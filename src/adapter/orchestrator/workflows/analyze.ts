@@ -68,6 +68,7 @@ import {
   writeAnalysisArtifact,
   type AnalysisArtifactQualityWarning,
 } from './analysis-artifact';
+import { resolveCurrentRagService } from './rag-service-resolver';
 
 // ─── Services interface ───
 
@@ -107,6 +108,7 @@ export interface AnalyzeServices {
       qualityReport?: { coverage: string; retryCount: number; gaps: string[] } | null;
     }>;
   } | null;
+  getRagService?: (() => AnalyzeServices['ragService']) | undefined;
   logger: Logger;
   frameworkState: FrameworkState | (() => FrameworkState);
   workspacePath: string;
@@ -342,7 +344,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     const upgradeQueue: string[] = []; // Papers needing upgrade from intermediate → full
     const upgradeQueueSeen = new Set<string>(); // Dedup guard for upgradeQueue
     const completedPaperIds: string[] = []; // Track for post-batch relation computation
-    const ragService = services.ragService ?? null;
+    const ragService = resolveCurrentRagService(services);
 
     // Worker-pool pattern
     let nextIndex = 0;
@@ -1242,8 +1244,7 @@ async function writeSuggestions(
     try {
       await dbProxy.addSuggestedConcept({
         term: suggestion.term,
-        termNormalized: suggestion.termNormalized,
-        frequency: suggestion.frequencyInPaper,
+        frequencyInPaper: suggestion.frequencyInPaper,
         sourcePaperId: paperId,
         closestExistingConceptId: suggestion.closestExisting,
         reason: suggestion.reason,

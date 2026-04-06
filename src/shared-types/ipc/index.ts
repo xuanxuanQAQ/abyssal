@@ -29,9 +29,11 @@ export interface PaperFilter {
 
 export interface GraphFilter {
   focusNodeId?: string;
+  focusNodeType?: 'paper' | 'concept' | 'memo' | 'note';
   hopDepth?: 1 | 2 | 'global';
   layers?: LayerVisibility;
   similarityThreshold?: number;
+  includeConcepts?: boolean;
   /** v2.0 是否包含笔记节点 */
   includeNotes?: boolean;
 }

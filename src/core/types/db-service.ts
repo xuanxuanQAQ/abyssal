@@ -35,10 +35,10 @@ import type { SuggestedConceptsStatsResult } from '../database/dao/suggestions';
 import type { MemoEntityType, AddMemoResult } from '../database/dao/memos';
 import type { Seed } from '../database/dao/seeds';
 import type { SearchLogEntry } from '../database/dao/search-log';
-import type { SemanticSearchFn, GraphNode, GraphEdge, RelationGraphFilter } from '../database/dao/relations';
+import type { SemanticSearchFn, RelationGraphFilter } from '../database/dao/relations';
 import type { DatabaseStats, IntegrityReport } from '../database/dao/stats';
 import type { SnapshotMeta } from '../database/snapshot';
-import type { ChatMessageRecord, ChatSessionSummary, PaginationOpts } from '../../shared-types/models';
+import type { ChatMessageRecord, ChatSessionSummary, GraphData, PaginationOpts } from '../../shared-types/models';
 
 export interface IDbService {
   // ─── 论文 ───
@@ -66,6 +66,7 @@ export interface IDbService {
   gcConceptChange(conceptId: ConceptId, changeType: 'definition_refined' | 'deprecated' | 'deleted', isBreaking?: boolean): GcConceptChangeResult;
   getConcept(id: ConceptId): ConceptDefinition | null;
   getAllConcepts(includeDeprecated?: boolean): ConceptDefinition[];
+  syncConceptsFromYaml(yamlConcepts: ConceptDefinition[]): import('../config/hot-reload/concept-sync').SyncReport;
 
   // ─── 映射 ───
   mapPaperConcept(mapping: ConceptMapping): void;
@@ -137,7 +138,16 @@ export interface IDbService {
   deleteNote(id: NoteId): number;
 
   // ─── 概念建议 ───
-  addSuggestedConcept(input: { term: string; frequencyInPaper: number; sourcePaperId: PaperId; closestExistingConceptId?: ConceptId | null; closestExistingConceptSimilarity?: string | null; reason: string }): SuggestionId;
+  addSuggestedConcept(input: {
+    term: string;
+    frequencyInPaper: number;
+    sourcePaperId: PaperId;
+    closestExistingConceptId?: ConceptId | null;
+    closestExistingConceptSimilarity?: string | null;
+    reason: string;
+    suggestedDefinition?: string | null;
+    suggestedKeywords?: string[] | null;
+  }): SuggestionId;
   adoptSuggestedConcept(suggestionId: SuggestionId, conceptOverrides?: Partial<ConceptDefinition>): ConceptId;
   dismissSuggestedConcept(suggestionId: SuggestionId): number;
   getSuggestedConcepts(status?: SuggestionStatus, limit?: number): SuggestedConcept[];
@@ -193,11 +203,12 @@ export interface IDbService {
   // ─── 关系 ───
   computeRelationsForPaper(paperId: PaperId, semanticSearchFn: SemanticSearchFn | null): void;
   recomputeAllRelations(semanticSearchFn: SemanticSearchFn | null): number;
-  getRelationGraph(filter: RelationGraphFilter): { nodes: GraphNode[]; edges: GraphEdge[] };
+  getRelationGraph(filter: RelationGraphFilter): GraphData;
   getRelationsForPaper(paperId: PaperId): PaperRelation[];
 
   // ─── 聊天持久化 ───
   saveChatMessage(record: ChatMessageRecord): void;
+  deleteChatMessage(messageId: string): void;
   getChatHistory(contextKey: string, opts?: PaginationOpts): ChatMessageRecord[];
   deleteChatSession(contextKey: string): void;
   listChatSessions(): ChatSessionSummary[];
@@ -277,6 +288,7 @@ const _dbServiceMethodMap: Record<keyof IDbService, true> = {
   addConcept: true, updateConcept: true, deprecateConcept: true,
   syncConcepts: true, mergeConcepts: true, splitConcept: true,
   gcConceptChange: true, getConcept: true, getAllConcepts: true,
+  syncConceptsFromYaml: true,
   // 映射
   mapPaperConcept: true, mapPaperConceptBatch: true, updateMapping: true,
   getMappingsByPaper: true, getMappingsByConcept: true, getMapping: true,
@@ -309,7 +321,8 @@ const _dbServiceMethodMap: Record<keyof IDbService, true> = {
   // 概念建议
   addSuggestedConcept: true, adoptSuggestedConcept: true,
   dismissSuggestedConcept: true, getSuggestedConcepts: true,
-  getSuggestedConcept: true, restoreSuggestedConcept: true,
+  getSuggestedConcept: true, getSuggestedConceptByTerm: true,
+  updateSuggestedConcept: true, restoreSuggestedConcept: true,
   getSuggestedConceptsStats: true,
   // 文章
   createArticle: true, getArticle: true, updateArticle: true,
@@ -333,7 +346,7 @@ const _dbServiceMethodMap: Record<keyof IDbService, true> = {
   computeRelationsForPaper: true, recomputeAllRelations: true,
   getRelationGraph: true, getRelationsForPaper: true,
   // 聊天
-  saveChatMessage: true, getChatHistory: true, deleteChatSession: true,
+  saveChatMessage: true, deleteChatMessage: true, getChatHistory: true, deleteChatSession: true,
   listChatSessions: true,
   // 审计
   insertAuditLog: true,

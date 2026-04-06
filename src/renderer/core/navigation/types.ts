@@ -32,6 +32,7 @@ export interface SectionTarget {
 export interface GraphFocusTarget {
   type: 'graph';
   focusNodeId: string;
+  focusNodeType?: 'paper' | 'concept' | 'memo' | 'note';
 }
 
 /** v2.0 跳转到结构化笔记 */

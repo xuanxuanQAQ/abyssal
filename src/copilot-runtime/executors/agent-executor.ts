@@ -11,6 +11,7 @@ import type { EventBus } from '../../core/event-bus';
 import type { ToolCallingGovernor } from '../../adapter/orchestrator/tool-calling-governor';
 import { classifyPromptGate } from '../../adapter/orchestrator/prompt-injection-gating';
 import { routeToolFamilies, buildToolRouteInstruction } from '../../adapter/orchestrator/tool-routing';
+import type { ToolRouteFamily } from '../../adapter/capabilities/types';
 import type {
   CopilotOperation,
   ContextSnapshot,
@@ -55,11 +56,21 @@ export class AgentExecutor {
 
     const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 
-    // Add conversation context
-    for (const turn of operation.context.conversation.recentTurns) {
-      if (turn.role === 'user' || turn.role === 'assistant') {
-        messages.push({ role: turn.role, content: turn.text });
-      }
+    // Conversation history injection depends on step mode:
+    //   chat  → full history (all recent turns)
+    //   draft → last 2 turns only (enough for "make it more academic" follow-ups,
+    //           not enough to pollute with unrelated tool calls / research chat)
+    //   patch → no history (pure generation)
+    const maxHistoryTurns = step.mode === 'chat' ? Infinity
+      : step.mode === 'draft' ? 2
+      : 0;
+    const recentTurns = operation.context.conversation.recentTurns
+      .filter((t) => t.role === 'user' || t.role === 'assistant');
+    const historySlice = maxHistoryTurns === Infinity
+      ? recentTurns
+      : recentTurns.slice(-maxHistoryTurns);
+    for (const turn of historySlice) {
+      messages.push({ role: turn.role as 'user' | 'assistant', content: turn.text });
     }
 
     // Add the current prompt
@@ -73,20 +84,28 @@ export class AgentExecutor {
     });
     const disableToolUse = promptGate.type === 'greeting' || promptGate.type === 'smalltalk' || promptGate.type === 'assistant-profile';
 
+    // Step-level allowedToolFamilies (from recipe) take precedence over routing
+    const stepFamilies = step.allowedToolFamilies;
     const route = routeToolFamilies({ userMessage: operation.prompt, gateType: promptGate.type });
+    const effectiveFamilies: ToolRouteFamily[] = stepFamilies ?? route.allowedFamilies;
     const tools = disableToolUse
       ? []
       : this.deps.capabilities.toToolDefinitions({
-          allowedFamilies: route.allowedFamilies,
+          allowedFamilies: effectiveFamilies,
           userMessage: operation.prompt,
         });
 
-    // Inject routing instruction when routing is confident
-    if (!disableToolUse && route.confidence >= 0.75) {
+    // Inject routing instruction only for open-ended chat — skip for recipe-
+    // constrained steps (stepFamilies set) and draft/patch modes to avoid
+    // prompting the model toward tool use during focused generation.
+    if (!disableToolUse && !stepFamilies && step.mode === 'chat' && route.confidence >= 0.75) {
       systemPrompt += `\n\n${buildToolRouteInstruction(route)}`;
     }
 
-    const allowToolUse = step.mode !== 'patch' && !disableToolUse; // patch mode and social openers are pure generation
+    // draft and patch modes are pure text generation — no tool use.
+    // draft = editor mutations (rewrite, expand, compress, continue-writing)
+    // patch = raw text patching
+    const allowToolUse = step.mode === 'chat' && !disableToolUse;
 
     // Reset governor for this operation
     this.deps.governor.reset();
@@ -188,6 +207,30 @@ export class AgentExecutor {
         try {
           const result = await this.deps.capabilities.execute(tc.name, tc.input, signal);
 
+          if (!result.success) {
+            // Capability returned a structured failure (not an exception).
+            // Record as failed so governor tracks the miss, and feed an
+            // explicit error signal back to the model so it stops retrying.
+            this.deps.governor.recordCall(tc.name, false);
+
+            const failText = result.summary ?? 'Tool execution failed';
+            toolCalls.push({ name: tc.name, input: tc.input, output: failText, status: 'failed' });
+
+            emitter.emit({
+              type: 'tool.call',
+              operationId: operation.id,
+              toolName: tc.name,
+              status: 'failed',
+              message: failText.substring(0, 200),
+            });
+
+            // Tell the model this tool failed — use a clearly distinct format
+            // so the model doesn't treat the error text as a successful result.
+            messages.push({ role: 'assistant', content: roundText });
+            messages.push({ role: 'user', content: `[Tool FAILED: ${tc.name}]\n${failText}\nDo NOT retry this tool. Proceed with generation using available context.` });
+            continue;
+          }
+
           this.deps.governor.recordCall(tc.name, true);
 
           const resultText = result.summary ?? JSON.stringify(result.data ?? '');
@@ -240,9 +283,7 @@ function buildPromptWithContext(operation: CopilotOperation): string {
   const article = operation.context.article;
   if (article) {
     const articleLines = [
-      `Article ID: ${article.articleId}`,
       article.articleTitle ? `Article Title: ${article.articleTitle}` : '',
-      article.sectionId ? `Section ID: ${article.sectionId}` : '',
       article.sectionTitle ? `Section Title: ${article.sectionTitle}` : '',
       article.previousSectionSummaries?.length
         ? `Previous Section Summaries: ${article.previousSectionSummaries.join(' | ')}`
@@ -260,9 +301,8 @@ function buildPromptWithContext(operation: CopilotOperation): string {
   const writing = operation.context.writing;
   if (writing) {
     const writingLines = [
-      `Editor ID: ${writing.editorId}`,
-      `Writing Article ID: ${writing.articleId}`,
-      writing.sectionId ? `Writing Section ID: ${writing.sectionId}` : '',
+      article?.articleTitle ? `Document: ${article.articleTitle}` : 'Document: current writing workspace',
+      article?.sectionTitle ? `Active Section: ${article.sectionTitle}` : '',
       `Unsaved Changes: ${writing.unsavedChanges ? 'yes' : 'no'}`,
     ].filter((line) => line.length > 0);
 
@@ -281,7 +321,7 @@ function buildPromptWithContext(operation: CopilotOperation): string {
   const retrieval = operation.context.retrieval;
   if (retrieval.evidence.length > 0) {
     const evidenceLines = retrieval.evidence.slice(0, 5).map((evidence, index) => (
-      `[${index + 1}] paper=${evidence.paperId} score=${evidence.score.toFixed(3)}\n${evidence.text}`
+      `[${index + 1}] source=${evidence.citationLabel ?? `Source ${index + 1}`} score=${evidence.score.toFixed(3)}\n${evidence.text}`
     ));
     const retrievalHeader = retrieval.lastQuery
       ? `Query: ${retrieval.lastQuery}`

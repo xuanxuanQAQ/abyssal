@@ -44,7 +44,8 @@ function useGraphKeyboardNav(
 
           const nextNodeId = neighbors[neighborIndexRef.current];
           if (nextNodeId !== undefined) {
-            focusGraphNode(nextNodeId);
+            const nextAttrs = graph.getNodeAttributes(nextNodeId) as Record<string, unknown>;
+            focusGraphNode(nextNodeId, (nextAttrs.type as 'paper' | 'concept' | 'memo' | 'note') ?? 'paper');
           }
           break;
         }
@@ -69,7 +70,8 @@ function useGraphKeyboardNav(
 
           const nextId = neighborsLR[neighborIndexRef.current];
           if (nextId !== undefined) {
-            focusGraphNode(nextId);
+            const nextAttrs = graph.getNodeAttributes(nextId) as Record<string, unknown>;
+            focusGraphNode(nextId, (nextAttrs.type as 'paper' | 'concept' | 'memo' | 'note') ?? 'paper');
           }
           break;
         }

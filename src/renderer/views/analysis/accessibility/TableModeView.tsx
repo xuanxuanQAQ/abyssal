@@ -330,7 +330,7 @@ function TableModeView({
 
           <tbody>
             {sortedRowIndices.map((rowIdx) => {
-              const conceptName = conceptNames[rowIdx] ?? `Concept ${rowIdx}`;
+              const conceptName = conceptNames[rowIdx] ?? `Concept ${rowIdx + 1}`;
               return (
                 <tr key={rowIdx}>
                   <th scope="row" style={rowHeaderStyle} title={conceptName}>
@@ -350,7 +350,7 @@ function TableModeView({
                           }}
                           tabIndex={0}
                           role="gridcell"
-                          aria-label={`${conceptName}, ${paperLabels[colIdx] ?? `Paper ${colIdx}`}: 无映射`}
+                          aria-label={`${conceptName}, ${paperLabels[colIdx] ?? `Paper ${colIdx + 1}`}: 无映射`}
                           onClick={() => handleCellClick(rowIdx, colIdx)}
                           onKeyDown={(e) => handleCellKeyDown(e, rowIdx, colIdx)}
                         >
@@ -375,7 +375,7 @@ function TableModeView({
                         }}
                         tabIndex={0}
                         role="gridcell"
-                        aria-label={`${conceptName}, ${paperLabels[colIdx] ?? `Paper ${colIdx}`}: ${cell.relationType} ${confText}${adjIndicator}`}
+                        aria-label={`${conceptName}, ${paperLabels[colIdx] ?? `Paper ${colIdx + 1}`}: ${cell.relationType} ${confText}${adjIndicator}`}
                         onClick={() => handleCellClick(rowIdx, colIdx)}
                         onKeyDown={(e) => handleCellKeyDown(e, rowIdx, colIdx)}
                       >

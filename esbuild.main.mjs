@@ -29,6 +29,20 @@ function copyMigrations() {
   }
 }
 
+function copyRuntimeProcessFiles() {
+  const files = [
+    {
+      src: path.join(__dirname, 'src/core/process/tesseract-worker.cjs'),
+      dst: path.join(__dirname, 'dist/core/process/tesseract-worker.cjs'),
+    },
+  ];
+
+  for (const file of files) {
+    fs.mkdirSync(path.dirname(file.dst), { recursive: true });
+    fs.copyFileSync(file.src, file.dst);
+  }
+}
+
 // ─── 编译 TypeScript 迁移文件 ───
 // TS 迁移在运行时通过 require() 动态加载，需单独编译为 CJS
 
@@ -54,6 +68,7 @@ async function buildTsMigrations() {
 }
 
 copyMigrations();
+copyRuntimeProcessFiles();
 
 // ─── Native 模块和 Electron 标记为 external ───
 
@@ -129,6 +144,24 @@ const dlaProcessConfig = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const ragProcessConfig = {
+  entryPoints: ['src/rag-process/main.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'cjs',
+  outfile: 'dist/rag-process/main.js',
+  external: externalModules,
+  sourcemap: true,
+  alias: {
+    '@core': path.join(__dirname, 'src/core'),
+    '@shared-types': path.join(__dirname, 'src/shared-types'),
+  },
+  conditions: ['node'],
+  logLevel: 'info',
+};
+
+/** @type {esbuild.BuildOptions} */
 const preloadConfig = {
   entryPoints: ['src/electron/preload.ts'],
   bundle: true,
@@ -150,9 +183,11 @@ if (isWatch) {
   const preloadCtx = await esbuild.context(preloadConfig);
   const dbCtx = await esbuild.context(dbProcessConfig);
   const dlaCtx = await esbuild.context(dlaProcessConfig);
-  await Promise.all([mainCtx.watch(), preloadCtx.watch(), dbCtx.watch(), dlaCtx.watch()]);
+  const ragCtx = await esbuild.context(ragProcessConfig);
+  await Promise.all([mainCtx.watch(), preloadCtx.watch(), dbCtx.watch(), dlaCtx.watch(), ragCtx.watch()]);
   await buildTsMigrations();
   copyMigrations();
+  copyRuntimeProcessFiles();
 
   // Watch migrations directory for new/changed .ts and .sql files.
   // esbuild context.watch() only tracks import graphs — dynamically-loaded
@@ -177,6 +212,16 @@ if (isWatch) {
     }, 300);
   });
 
+  const runtimeWorkerPath = path.join(__dirname, 'src/core/process/tesseract-worker.cjs');
+  fs.watch(runtimeWorkerPath, () => {
+    try {
+      copyRuntimeProcessFiles();
+      console.log('[esbuild] runtime process files copied');
+    } catch (err) {
+      console.error('[esbuild] runtime process file copy failed:', err);
+    }
+  });
+
   console.log('[esbuild] watching for changes...');
 } else {
   await Promise.all([
@@ -184,6 +229,8 @@ if (isWatch) {
     esbuild.build(preloadConfig),
     esbuild.build(dbProcessConfig),
     esbuild.build(dlaProcessConfig),
+    esbuild.build(ragProcessConfig),
     buildTsMigrations(),
   ]);
+  copyRuntimeProcessFiles();
 }

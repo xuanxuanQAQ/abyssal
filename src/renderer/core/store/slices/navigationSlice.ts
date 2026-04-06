@@ -62,6 +62,7 @@ function restoreSelectionFromTarget(state: SelectionSlice, target: NavigationTar
       break;
     case 'graph':
       state.focusedGraphNodeId = target.focusNodeId;
+      state.focusedGraphNodeType = target.focusNodeType ?? null;
       break;
     case 'note':
       state.selectedNoteId = target.noteId;

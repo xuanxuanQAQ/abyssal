@@ -23,6 +23,22 @@ import { isLifecycleMessage, isDbRequest } from './protocol';
 
 let dbService: DatabaseService | null = null;
 let logger: Logger | null = null;
+let isShuttingDown = false;
+
+function shutdown(exitCode: number): void {
+  if (isShuttingDown) {
+    process.exit(exitCode);
+  }
+
+  isShuttingDown = true;
+
+  if (dbService) {
+    try { dbService.close(); } catch { /* ignore */ }
+    dbService = null;
+  }
+
+  process.exit(exitCode);
+}
 
 // ─── 初始化 ───
 
@@ -293,19 +309,22 @@ process.on('message', async (msg: DbProcessMessage) => {
 
 // ─── 优雅退出 ───
 
+process.on('disconnect', () => {
+  logger?.info('DB subprocess: parent disconnected, shutting down');
+  shutdown(0);
+});
+
 process.on('SIGTERM', () => {
-  if (dbService) {
-    try { dbService.close(); } catch { /* ignore */ }
-  }
-  process.exit(0);
+  shutdown(0);
+});
+
+process.on('SIGINT', () => {
+  shutdown(0);
 });
 
 process.on('uncaughtException', (err) => {
   logger?.error('DB subprocess uncaught exception', err);
-  if (dbService) {
-    try { dbService.close(); } catch { /* ignore */ }
-  }
-  process.exit(1);
+  shutdown(1);
 });
 
 // 通知父进程子进程已准备就绪

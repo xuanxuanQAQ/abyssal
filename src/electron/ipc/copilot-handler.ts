@@ -11,6 +11,7 @@ import { typedHandler } from './register';
 import { CopilotRuntime, type CopilotRuntimeDeps } from '../../copilot-runtime/runtime';
 import type {
   CopilotOperationEnvelope,
+  CopilotOperation,
   ContextSnapshot,
   ResumeOperationRequest,
 } from '../../copilot-runtime/types';
@@ -19,6 +20,8 @@ import { classifyPromptGate, type PromptGateType } from '../../adapter/orchestra
 import { asArticleId } from '../../core/types/common';
 import { buildChatSystemPrompt } from '../chat-system-prompt';
 import type { SystemPromptBundle, SystemPromptInteractionMode } from '../../adapter/agent-loop/system-prompt-builder';
+import { createEmbedFunction } from '../../adapter/llm-client/embed-function-factory';
+import * as path from 'node:path';
 
 let runtimeInstance: CopilotRuntime | null = null;
 
@@ -33,6 +36,8 @@ const pendingAssistantText = new Map<string, string>();
 const operationMeta = new Map<string, { sessionId: string; userPrompt: string }>();
 // Maps legacy conversation/session ids returned to the renderer → latest operation id
 const sessionToOperation = new Map<string, string>();
+// Tracks how much assistant text has been persisted (for incremental flush)
+const lastPersistedLength = new Map<string, number>();
 
 function resolveSessionIdForOperation(operationId: string): string {
   const meta = operationMeta.get(operationId);
@@ -63,6 +68,9 @@ function bindSessionToOperation(sessionId: string, operationId: string): void {
   sessionToOperation.set(sessionId, operationId);
 }
 
+// Tracks in-flight hydration promises to prevent TOCTOU races
+const hydrationInFlight = new Map<string, Promise<void>>();
+
 async function hydrateConversationCache(
   ctx: AppContext,
   sessionId: string,
@@ -70,26 +78,40 @@ async function hydrateConversationCache(
 ): Promise<void> {
   if (conversationCache.has(sessionId)) return;
 
-  const records = await ctx.dbProxy.getChatHistory(sessionId, { limit: MAX_TURNS_PER_SESSION });
-  const hydrated = records
-    .slice()
-    .reverse()
-    .map((record) => ({ role: record.role, text: record.content }));
+  // If a hydration for this session is already in-flight, await it instead of starting a second one.
+  const existing = hydrationInFlight.get(sessionId);
+  if (existing) return existing;
 
-  if (
-    currentPrompt &&
-    hydrated.length > 0 &&
-    hydrated[hydrated.length - 1]?.role === 'user' &&
-    hydrated[hydrated.length - 1]?.text === currentPrompt
-  ) {
-    hydrated.pop();
-  }
+  const promise = (async () => {
+    try {
+      const records = await ctx.dbProxy.getChatHistory(sessionId, { limit: MAX_TURNS_PER_SESSION });
+      const hydrated = records
+        .slice()
+        .reverse()
+        .map((record) => ({ role: record.role, text: record.content }));
 
-  conversationCache.set(sessionId, hydrated);
+      if (
+        currentPrompt &&
+        hydrated.length > 0 &&
+        hydrated[hydrated.length - 1]?.role === 'user' &&
+        hydrated[hydrated.length - 1]?.text === currentPrompt
+      ) {
+        hydrated.pop();
+      }
+
+      conversationCache.set(sessionId, hydrated);
+    } finally {
+      hydrationInFlight.delete(sessionId);
+    }
+  })();
+
+  hydrationInFlight.set(sessionId, promise);
+  return promise;
 }
 
 export function clearCopilotSessionArtifacts(sessionId: string): void {
   conversationCache.delete(sessionId);
+  hydrationInFlight.delete(sessionId);
   sessionToOperation.delete(sessionId);
   runtimeInstance?.clearSession(sessionId);
 
@@ -114,7 +136,8 @@ function pushTurn(sessionId: string, role: 'user' | 'assistant', text: string): 
   }
 }
 
-function getRuntime(ctx: AppContext): CopilotRuntime {
+/** Get or create the singleton CopilotRuntime. Exported for settings handler. */
+export function getOrCreateCopilotRuntime(ctx: AppContext): CopilotRuntime {
   if (runtimeInstance) return runtimeInstance;
 
   if (!ctx.llmClient) {
@@ -152,6 +175,15 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
       eventBus: ctx.eventBus ?? (() => { throw new Error('eventBus not initialized'); })(),
       governor: new ToolCallingGovernor(),
       buildSystemPrompt: async (operation) => {
+        // Direct editor mutations use a focused writing prompt —
+        // no tools, no project stats, just writing instructions.
+        const EDITOR_MUTATION_INTENTS = new Set([
+          'rewrite-selection', 'expand-selection', 'compress-selection', 'continue-writing',
+        ]);
+        if (EDITOR_MUTATION_INTENTS.has(operation.intent)) {
+          return buildWritingSystemPrompt(operation, ctx);
+        }
+
         const chatContext = snapshotToChatContext(operation.context);
         const gate = classifyPromptGate({
           userMessage: operation.prompt,
@@ -215,20 +247,65 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
     logger: (msg, data) => ctx.logger.info(`[CopilotRuntime] ${msg}`, data as Record<string, unknown>),
   };
 
+  // ── Intent embedding fallback ──
+  // Create a dedicated EmbedFunction for semantic intent classification.
+  // Cache is stored alongside other workspace metadata in .abyssal/cache/.
+  const intentEmbedFn = createEmbedFunction({ configProvider: ctx.configProvider, logger: ctx.logger });
+  if (intentEmbedFn.isAvailable) {
+    deps.embedding = {
+      embedFn: intentEmbedFn,
+      cacheDir: path.join(ctx.workspaceRoot, '.abyssal', 'cache'),
+    };
+  }
+
   runtimeInstance = new CopilotRuntime(deps);
 
+  // ── Auto-rebuild intent embeddings when embedding model/provider changes ──
+  ctx.configProvider.onChange((event) => {
+    if (!event.changedSections.includes('rag')) return;
+    const prev = event.previous.rag;
+    const curr = event.current.rag;
+    if (prev.embeddingModel === curr.embeddingModel && prev.embeddingProvider === curr.embeddingProvider) return;
+
+    ctx.logger.info('[CopilotRuntime] Embedding model changed — rebuilding intent embeddings', {
+      from: `${prev.embeddingProvider}/${prev.embeddingModel}`,
+      to: `${curr.embeddingProvider}/${curr.embeddingModel}`,
+    });
+    runtimeInstance?.rebuildIntentEmbeddings().catch((err) => {
+      ctx.logger.warn('[CopilotRuntime] Intent embedding rebuild failed', { error: (err as Error).message });
+    });
+  });
+
   // Forward runtime events to push manager + build conversation cache
-  runtimeInstance.onEvent((event) => {
+  runtimeInstance.onEvent(async (event) => {
     ctx.pushManager?.pushCopilotEvent(event);
 
     if (event.type === 'operation.started') {
       bindSessionToOperation(event.sessionId, event.operationId);
     }
 
-    // Accumulate assistant text from model.delta events
+    // Accumulate assistant text from model.delta events.
+    // Incrementally persist to DB every ~2000 chars to survive crashes.
     if (event.type === 'model.delta' && event.channel === 'chat') {
       const prev = pendingAssistantText.get(event.operationId) ?? '';
-      pendingAssistantText.set(event.operationId, prev + event.text);
+      const updated = prev + event.text;
+      pendingAssistantText.set(event.operationId, updated);
+
+      if (updated.length - (lastPersistedLength.get(event.operationId) ?? 0) >= 2000) {
+        const meta = operationMeta.get(event.operationId);
+        if (meta) {
+          lastPersistedLength.set(event.operationId, updated.length);
+          try {
+            await Promise.resolve(ctx.dbProxy.saveChatMessage({
+              id: `${event.operationId}-assistant-wip`,
+              contextSourceKey: meta.sessionId,
+              role: 'assistant',
+              content: updated,
+              timestamp: Date.now(),
+            }));
+          } catch { /* best-effort incremental persist */ }
+        }
+      }
     }
 
     if (event.type === 'operation.clarification_required') {
@@ -249,7 +326,7 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
       return;
     }
 
-    // On operation completion, flush accumulated assistant text to conversation cache
+    // On operation completion, flush accumulated assistant text to conversation cache + DB
     if (event.type === 'operation.completed' || event.type === 'operation.failed') {
       const meta = operationMeta.get(event.operationId);
       const assistantText = pendingAssistantText.get(event.operationId) ?? '';
@@ -257,10 +334,26 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
 
       if (meta && assistantText) {
         pushTurn(meta.sessionId, 'assistant', assistantText);
+        // Final persist — overwrites any WIP record with complete text
+        try {
+          await Promise.resolve(ctx.dbProxy.saveChatMessage({
+            id: `${event.operationId}-assistant`,
+            contextSourceKey: meta.sessionId,
+            role: 'assistant',
+            content: assistantText,
+            timestamp: Date.now(),
+          }));
+        } catch { /* best-effort */ }
+
+        // Clean up WIP record to avoid duplicate entries in chat history
+        try {
+          await Promise.resolve(ctx.dbProxy.deleteChatMessage(`${event.operationId}-assistant-wip`));
+        } catch { /* best-effort cleanup */ }
       }
 
       // Cleanup
       pendingAssistantText.delete(event.operationId);
+      lastPersistedLength.delete(event.operationId);
       operationMeta.delete(event.operationId);
       for (const [sessionId, operationId] of sessionToOperation) {
         if (operationId === event.operationId) {
@@ -277,6 +370,7 @@ function getRuntime(ctx: AppContext): CopilotRuntime {
     if (event.type === 'operation.aborted') {
       const sessionId = resolveSessionIdForOperation(event.operationId);
       pendingAssistantText.delete(event.operationId);
+      lastPersistedLength.delete(event.operationId);
       operationMeta.delete(event.operationId);
       for (const [sessionId, operationId] of sessionToOperation) {
         if (operationId === event.operationId) {
@@ -299,6 +393,7 @@ export function invalidateCopilotRuntime(): void {
   runtimeInstance = null;
   conversationCache.clear();
   pendingAssistantText.clear();
+  lastPersistedLength.clear();
   operationMeta.clear();
   sessionToOperation.clear();
 }
@@ -308,7 +403,7 @@ export function registerCopilotHandlers(ctx: AppContext): void {
 
   // ── copilot:execute ──
   typedHandler('copilot:execute', logger, async (_e, envelope) => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     const env = envelope as CopilotOperationEnvelope;
     const op = env.operation;
     await hydrateConversationCache(ctx, op.sessionId ?? 'workspace', op.prompt);
@@ -327,13 +422,13 @@ export function registerCopilotHandlers(ctx: AppContext): void {
 
   // ── copilot:abort ──
   typedHandler('copilot:abort', logger, async (_e, operationId) => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     runtime.abort(operationId as string);
   });
 
   // ── copilot:resume ──
   typedHandler('copilot:resume', logger, async (_e, request) => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     const typedRequest = request as ResumeOperationRequest;
     const status = runtime.getOperationStatus(typedRequest.operationId);
     if (status) {
@@ -344,25 +439,25 @@ export function registerCopilotHandlers(ctx: AppContext): void {
 
   // ── copilot:getOperationStatus ──
   typedHandler('copilot:getOperationStatus', logger, async (_e, operationId) => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     return runtime.getOperationStatus(operationId as string);
   });
 
   // ── copilot:listSessions ──
   typedHandler('copilot:listSessions', logger, async () => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     return runtime.listSessions();
   });
 
   // ── copilot:getSession ──
   typedHandler('copilot:getSession', logger, async (_e, sessionId) => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     return runtime.getSession(sessionId as string);
   });
 
   // ── copilot:clearSession ──
   typedHandler('copilot:clearSession', logger, async (_e, sessionId) => {
-    const runtime = getRuntime(ctx);
+    const runtime = getOrCreateCopilotRuntime(ctx);
     clearCopilotSessionArtifacts(sessionId as string);
     sessionToOperation.delete(sessionId as string);
     runtime.clearSession(sessionId as string);
@@ -370,6 +465,53 @@ export function registerCopilotHandlers(ctx: AppContext): void {
 }
 
 // ─── Helpers ───
+
+// ─── Writing-specific system prompt ───
+// For direct editor mutations (rewrite/expand/compress/continue-writing),
+// we use a focused prompt that constrains output to raw text only.
+// Modelled after Cursor Apply / Claude Code apply behaviour.
+
+const WRITING_INTENT_INSTRUCTIONS: Record<string, string> = {
+  'rewrite-selection': [
+    'The user wants you to REWRITE the selected text.',
+    'Produce an improved version of the selected text, preserving the original meaning.',
+    'Match the style, register, and language of the original.',
+  ].join('\n'),
+  'expand-selection': [
+    'The user wants you to EXPAND the selected text.',
+    'Elaborate on the ideas in the selected text, adding detail, examples, or analysis.',
+    'Maintain consistency with the surrounding content.',
+  ].join('\n'),
+  'compress-selection': [
+    'The user wants you to COMPRESS the selected text.',
+    'Produce a shorter, more concise version while preserving the core meaning.',
+  ].join('\n'),
+  'continue-writing': [
+    'The user wants you to CONTINUE WRITING from the current position.',
+    'Seamlessly extend the existing text, maintaining style, tone, and argument flow.',
+    'Write 1-3 paragraphs unless the user specifies otherwise.',
+  ].join('\n'),
+};
+
+function buildWritingSystemPrompt(operation: CopilotOperation, ctx: AppContext): string {
+  const lang = ctx.configProvider.config.language.defaultOutputLanguage;
+  const langRule = lang ? `Always write in ${lang}.` : 'Write in the same language as the existing text.';
+  const intentBlock = WRITING_INTENT_INSTRUCTIONS[operation.intent] ?? '';
+
+  const lines: string[] = [];
+  lines.push('You are a writing assistant integrated into the Abyssal academic workstation editor.');
+  lines.push('');
+  lines.push('## Task');
+  lines.push(intentBlock);
+  lines.push('');
+  lines.push('## Output rules');
+  lines.push(`- ${langRule}`);
+  lines.push('- Output ONLY the resulting text. No greetings, explanations, meta-commentary, or markdown fences.');
+  lines.push('- Do NOT describe what you are doing. Do NOT include phrases like "Here is the rewritten text".');
+  lines.push('- Do NOT call any tools. This is a pure text generation task.');
+  lines.push('- If the user added an instruction in their message, follow it while performing the task above.');
+  return lines.join('\n');
+}
 
 function snapshotToChatContext(snapshot: ContextSnapshot): ChatContext {
   const paperIds = snapshot.focusEntities.paperIds;
@@ -390,10 +532,21 @@ function snapshotToChatContext(snapshot: ContextSnapshot): ChatContext {
   };
 }
 
+const SYSTEM_PROMPT_BUNDLES = new Set<string>(['project_meta', 'active_focus', 'capability_hints']);
+// Session-level bundles that are handled by other layers (e.g. buildPromptWithContext) —
+// kept here so they don't trigger unknown-bundle warnings.
+const SESSION_BUNDLES = new Set<string>(['selection_context', 'recent_activity', 'working_memory_light', 'working_memory_full']);
+
 function toSystemPromptBundles(bundles: string[]): SystemPromptBundle[] {
-  return bundles.filter((bundle): bundle is SystemPromptBundle => (
-    bundle === 'project_meta' || bundle === 'active_focus' || bundle === 'capability_hints'
-  ));
+  const result: SystemPromptBundle[] = [];
+  for (const b of bundles) {
+    if (SYSTEM_PROMPT_BUNDLES.has(b)) {
+      result.push(b as SystemPromptBundle);
+    } else if (!SESSION_BUNDLES.has(b)) {
+      console.warn(`[copilot-handler] unknown prompt bundle dropped: ${b}`);
+    }
+  }
+  return result;
 }
 
 function toInteractionMode(type: PromptGateType): SystemPromptInteractionMode {

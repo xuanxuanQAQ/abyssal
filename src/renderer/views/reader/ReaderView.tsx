@@ -35,12 +35,25 @@ export function ReaderView() {
 
   const renderThumbnail = useCallback(
     (canvas: HTMLCanvasElement, pageNumber: number): { promise: Promise<void>; cancel: () => void } => {
+      let cancelled = false;
+      let frameId: number | null = null;
       let renderTask: { promise: Promise<void>; cancel(): void } | null = null;
       const promise = (async () => {
-        const doc = manager?.getDocument();
-        if (!doc || !pageMetadataMap) return;
+        const documentManager = manager;
+        const doc = documentManager?.getDocument();
+        if (!documentManager || !doc || !pageMetadataMap) return;
+
+        await new Promise<void>((resolve) => {
+          frameId = window.requestAnimationFrame(() => {
+            frameId = null;
+            resolve();
+          });
+        });
+        if (cancelled) return;
 
         const page = await doc.getPage(pageNumber);
+        if (cancelled) return;
+
         const meta = pageMetadataMap.get(pageNumber);
         const baseWidth =
           meta?.baseWidth ?? page.getViewport({ scale: 1 }).width;
@@ -56,13 +69,26 @@ export function ReaderView() {
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        ctx.scale(dpr, dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         renderTask = page.render({ canvas, canvasContext: ctx, viewport });
-        await renderTask.promise;
+        documentManager.trackRenderTask(renderTask);
+        try {
+          await renderTask.promise;
+        } finally {
+          documentManager.untrackRenderTask(renderTask);
+          renderTask = null;
+        }
       })();
       return {
         promise,
-        cancel: () => { renderTask?.cancel(); },
+        cancel: () => {
+          cancelled = true;
+          if (frameId != null) {
+            window.cancelAnimationFrame(frameId);
+            frameId = null;
+          }
+          renderTask?.cancel();
+        },
       };
     },
     [manager, pageMetadataMap],

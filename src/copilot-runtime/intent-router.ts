@@ -15,6 +15,7 @@ import type {
   SelectionContext,
   CopilotOperation,
 } from './types';
+import type { IntentEmbeddingIndex } from './intent-embedding-index';
 
 export interface IntentClassification {
   intent: CopilotIntent;
@@ -48,17 +49,38 @@ const INTENT_PATTERNS: Array<{
 const CONFIDENCE_THRESHOLD = 0.55;
 
 export class IntentRouter {
+  private embeddingIndex: IntentEmbeddingIndex | null = null;
+
+  /** Inject the embedding index for semantic fallback classification. */
+  setEmbeddingIndex(index: IntentEmbeddingIndex): void {
+    this.embeddingIndex = index;
+  }
+
   /**
    * Classify the operation's intent from prompt + surface + context.
    * If the operation already has a well-defined intent, validates and returns it.
+   * Falls back to embedding similarity when keyword matching finds no match.
    */
-  classify(operation: CopilotOperation): IntentClassification {
-    // If intent is explicitly set (not 'ask'), trust it
+  async classify(operation: CopilotOperation): Promise<IntentClassification> {
+    // If intent is explicitly set (not 'ask'), trust the intent but still
+    // infer outputTarget when the envelope carries the default chat-message
+    // target (e.g. quick action chips send an explicit intent without a
+    // pre-resolved target).
     if (operation.intent !== 'ask') {
+      const needsTargetInference =
+        !operation.outputTarget || operation.outputTarget.type === 'chat-message';
+      const outputTarget = needsTargetInference
+        ? this.inferOutputTarget(
+            operation.intent,
+            operation.surface,
+            operation.context?.selection ?? null,
+            operation.prompt.toLowerCase(),
+          )
+        : operation.outputTarget;
       return {
         intent: operation.intent,
         confidence: 1.0,
-        outputTarget: operation.outputTarget,
+        outputTarget,
         ambiguous: false,
       };
     }
@@ -68,6 +90,24 @@ export class IntentRouter {
     const matches = this.matchPatterns(prompt);
 
     if (matches.length === 0) {
+      // ── Embedding fallback ──
+      // Keyword matching missed — try semantic similarity against exemplar sentences.
+      const embeddingMatch = await this.embeddingIndex?.match(prompt);
+      if (embeddingMatch) {
+        const outputTarget = this.inferOutputTarget(
+          embeddingMatch.intent,
+          operation.surface,
+          operation.context?.selection ?? null,
+          prompt,
+        );
+        return {
+          intent: embeddingMatch.intent,
+          confidence: embeddingMatch.score,
+          outputTarget,
+          ambiguous: false,
+        };
+      }
+
       // Pure chat/ask — no special intent detected
       return {
         intent: 'ask',
@@ -77,7 +117,7 @@ export class IntentRouter {
       };
     }
 
-    const best = matches[0]!;
+    const best = matches[0]!
 
     // Check for ambiguity
     const ambiguous =
@@ -89,6 +129,7 @@ export class IntentRouter {
       best.intent,
       operation.surface,
       operation.context?.selection ?? null,
+      prompt,
     );
 
     return {
@@ -120,11 +161,12 @@ export class IntentRouter {
     return results;
   }
 
-  /** Infer the best output target based on intent + surface + selection */
+  /** Infer the best output target based on intent + surface + selection + prompt */
   private inferOutputTarget(
     intent: CopilotIntent,
     surface: CopilotSurface,
     selection: SelectionContext | null,
+    prompt?: string,
   ): OutputTarget {
     // Editor mutation intents
     if (
@@ -170,7 +212,7 @@ export class IntentRouter {
     }
 
     if (intent === 'navigate') {
-      return { type: 'navigate', view: 'library' };
+      return { type: 'navigate', view: this.inferNavigationView(prompt) };
     }
 
     if (intent === 'run-workflow') {
@@ -179,5 +221,23 @@ export class IntentRouter {
 
     // Default to chat message for reader selections and general queries
     return { type: 'chat-message' };
+  }
+
+  /** Extract target view from a navigation prompt via keyword matching. */
+  private inferNavigationView(prompt?: string): import('../shared-types/enums').ViewType {
+    if (!prompt) return 'library';
+    const VIEW_KEYWORDS: Array<{ keywords: RegExp; view: import('../shared-types/enums').ViewType }> = [
+      { keywords: /设置|settings|配置|偏好/i, view: 'settings' },
+      { keywords: /图书馆|library|文献库|论文列表/i, view: 'library' },
+      { keywords: /阅读|reader|pdf|论文阅读/i, view: 'reader' },
+      { keywords: /写作|writing|编辑|editor|草稿/i, view: 'writing' },
+      { keywords: /分析|analysis|结构化/i, view: 'analysis' },
+      { keywords: /概念图|graph|知识图谱|关系图/i, view: 'graph' },
+      { keywords: /笔记|notes|memo/i, view: 'notes' },
+    ];
+    for (const { keywords, view } of VIEW_KEYWORDS) {
+      if (keywords.test(prompt)) return view;
+    }
+    return 'library';
   }
 }

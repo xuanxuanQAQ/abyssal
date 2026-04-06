@@ -15,18 +15,19 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Clock, Check, AlertCircle } from 'lucide-react';
+import { Clock, Check, AlertCircle, FileEdit } from 'lucide-react';
 import { ToolCallGroup } from './ToolCallGroup';
-import type { ChatMessage } from '../../../../shared-types/models';
+import type { ChatMessage, PendingEditorPatch } from '../../../../shared-types/models';
 
 interface ChatBubbleProps {
   message: ChatMessage;
   onRetry?: ((messageId: string) => void) | undefined;
   onClarificationSelect?: ((messageId: string, optionId: string) => void) | undefined;
+  onApplyPatch?: ((messageId: string, patchId: string) => void) | undefined;
   showAssistantLabel?: boolean;
 }
 
-function ChatBubbleInner({ message, onRetry, onClarificationSelect, showAssistantLabel = false }: ChatBubbleProps) {
+function ChatBubbleInner({ message, onRetry, onClarificationSelect, onApplyPatch, showAssistantLabel = false }: ChatBubbleProps) {
   const { t } = useTranslation();
   const isUser = message.role === 'user';
   const displayContent = message.status === 'streaming'
@@ -184,6 +185,53 @@ function ChatBubbleInner({ message, onRetry, onClarificationSelect, showAssistan
             </button>
           </div>
         )}
+
+        {/* Apply to Editor — 两阶段确认按钮 */}
+        {message.pendingEditorPatches && message.pendingEditorPatches.length > 0 && onApplyPatch && (
+          <div style={{
+            marginTop: 18,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+          }}>
+            {message.pendingEditorPatches.map((p: PendingEditorPatch) => (
+              <button
+                key={p.id}
+                disabled={p.applied}
+                onClick={() => onApplyPatch(message.id, p.id)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: '6px',
+                  border: p.applied
+                    ? '1px solid var(--border-subtle)'
+                    : '1px solid var(--accent-color)',
+                  background: p.applied
+                    ? 'var(--bg-surface-low)'
+                    : 'color-mix(in srgb, var(--accent-color) 8%, var(--bg-base))',
+                  color: p.applied
+                    ? 'var(--text-muted)'
+                    : 'var(--accent-color)',
+                  cursor: p.applied ? 'default' : 'pointer',
+                  width: 'fit-content',
+                }}
+              >
+                <FileEdit size={14} />
+                {p.applied
+                  ? t('context.chat.patchApplied', '已应用')
+                  : t('context.chat.applyToEditor', 'Apply to Editor')}
+                {p.summary && !p.applied && (
+                  <span style={{ opacity: 0.7, fontWeight: 400 }}>— {p.summary}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -196,6 +244,8 @@ export const ChatBubble = React.memo(
     if (next.message.status === 'streaming') return false;
     // 状态变化需要重渲染（如 error → sending）
     if (prev.message.status !== next.message.status) return false;
+    // pendingEditorPatches 变化需要重渲染
+    if (prev.message.pendingEditorPatches !== next.message.pendingEditorPatches) return false;
     // 已完成消息完全静态化
     return prev.message.id === next.message.id
       && prev.message.content === next.message.content

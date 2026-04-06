@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useMappingsForPaper, useAdjudicateMapping } from '../../core/ipc/hooks/useMappings';
 import { useMemoList } from '../../core/ipc/hooks/useMemos';
+import { useAppDialog } from '../../shared/useAppDialog';
 import { MemoCard } from '../notes/memo/MemoCard';
 import { useEntityDisplayNameCache } from '../notes/shared/entityDisplayNameCache';
 
@@ -35,10 +36,12 @@ export function AnalysisSidebar({ paperId, onScrollToPage }: AnalysisSidebarProp
   const memos = memosData?.pages.flat() ?? [];
   const entityNameCache = useEntityDisplayNameCache();
   const adjudicate = useAdjudicateMapping();
+  const { prompt, dialog } = useAppDialog();
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', fontSize: 12 }}>
-      <Tabs.Root value={activeTab} onValueChange={setActiveTab}>
+    <>
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', fontSize: 12 }}>
+        <Tabs.Root value={activeTab} onValueChange={setActiveTab}>
         <Tabs.List style={{
           display: 'flex', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0, overflow: 'auto',
         }}>
@@ -72,6 +75,7 @@ export function AnalysisSidebar({ paperId, onScrollToPage }: AnalysisSidebarProp
                 mapping={m}
                 paperId={paperId}
                 adjudicate={adjudicate}
+                prompt={prompt}
                 {...(onScrollToPage != null ? { onScrollToPage } : {})}
               />
               );
@@ -105,8 +109,10 @@ export function AnalysisSidebar({ paperId, onScrollToPage }: AnalysisSidebarProp
             Related papers will appear after analysis
           </div>
         </Tabs.Content>
-      </Tabs.Root>
-    </div>
+        </Tabs.Root>
+      </div>
+      {dialog}
+    </>
   );
 }
 
@@ -116,11 +122,13 @@ function MappingCard({
   mapping,
   paperId,
   adjudicate,
+  prompt,
   onScrollToPage,
 }: {
   mapping: Record<string, unknown>;
   paperId: string;
   adjudicate: ReturnType<typeof useAdjudicateMapping>;
+  prompt: ReturnType<typeof useAppDialog>['prompt'];
   onScrollToPage?: (page: number) => void;
 }) {
   const conceptId = (mapping['conceptId'] ?? mapping['concept_id']) as string ?? '';
@@ -184,10 +192,16 @@ function MappingCard({
           if (!mappingId) return;
           adjudicate.mutate({ mappingId, decision: 'accept', paperId });
         }} />
-        <ActionButton icon={<Edit3 size={12} />} label="Revise" color="var(--accent-color)" onClick={() => {
+        <ActionButton icon={<Edit3 size={12} />} label="Revise" color="var(--accent-color)" onClick={async () => {
           const mappingId = (mapping['id'] as string) ?? '';
           if (!mappingId) return;
-          const revised = window.prompt('Revised relation (supports/challenges/extends/operationalizes):');
+          const revised = await prompt({
+            title: 'Revise relation',
+            description: 'Revised relation (supports/challenges/extends/operationalizes):',
+            defaultValue: relation,
+            placeholder: 'supports / challenges / extends / operationalizes',
+            confirmLabel: 'Save relation',
+          });
           if (revised === null) return;
           adjudicate.mutate({ mappingId, decision: 'revise', paperId, revisedMapping: { relation: revised } as any });
         }} />

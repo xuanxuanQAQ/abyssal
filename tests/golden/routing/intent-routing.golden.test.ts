@@ -36,8 +36,8 @@ function makeOp(prompt: string, overrides?: Record<string, unknown>) {
 }
 
 describe('intent routing golden — Chinese requests', () => {
-  it('routes 改写 to rewrite-selection', () => {
-    const result = router.classify(makeOp('帮我改写这段话'));
+  it('routes 改写 to rewrite-selection', async () => {
+    const result = await router.classify(makeOp('帮我改写这段话'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -51,8 +51,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 扩展 to expand-selection', () => {
-    const result = router.classify(makeOp('请扩展这个段落'));
+  it('routes 扩展 to expand-selection', async () => {
+    const result = await router.classify(makeOp('请扩展这个段落'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -66,8 +66,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 续写 to continue-writing', () => {
-    const result = router.classify(makeOp('接着写下去'));
+  it('routes 续写 to continue-writing', async () => {
+    const result = await router.classify(makeOp('接着写下去'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -81,8 +81,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 生成一节 to generate-section', () => {
-    const result = router.classify(makeOp('生成方法论一节'));
+  it('routes 生成一节 to generate-section', async () => {
+    const result = await router.classify(makeOp('生成方法论一节'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -96,8 +96,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 检索证据 to retrieve-evidence', () => {
-    const result = router.classify(makeOp('帮我检索关于可供性的证据'));
+  it('routes 检索证据 to retrieve-evidence', async () => {
+    const result = await router.classify(makeOp('帮我检索关于可供性的证据'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -111,8 +111,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 审查论证 to review-argument', () => {
-    const result = router.classify(makeOp('审查这篇论文的论证逻辑'));
+  it('routes 审查论证 to review-argument', async () => {
+    const result = await router.classify(makeOp('审查这篇论文的论证逻辑'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -126,8 +126,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 压缩选中内容 to compress-selection', () => {
-    const result = router.classify(makeOp('压缩这段文字'));
+  it('routes 压缩选中内容 to compress-selection', async () => {
+    const result = await router.classify(makeOp('压缩这段文字'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],
@@ -141,8 +141,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes unrecognized Chinese to ask (default)', () => {
-    const result = router.classify(makeOp('这篇论文的主要贡献是什么？'));
+  it('routes unrecognized Chinese to ask (default)', async () => {
+    const result = await router.classify(makeOp('这篇论文的主要贡献是什么？'));
     expect(result).toMatchInlineSnapshot(`
       {
         "ambiguous": false,
@@ -155,8 +155,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 带引用句子 to insert-citation-sentence', () => {
-    const result = router.classify(makeOp('帮我写一个带引用的句子'));
+  it('routes 带引用句子 to insert-citation-sentence', async () => {
+    const result = await router.classify(makeOp('帮我写一个带引用的句子'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [
@@ -175,8 +175,8 @@ describe('intent routing golden — Chinese requests', () => {
     `);
   });
 
-  it('routes 导航 to navigate', () => {
-    const result = router.classify(makeOp('跳转到图书馆'));
+  it('routes 导航 to navigate', async () => {
+    const result = await router.classify(makeOp('跳转到图书馆'));
     expect(result).toMatchInlineSnapshot(`
       {
         "alternatives": [],

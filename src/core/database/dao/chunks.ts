@@ -117,7 +117,7 @@ function runInsertVec(
 ): void {
   if (!hasVecTable(db)) return; // sqlite-vec 未加载时静默跳过
   const buf = embeddingToBuffer(validateAndNormalize(embedding, logger, textHint));
-  db.prepare('INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)').run(
+  db.prepare('INSERT INTO chunks_vec (rowid, embedding) VALUES (CAST(? AS INTEGER), ?)').run(
     rowid,
     buf,
   );
@@ -157,7 +157,7 @@ export function insertChunkVectors(
   logger?: Logger,
 ): void {
   const stmt = db.prepare(
-    'INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)',
+    'INSERT INTO chunks_vec (rowid, embedding) VALUES (CAST(? AS INTEGER), ?)',
   );
   writeTransaction(db, () => {
     for (let i = 0; i < rowids.length; i++) {

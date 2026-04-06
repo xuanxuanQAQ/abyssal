@@ -19,11 +19,17 @@ export function createGraphCapability(): Capability {
         routeFamilies: ['research_qa'],
         params: [
           { name: 'focusNodeId', type: 'string', description: 'Center node ID' },
+          { name: 'focusNodeType', type: 'string', description: 'Center node type' },
           { name: 'depth', type: 'number', description: 'Hop depth (1 or 2)' },
         ],
         permissionLevel: 0,
         execute: async (params, ctx) => {
-          const graph = await ctx.services.dbProxy.getRelationGraph(params);
+          const graph = await ctx.services.dbProxy.getRelationGraph({
+            centerId: params['focusNodeId'] as string | undefined,
+            centerType: (params['focusNodeType'] as 'paper' | 'concept' | 'memo' | 'note' | undefined) ?? 'paper',
+            depth: (params['depth'] as number | undefined) ?? 2,
+            similarityThreshold: params['similarityThreshold'] as number | undefined,
+          });
           return { success: true, data: graph, summary: 'Retrieved relation graph' };
         },
       },
@@ -73,10 +79,12 @@ export function createGraphCapability(): Capability {
         execute: async (params, ctx) => {
           // Get neighborhoods of both nodes and find overlap
           const fromGraph = await ctx.services.dbProxy.getRelationGraph({
-            focusNodeId: params['fromId'], depth: 2,
+            centerId: params['fromId'] as string,
+            depth: 2,
           }) as Record<string, unknown>;
           const toGraph = await ctx.services.dbProxy.getRelationGraph({
-            focusNodeId: params['toId'], depth: 2,
+            centerId: params['toId'] as string,
+            depth: 2,
           }) as Record<string, unknown>;
 
           const fromNodes = new Set(

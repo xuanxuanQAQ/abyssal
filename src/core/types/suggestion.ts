@@ -21,6 +21,8 @@ export interface SuggestedConcept {
   closestExistingConceptId: ConceptId | null;
   closestExistingConceptSimilarity: string | null; // AI 生成的关系描述
   reason: string;
+  suggestedDefinition: string | null;
+  suggestedKeywords: string[];
   status: SuggestionStatus;
   adoptedConceptId: ConceptId | null;
   createdAt: string;

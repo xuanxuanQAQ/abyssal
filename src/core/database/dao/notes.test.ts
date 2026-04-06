@@ -1,6 +1,7 @@
 import { createTestDB } from '../../../__test-utils__/test-db';
 import { createNote, getAllNotes } from './notes';
 import { INTERNAL_DB_NOTE_FILE_PREFIX } from '../note-file-path';
+import { asNoteId } from '../../types/common';
 
 describe('notes dao', () => {
   it('assigns unique internal file paths for db-only notes', () => {
@@ -8,7 +9,7 @@ describe('notes dao', () => {
 
     try {
       createNote(db, {
-        id: '11111111-1111-4111-8111-111111111111',
+        id: asNoteId('11111111-1111-4111-8111-111111111111'),
         filePath: '',
         title: 'First note',
         linkedPaperIds: [],
@@ -18,7 +19,7 @@ describe('notes dao', () => {
       }, [], []);
 
       createNote(db, {
-        id: '22222222-2222-4222-8222-222222222222',
+        id: asNoteId('22222222-2222-4222-8222-222222222222'),
         filePath: '',
         title: 'Second note',
         linkedPaperIds: [],

@@ -9,12 +9,13 @@ import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FileText, Lightbulb } from 'lucide-react';
 import { useAppStore } from '../../../core/store';
+import type { GraphFilter } from '../../../../shared-types/ipc';
 import { useGraphData } from '../../../core/ipc/hooks/useRelations';
 
 interface NeighborNode {
   id: string;
   label: string;
-  type: 'paper' | 'concept';
+  type: 'paper' | 'concept' | 'memo' | 'note';
   edgeType: string;
   weight: number;
 }
@@ -46,7 +47,7 @@ function computeNeighbors(
     result.push({
       id: neighborId,
       label: neighbor?.label ?? neighborId.slice(0, 12) + '…',
-      type: (neighbor?.type === 'concept' ? 'concept' : 'paper') as 'paper' | 'concept',
+      type: ((neighbor?.type as 'paper' | 'concept' | 'memo' | 'note' | undefined) ?? 'paper'),
       edgeType: edge.type,
       weight: edge.weight,
     });
@@ -115,7 +116,24 @@ const edgeTypeStyle: React.CSSProperties = {
 export const NeighborList = React.memo(function NeighborList({ nodeId }: NeighborListProps) {
   const { t } = useTranslation();
   const navigateTo = useAppStore((s) => s.navigateTo);
-  const { data: graphData, isLoading, isError } = useGraphData();
+  const focusedGraphNodeType = useAppStore((s) => s.focusedGraphNodeType);
+  const focusDepth = useAppStore((s) => s.focusDepth);
+  const layerVisibility = useAppStore((s) => s.layerVisibility);
+  const similarityThreshold = useAppStore((s) => s.similarityThreshold);
+  const showConceptNodes = useAppStore((s) => s.showConceptNodes);
+  const showNoteNodes = useAppStore((s) => s.showNoteNodes);
+
+  const filter = useMemo<GraphFilter>(() => ({
+    focusNodeId: nodeId,
+    ...(focusedGraphNodeType ? { focusNodeType: focusedGraphNodeType } : {}),
+    hopDepth: focusDepth === 'global' ? 'global' : focusDepth === '1-hop' ? 1 : 2,
+    layers: layerVisibility,
+    similarityThreshold,
+    includeConcepts: showConceptNodes || focusedGraphNodeType === 'concept',
+    includeNotes: showNoteNodes || focusedGraphNodeType === 'memo' || focusedGraphNodeType === 'note',
+  }), [focusDepth, focusedGraphNodeType, layerVisibility, nodeId, showConceptNodes, showNoteNodes, similarityThreshold]);
+
+  const { data: graphData, isLoading, isError } = useGraphData(filter);
 
   const neighbors = useMemo(() => {
     if (!graphData) return [];
@@ -172,8 +190,12 @@ export const NeighborList = React.memo(function NeighborList({ nodeId }: Neighbo
           onClick={() => {
             if (n.type === 'paper') {
               navigateTo({ type: 'paper', id: n.id, view: 'reader' });
-            } else {
+            } else if (n.type === 'concept') {
               navigateTo({ type: 'concept', id: n.id });
+            } else if (n.type === 'memo') {
+              navigateTo({ type: 'memo', memoId: n.id.replace(/^memo__/, '') });
+            } else {
+              navigateTo({ type: 'note', noteId: n.id.replace(/^note__/, '') });
             }
           }}
           style={neighborRowStyle}

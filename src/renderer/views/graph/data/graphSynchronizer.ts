@@ -44,9 +44,11 @@ export function synchronizeGraph(
     const attrs = {
       label: node.label,
       type: node.type,
+      nodeType: node.type,
       relevance: node.relevance,
       citationCount: node.citationCount,
       conceptLevel: node.level,
+      entityId: (node.metadata?.entityId as string | undefined) ?? node.id,
       size,
       color,
       x: (node.metadata?.x as number | undefined) ?? (Math.random() - 0.5) * 100,
@@ -99,11 +101,13 @@ export function synchronizeGraph(
   // Add new edges
   for (const [edgeId, edge] of newEdgeMap) {
     if (!currentEdgeIds.has(edgeId)) {
-      const layer = edge.type as 'citation' | 'conceptAgree' | 'conceptConflict' | 'semanticNeighbor';
+      const layer = edge.type;
       const weight = edge.weight ?? 1;
       graph.addEdgeWithKey(edgeId, edge.source, edge.target, {
         layer,
+        edgeType: edge.type,
         weight,
+        conceptId: edge.conceptId,
         color: computeEdgeColor(layer),
         size: computeEdgeSize(layer, weight),
       });

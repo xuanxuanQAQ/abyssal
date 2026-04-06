@@ -26,7 +26,7 @@ function makeMockDeps(overrides?: Partial<AgentExecutorDeps>): AgentExecutorDeps
     } as any,
     capabilities: {
       toToolDefinitions: vi.fn().mockReturnValue([]),
-      execute: vi.fn().mockResolvedValue({ summary: 'tool result', data: {} }),
+      execute: vi.fn().mockResolvedValue({ success: true, summary: 'tool result', data: {} }),
     } as any,
     session: {} as any,
     eventBus: {} as any,
@@ -158,9 +158,15 @@ describe('AgentExecutor', () => {
       const messages = (deps.llmClient.completeStream as any).mock.calls[0][0].messages;
       expect(messages[messages.length - 1].content).toContain('Deep Research');
       expect(messages[messages.length - 1].content).toContain('Methods');
+      expect(messages[messages.length - 1].content).toContain('Document: Deep Research');
       expect(messages[messages.length - 1].content).toContain('Unsaved Changes: yes');
       expect(messages[messages.length - 1].content).toContain('methods evidence');
       expect(messages[messages.length - 1].content).toContain('retrieved evidence');
+      expect(messages[messages.length - 1].content).toContain('source=Source 1');
+      expect(messages[messages.length - 1].content).not.toContain('Article ID:');
+      expect(messages[messages.length - 1].content).not.toContain('Section ID:');
+      expect(messages[messages.length - 1].content).not.toContain('Writing Article ID:');
+      expect(messages[messages.length - 1].content).not.toContain('paper=p1');
     });
   });
 
@@ -193,7 +199,7 @@ describe('AgentExecutor', () => {
         } as any,
         capabilities: {
           toToolDefinitions: vi.fn().mockReturnValue([{ name: 'search', description: 'Search', inputSchema: {} }]),
-          execute: vi.fn().mockResolvedValue({ summary: 'search results', data: { count: 3 } }),
+          execute: vi.fn().mockResolvedValue({ success: true, summary: 'search results', data: { count: 3 } }),
         } as any,
       });
 
@@ -321,6 +327,102 @@ describe('AgentExecutor', () => {
       const callArgs = (deps.llmClient.completeStream as any).mock.calls[0][0];
       expect(callArgs.tools).toBeUndefined();
       expect(deps.capabilities.toToolDefinitions).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('execute — tool failure handling (success: false)', () => {
+    it('marks tool as failed and feeds explicit failure signal back to model', async () => {
+      const events: any[] = [];
+      emitter.on((e) => events.push(e));
+
+      let callCount = 0;
+      const deps = makeMockDeps({
+        llmClient: {
+          completeStream: vi.fn().mockImplementation(() => {
+            callCount++;
+            if (callCount === 1) {
+              return chunksToStream([
+                { type: 'text_delta', delta: 'Searching...' },
+                { type: 'tool_use_start', id: 'tc-1', name: 'search' },
+                { type: 'tool_use_end', id: 'tc-1', name: 'search', input: { query: 'test' } },
+                { type: 'message_end', text: '', usage: { inputTokens: 50, outputTokens: 20 }, finishReason: 'tool_use' },
+              ]);
+            }
+            return chunksToStream([
+              { type: 'text_delta', delta: 'Done.' },
+              { type: 'message_end', text: 'Done.', usage: { inputTokens: 80, outputTokens: 10 }, finishReason: 'end_turn' },
+            ]);
+          }),
+        } as any,
+        capabilities: {
+          toToolDefinitions: vi.fn().mockReturnValue([{ name: 'search', description: 'Search', inputSchema: {} }]),
+          execute: vi.fn().mockResolvedValue({ success: false, summary: 'Error executing search: connection refused' }),
+        } as any,
+      });
+
+      const executor = new AgentExecutor(deps);
+      const result = await executor.execute(makeOperation({ id: 'op-fail' }), makeStep(), emitter);
+
+      // Tool should be marked as failed
+      expect(result.toolCalls).toHaveLength(1);
+      expect(result.toolCalls[0]!.status).toBe('failed');
+      expect(result.toolCalls[0]!.output).toContain('connection refused');
+
+      // Governor should record this as a failure
+      expect(deps.governor.recordCall).toHaveBeenCalledWith('search', false);
+
+      // Emitted events should show failure
+      const toolEvents = events.filter((e) => e.type === 'tool.call');
+      expect(toolEvents.some((e) => e.status === 'failed')).toBe(true);
+
+      // The message fed back to model should contain FAILED marker
+      const messages = (deps.llmClient.completeStream as any).mock.calls[1][0].messages;
+      const lastMsg = messages[messages.length - 1];
+      expect(lastMsg.content).toContain('[Tool FAILED: search]');
+      expect(lastMsg.content).toContain('Do NOT retry');
+    });
+  });
+
+  describe('execute — step-level allowedToolFamilies', () => {
+    it('uses step allowedToolFamilies instead of routing when provided', async () => {
+      const deps = makeMockDeps({
+        capabilities: {
+          toToolDefinitions: vi.fn().mockReturnValue([]),
+          execute: vi.fn(),
+        } as any,
+      });
+
+      const executor = new AgentExecutor(deps);
+      const step = { kind: 'llm_generate' as const, mode: 'draft' as const, allowedToolFamilies: ['writing_edit' as const] };
+      await executor.execute(makeOperation({ id: 'op-constrained', prompt: '帮我续写' }), step, emitter);
+
+      // toToolDefinitions should be called with the step-level families, not the route's
+      expect(deps.capabilities.toToolDefinitions).toHaveBeenCalledWith(
+        expect.objectContaining({ allowedFamilies: ['writing_edit'] }),
+      );
+
+      // System prompt should NOT contain routing instruction for constrained steps
+      const callArgs = (deps.llmClient.completeStream as any).mock.calls[0][0];
+      expect(callArgs.systemPrompt).not.toContain('当前工具路由');
+    });
+
+    it('does not inject routing instruction in draft mode even without step families', async () => {
+      const deps = makeMockDeps({
+        capabilities: {
+          toToolDefinitions: vi.fn().mockReturnValue([{ name: 'search', description: 'Search', inputSchema: {} }]),
+          execute: vi.fn(),
+        } as any,
+      });
+
+      const executor = new AgentExecutor(deps);
+      await executor.execute(
+        makeOperation({ id: 'op-draft', prompt: '帮我写一段关于方法的内容' }),
+        makeStep('draft'),
+        emitter,
+      );
+
+      const callArgs = (deps.llmClient.completeStream as any).mock.calls[0][0];
+      expect(callArgs.systemPrompt).not.toContain('当前工具路由');
     });
   });
 });

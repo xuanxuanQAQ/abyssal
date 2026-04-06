@@ -275,6 +275,7 @@ import { registerTagsHandlers } from './tags-handler';
 import { registerWindowHandlers } from './window-handler';
 import { registerWorkspaceHandlers } from './workspace-handler';
 import { registerDlaHandlers } from './dla-handler';
+import { registerPipelineHandlers } from './pipeline-handler';
 
 /**
  * Register all IPC handlers for all namespaces.
@@ -304,6 +305,7 @@ export function registerAllHandlers(ctx: AppContext): void {
   registerWindowHandlers(ctx);
   registerWorkspaceHandlers(ctx);
   registerDlaHandlers(ctx);
+  registerPipelineHandlers(ctx);
 
-  ctx.logger.info('IPC handlers registered', { namespaces: 21 });
+  ctx.logger.info('IPC handlers registered', { namespaces: 22 });
 }

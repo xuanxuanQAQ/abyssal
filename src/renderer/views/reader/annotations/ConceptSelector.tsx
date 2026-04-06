@@ -4,6 +4,44 @@ import * as Popover from '@radix-ui/react-popover';
 import { Search } from 'lucide-react';
 import type { Concept } from '../../../../shared-types/models';
 
+function normalizeSearchValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function getConceptPrimaryLabel(concept: Concept): string {
+  return concept.nameZh.trim() || concept.nameEn.trim() || concept.name.trim() || concept.id;
+}
+
+function getConceptSecondaryLabel(concept: Concept, primaryLabel: string): string {
+  const englishName = concept.nameEn.trim() || concept.name.trim();
+  if (englishName && englishName !== primaryLabel) {
+    return englishName;
+  }
+
+  if (concept.keywords.length > 0) {
+    return concept.keywords.slice(0, 3).join(', ');
+  }
+
+  return '';
+}
+
+function matchesConceptQuery(concept: Concept, query: string): boolean {
+  if (!query) {
+    return true;
+  }
+
+  return [
+    concept.id,
+    concept.name,
+    concept.nameZh,
+    concept.nameEn,
+    concept.description,
+    ...concept.keywords,
+  ]
+    .map(normalizeSearchValue)
+    .some((value) => value.includes(query));
+}
+
 export function ConceptSelector({
   open,
   onOpenChange,
@@ -23,13 +61,8 @@ export function ConceptSelector({
   const [query, setQuery] = useState('');
 
   const filteredConcepts = useMemo(() => {
-    if (!query.trim()) return concepts;
-    const lowerQuery = query.toLowerCase();
-    return concepts.filter(
-      (c) =>
-        c.id.toLowerCase().includes(lowerQuery) ||
-        c.name.toLowerCase().includes(lowerQuery)
-    );
+    const normalizedQuery = normalizeSearchValue(query);
+    return concepts.filter((concept) => matchesConceptQuery(concept, normalizedQuery));
   }, [concepts, query]);
 
   return (
@@ -109,9 +142,10 @@ export function ConceptSelector({
                 key={concept.id}
                 type="button"
                 onClick={() => onSelect(concept.id)}
+                title={concept.id}
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   gap: 8,
                   padding: '6px 8px',
                   backgroundColor: 'transparent',
@@ -130,10 +164,14 @@ export function ConceptSelector({
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
-                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
-                  {concept.id}
-                </span>
-                <span>{concept.name}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                  <span>{getConceptPrimaryLabel(concept)}</span>
+                  {getConceptSecondaryLabel(concept, getConceptPrimaryLabel(concept)) && (
+                    <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
+                      {getConceptSecondaryLabel(concept, getConceptPrimaryLabel(concept))}
+                    </span>
+                  )}
+                </div>
               </button>
             ))}
             {filteredConcepts.length === 0 && (

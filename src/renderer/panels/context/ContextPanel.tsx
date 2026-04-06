@@ -25,6 +25,7 @@ import { ReaderPaperPane } from './panes/ReaderPaperPane';
 import { ConceptPane } from './panes/ConceptPane';
 import { MappingPane } from './panes/MappingPane';
 import { WritingSectionPane } from './panes/WritingSectionPane';
+import { WritingSelectionPane } from './panes/WritingSelectionPane';
 import { GraphPaperNodePane } from './panes/GraphPaperNodePane';
 import { GraphConceptNodePane } from './panes/GraphConceptNodePane';
 import { NoteContextPane } from './panes/NoteContextPane';
@@ -69,6 +70,17 @@ function renderContentPane(source: ContextSource): React.ReactNode {
           {...(source.draftId ? { draftId: source.draftId } : {})}
         />
       );
+    case 'writing-selection':
+      return (
+        <WritingSelectionPane
+          articleId={source.articleId}
+          sectionId={source.sectionId}
+          from={source.from}
+          to={source.to}
+          selectedText={source.selectedText}
+          {...(source.draftId ? { draftId: source.draftId } : {})}
+        />
+      );
     case 'memo':
       return <NoteContextPane nodeId={source.memoId} nodeType="memo" />;
     case 'note':
@@ -76,6 +88,12 @@ function renderContentPane(source: ContextSource): React.ReactNode {
     case 'graphNode':
       return source.nodeType === 'paper' ? (
         <GraphPaperNodePane nodeId={source.nodeId} />
+      ) : source.nodeType === 'concept' ? (
+        <GraphConceptNodePane nodeId={source.nodeId} />
+      ) : source.nodeType === 'memo' ? (
+        <NoteContextPane nodeId={source.nodeId.replace(/^memo__/, '')} nodeType="memo" />
+      ) : source.nodeType === 'note' ? (
+        <NoteContextPane nodeId={source.nodeId.replace(/^note__/, '')} nodeType="note" />
       ) : (
         <GraphConceptNodePane nodeId={source.nodeId} />
       );

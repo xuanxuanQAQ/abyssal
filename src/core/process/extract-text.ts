@@ -16,8 +16,26 @@ import { deriveExtractionMethod } from './extraction-method';
 
 let mupdfModule: typeof import('mupdf') | null = null;
 
+const MUPDF_IGNORABLE_WARNINGS = [
+  /^warning: line feed missing after stream begin marker/i,
+];
+
+function createMupdfModuleOptions(): { printErr: (message: string) => void } {
+  return {
+    printErr(message: string) {
+      const text = String(message ?? '').trim();
+      if (MUPDF_IGNORABLE_WARNINGS.some((pattern) => pattern.test(text))) {
+        return;
+      }
+      console.warn(text);
+    },
+  };
+}
+
 async function getMupdf(): Promise<typeof import('mupdf')> {
   if (mupdfModule) return mupdfModule;
+  const previousOptions = (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module;
+  (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module = createMupdfModuleOptions();
   try {
     mupdfModule = await import('mupdf');
   } catch {
@@ -29,6 +47,12 @@ async function getMupdf(): Promise<typeof import('mupdf')> {
         message: `Failed to load mupdf.js: ${(err as Error).message}`,
         cause: err as Error,
       });
+    }
+  } finally {
+    if (previousOptions === undefined) {
+      delete (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module;
+    } else {
+      (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module = previousOptions;
     }
   }
   return mupdfModule!;
@@ -71,6 +95,39 @@ const OCR_JOB_TIMEOUT_MS = 60_000;
 /** Max OCR jobs allowed in flight at once — bounds PNG memory and scheduler pressure */
 const MAX_PENDING_OCR_JOBS = Math.max(2, OCR_POOL_SIZE * 2);
 
+function findExistingPath(
+  candidates: string[],
+  pathExists: (target: string) => boolean,
+): string | null {
+  for (const candidate of candidates) {
+    if (pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function resolveOcrRuntimePaths(
+  baseDir: string = __dirname,
+  resourcesPath: string | undefined = process.resourcesPath,
+  pathExists: (target: string) => boolean = fs.existsSync,
+): { workerPath: string; langDir: string | null } {
+  const workerCandidates = [
+    path.resolve(baseDir, 'tesseract-worker.cjs'),
+    path.resolve(baseDir, '..', 'core', 'process', 'tesseract-worker.cjs'),
+  ];
+  const langCandidates = [
+    path.resolve(baseDir, '..', '..', 'assets', 'tesseract'),
+    path.resolve(baseDir, '..', '..', '..', 'assets', 'tesseract'),
+    ...(resourcesPath ? [path.join(resourcesPath, 'tesseract')] : []),
+  ];
+
+  return {
+    workerPath: findExistingPath(workerCandidates, pathExists) ?? workerCandidates[workerCandidates.length - 1]!,
+    langDir: findExistingPath(langCandidates, pathExists),
+  };
+}
+
 async function getOcrScheduler(
   languages: string[],
 ): Promise<typeof ocrScheduler> {
@@ -84,6 +141,7 @@ async function getOcrScheduler(
     try {
       const Tesseract = await import('tesseract.js');
       const scheduler = Tesseract.createScheduler();
+      const { workerPath, langDir } = resolveOcrRuntimePaths();
 
       // Use bundled traineddata from assets/tesseract/ to avoid CDN download.
       // jsdelivr is often blocked/slow in China, AND tesseract.js detects Electron
@@ -93,13 +151,18 @@ async function getOcrScheduler(
       // Fix: set `cachePath` to our assets dir. The worker checks the cache
       // (plain fs.readFile) BEFORE any URL/fetch logic, so it loads directly
       // from disk without hitting the broken env detection code path.
-      const langDir = path.resolve(__dirname, '..', '..', 'assets', 'tesseract');
-      const hasLocalData = languages.every((l) =>
+      const hasLocalData = langDir !== null && languages.every((l) =>
         fs.existsSync(path.join(langDir, `${l}.traineddata`)),
       );
       const workerOpts = hasLocalData
-        ? { cachePath: langDir, gzip: false }
-        : {};
+        ? {
+            workerPath,
+            langPath: langDir,
+            cachePath: langDir,
+            cacheMethod: 'readOnly',
+            gzip: false,
+          }
+        : { workerPath };
 
       // Worker Pool (track created workers for cleanup on failure)
       for (let i = 0; i < OCR_POOL_SIZE; i++) {

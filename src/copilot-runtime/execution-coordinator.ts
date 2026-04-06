@@ -63,6 +63,11 @@ export interface ExecutionCoordinatorDeps {
 /** Active abort controllers for in-flight operations */
 const abortControllers = new Map<string, AbortController>();
 
+/** Intents that always apply patches directly to the editor (never defer to chat buttons). */
+const EDITOR_MUTATION_INTENTS = new Set([
+  'rewrite-selection', 'expand-selection', 'compress-selection', 'continue-writing',
+]);
+
 class OperationAbortedError extends Error {
   code = 'OPERATION_ABORTED';
 
@@ -148,7 +153,8 @@ export class ExecutionCoordinator {
       // ── Phase 1: Route intent ──
       traceStore.startPhase(operation.id, 'context');
 
-      const classification = this.deps.router.classify(operation);
+      const classification = await this.deps.router.classify(operation);
+
 
       // Update operation with routed intent and target
       const routedOperation: CopilotOperation = {
@@ -401,11 +407,12 @@ export class ExecutionCoordinator {
 
   private async executePlan(
     plan: ExecutionPlan,
-    operation: CopilotOperation,
+    initialOperation: CopilotOperation,
     signal: AbortSignal,
   ): Promise<{ summary?: string }> {
     let lastText = '';
     let retrievalResults: RetrievalExecutorResult | undefined;
+    let operation = initialOperation;
 
     for (const step of plan.steps) {
       this.throwIfAborted(signal);
@@ -417,10 +424,18 @@ export class ExecutionCoordinator {
               operation, step, this.deps.emitter, signal,
             );
             this.throwIfAborted(signal);
-            // Enrich operation context with retrieval results
-            operation.context.retrieval = {
-              evidence: retrievalResults.evidence,
-              lastQuery: retrievalResults.query,
+            // Enrich operation context with retrieval results.
+            // context may be frozen (Object.freeze in ContextSnapshotBuilder),
+            // so we replace it with a shallow copy before mutation.
+            operation = {
+              ...operation,
+              context: {
+                ...operation.context,
+                retrieval: {
+                  evidence: retrievalResults.evidence,
+                  lastQuery: retrievalResults.query,
+                },
+              },
             };
           } catch (err) {
             const policy = this.deps.failurePolicy.evaluate('retrieval');
@@ -458,19 +473,37 @@ export class ExecutionCoordinator {
           if (lastText && step.patchTarget.type !== 'chat-message') {
             const patch = this.textToPatch(lastText, step.patchTarget, operation);
             if (patch) {
-              const editorResult = await this.deps.editorExecutor.execute(
-                operation, patch, this.deps.emitter,
-              );
-              this.throwIfAborted(signal);
+              // Direct editor mutations (rewrite/expand/compress/continue) always
+              // go straight to the editor preview — never deferred to chat buttons.
+              // Only heavyweight / non-editor operations use the chat deferred path.
+              const isEditorMutation = EDITOR_MUTATION_INTENTS.has(operation.intent);
+              const confirmMode = plan.confirmation?.mode;
+              const shouldDefer = !isEditorMutation &&
+                (confirmMode === 'explicit' || (confirmMode === 'preview' && operation.surface === 'chat'));
 
-              if (!editorResult.applied) {
-                const degradation: DegradationRecord = {
-                  stage: 'patch_reconciliation',
-                  mode: 'fallback_to_patch_preview',
-                  reason: editorResult.reconciliation.reason ?? 'unknown',
-                  preservedArtifacts: ['patch'],
-                };
-                this.deps.traceStore.addDegradation(operation.id, degradation);
+              if (shouldDefer) {
+                // Emit deferred patch event — renderer stores on chat message
+                this.deps.emitter.emit({
+                  type: 'patch.deferred',
+                  operationId: operation.id,
+                  patch,
+                  summary: this.buildPatchSummary(patch, operation),
+                });
+              } else {
+                const editorResult = await this.deps.editorExecutor.execute(
+                  operation, patch, this.deps.emitter, signal,
+                );
+                this.throwIfAborted(signal);
+
+                if (!editorResult.applied) {
+                  const degradation: DegradationRecord = {
+                    stage: 'patch_reconciliation',
+                    mode: 'fallback_to_patch_preview',
+                    reason: editorResult.reconciliation.reason ?? 'unknown',
+                    preservedArtifacts: ['patch'],
+                  };
+                  this.deps.traceStore.addDegradation(operation.id, degradation);
+                }
               }
             }
           }
@@ -495,7 +528,7 @@ export class ExecutionCoordinator {
 
         case 'navigate': {
           await this.deps.navigationExecutor.execute(
-            operation, step, this.deps.emitter,
+            operation, step, this.deps.emitter, signal,
           );
           this.throwIfAborted(signal);
           break;
@@ -510,9 +543,41 @@ export class ExecutionCoordinator {
     operation: CopilotOperation,
     signal: AbortSignal,
   ): Promise<CopilotExecuteResult> {
-    // Run as simple chat
+    // Try RAG-enriched fallback: retrieve evidence first, then chat with context.
+    // This ensures queries like "这篇论文的方法论有什么问题？" still get RAG support
+    // even when no recipe matches.
+    let enrichedOperation = operation;
+    try {
+      this.throwIfAborted(signal);
+      const retrievalResult = await this.deps.retrievalExecutor.execute(
+        operation,
+        { kind: 'retrieve', query: operation.prompt, source: 'rag' },
+        this.deps.emitter,
+        signal,
+      );
+      if (retrievalResult.evidence.length > 0) {
+        enrichedOperation = {
+          ...operation,
+          context: {
+            ...operation.context,
+            retrieval: {
+              evidence: retrievalResult.evidence,
+              lastQuery: retrievalResult.query,
+            },
+          },
+        };
+      }
+    } catch (err) {
+      // Retrieval failed — continue without evidence (pure chat)
+      this.deps.logger?.('Retrieval failed in fallbackToChat, continuing without evidence', {
+        operationId: operation.id,
+        error: (err as Error).message,
+      });
+    }
+
+    this.throwIfAborted(signal);
     const step = { kind: 'llm_generate' as const, mode: 'chat' as const };
-    const result = await this.deps.agentExecutor.execute(operation, step, this.deps.emitter, signal);
+    const result = await this.deps.agentExecutor.execute(enrichedOperation, step, this.deps.emitter, signal);
     this.throwIfAborted(signal);
 
     this.deps.emitter.emit({
@@ -677,5 +742,19 @@ export class ExecutionCoordinator {
       }
     }
     return null;
+  }
+
+  private buildPatchSummary(patch: EditorPatch, operation: CopilotOperation): string {
+    const intent = this.intentLabel(operation.intent);
+    switch (patch.kind) {
+      case 'replace-range':
+        return `${intent}：替换选区内容`;
+      case 'insert-at':
+        return `${intent}：插入新内容`;
+      case 'replace-section':
+        return `${intent}：替换整节内容`;
+      default:
+        return `${intent}：编辑器更新`;
+    }
   }
 }

@@ -14,7 +14,7 @@ import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { JSONContent } from '@tiptap/core';
 
-interface EditorSelectionState {
+export interface EditorSelectionState {
   articleId: string;
   draftId: string | null;
   sectionId: string | null;
@@ -23,19 +23,44 @@ interface EditorSelectionState {
   selectedText: string;
 }
 
+/**
+ * persistedWritingTarget — 持久化写作锚点
+ *
+ * 不随 blur / 焦点切换而清空。
+ * 仅在用户主动清除、产生新选区、或文档重排无法对齐时失效。
+ */
+export type WritingTargetKind = 'range' | 'caret';
+
+export interface PersistedWritingTarget {
+  kind: WritingTargetKind;
+  articleId: string;
+  draftId: string | null;
+  sectionId: string | null;
+  from: number;
+  to: number;
+  selectedText: string;
+  anchorParagraphId: string | null;
+  beforeText: string;
+  afterText: string;
+  capturedAt: number;
+}
+
 interface EditorState {
   editorFocused: boolean;
-  aiGenerating: boolean;
-  aiGeneratingTaskId: string | null;
   unsavedChanges: boolean;
   liveArticleId: string | null;
   liveDraftId: string | null;
   liveDocumentJson: string | null;
   liveDocumentHash: string | null;
   editorSelection: EditorSelectionState | null;
+  /** 持久化写作锚点，不随 blur 清除 */
+  persistedWritingTarget: PersistedWritingTarget | null;
+  /** Draft 模式流式文本（写作预览用） */
+  draftStreamText: string | null;
+  /** 当前正在执行的 draft 操作 ID（用于预览取消时 abort） */
+  activeDraftOperationId: string | null;
 
   setEditorFocused: (focused: boolean) => void;
-  setAIGenerating: (generating: boolean, taskId?: string | null) => void;
   setUnsavedChanges: (unsaved: boolean) => void;
   setLiveDocumentState: (payload: {
     articleId: string;
@@ -44,6 +69,11 @@ interface EditorState {
     documentHash: string;
   }) => void;
   setEditorSelection: (selection: EditorSelectionState | null) => void;
+  setPersistedWritingTarget: (target: PersistedWritingTarget | null) => void;
+  clearPersistedWritingTarget: () => void;
+  appendDraftStreamText: (chunk: string) => void;
+  clearDraftStreamText: () => void;
+  setActiveDraftOperationId: (id: string | null) => void;
   clearLiveDocumentState: () => void;
   resetEditor: () => void;
 }
@@ -53,24 +83,19 @@ export const useEditorStore = create<EditorState>()(
     subscribeWithSelector(
       immer((set) => ({
         editorFocused: false,
-        aiGenerating: false,
-        aiGeneratingTaskId: null,
         unsavedChanges: false,
         liveArticleId: null,
         liveDraftId: null,
         liveDocumentJson: null,
         liveDocumentHash: null,
         editorSelection: null,
+        persistedWritingTarget: null,
+        draftStreamText: null,
+        activeDraftOperationId: null,
 
         setEditorFocused: (focused) =>
           set((state) => {
             state.editorFocused = focused;
-          }),
-
-        setAIGenerating: (generating, taskId) =>
-          set((state) => {
-            state.aiGenerating = generating;
-            state.aiGeneratingTaskId = taskId ?? null;
           }),
 
         setUnsavedChanges: (unsaved) =>
@@ -93,6 +118,31 @@ export const useEditorStore = create<EditorState>()(
             state.editorSelection = selection;
           }),
 
+        setPersistedWritingTarget: (target) =>
+          set((state) => {
+            state.persistedWritingTarget = target;
+          }),
+
+        clearPersistedWritingTarget: () =>
+          set((state) => {
+            state.persistedWritingTarget = null;
+          }),
+
+        appendDraftStreamText: (chunk) =>
+          set((state) => {
+            state.draftStreamText = (state.draftStreamText ?? '') + chunk;
+          }),
+
+        clearDraftStreamText: () =>
+          set((state) => {
+            state.draftStreamText = null;
+          }),
+
+        setActiveDraftOperationId: (id) =>
+          set((state) => {
+            state.activeDraftOperationId = id;
+          }),
+
         clearLiveDocumentState: () =>
           set((state) => {
             state.liveArticleId = null;
@@ -100,19 +150,23 @@ export const useEditorStore = create<EditorState>()(
             state.liveDocumentJson = null;
             state.liveDocumentHash = null;
             state.editorSelection = null;
+            state.persistedWritingTarget = null;
+            state.draftStreamText = null;
+            state.activeDraftOperationId = null;
           }),
 
         resetEditor: () =>
           set((state) => {
             state.editorFocused = false;
-            state.aiGenerating = false;
-            state.aiGeneratingTaskId = null;
             state.unsavedChanges = false;
             state.liveArticleId = null;
             state.liveDraftId = null;
             state.liveDocumentJson = null;
             state.liveDocumentHash = null;
             state.editorSelection = null;
+            state.persistedWritingTarget = null;
+            state.draftStreamText = null;
+            state.activeDraftOperationId = null;
           }),
       }))
     ),

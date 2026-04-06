@@ -15,6 +15,7 @@
 
 import { useMemo, useRef } from 'react';
 import { useAppStore } from '../../../core/store';
+import { useEditorStore } from '../../../core/store/useEditorStore';
 import { useShallow } from 'zustand/react/shallow';
 import type { ContextSource } from '../../../../shared-types/models';
 import type { ViewType } from '../../../../shared-types/enums';
@@ -58,6 +59,15 @@ export interface DeriveContextInput {
   selectedMemoId: string | null;
   selectedNoteId: string | null;
   excludedCount: number;
+  /** 持久化写作锚点（range target 时提升为 writing-selection） */
+  hasWritingRangeTarget: boolean;
+  writingTargetSectionId: string | null;
+  writingTargetArticleId: string | null;
+  writingTargetDraftId: string | null;
+  writingTargetFrom: number;
+  writingTargetTo: number;
+  writingTargetSelectedText: string;
+  writingTargetAnchorParagraphId: string | null;
 }
 
 /**
@@ -75,6 +85,20 @@ export function deriveContextSource(input: DeriveContextInput): ContextSource {
   // 优先级 2: Reader + 论文
   if (activeView === 'reader' && selectedPaperId) {
     return { type: 'paper', paperId: selectedPaperId, originView: 'reader' };
+  }
+
+  // 优先级 2.5: Writing + 持久化写作选区（range target 优先于 section）
+  if (activeView === 'writing' && input.hasWritingRangeTarget && input.writingTargetSectionId) {
+    return {
+      type: 'writing-selection',
+      articleId: input.writingTargetArticleId ?? '',
+      sectionId: input.writingTargetSectionId,
+      from: input.writingTargetFrom,
+      to: input.writingTargetTo,
+      selectedText: input.writingTargetSelectedText,
+      ...(input.writingTargetDraftId ? { draftId: input.writingTargetDraftId } : {}),
+      ...(input.writingTargetAnchorParagraphId ? { anchorParagraphId: input.writingTargetAnchorParagraphId } : {}),
+    };
   }
 
   // 优先级 3: Writing + 选中节
@@ -172,6 +196,9 @@ export function useDerivedContextSource(): ContextSource {
     focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
   } = useAppStore(useShallow(contextInputSelector));
 
+  // 写作锚点状态
+  const writingTarget = useEditorStore((s) => s.persistedWritingTarget);
+
   // 稳定化 multiIds：只在内容真正变化时更新引用
   const prevMultiIdsRef = useRef<string[]>([]);
   const multiIds = useMemo(() => {
@@ -196,13 +223,21 @@ export function useDerivedContextSource(): ContextSource {
       selectedMappingConceptId, selectedSectionId, selectedArticleId, selectedDraftId,
       focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
       excludedCount,
+      hasWritingRangeTarget: writingTarget?.kind === 'range' && (writingTarget?.selectedText?.length ?? 0) > 0,
+      writingTargetSectionId: writingTarget?.sectionId ?? null,
+      writingTargetArticleId: writingTarget?.articleId ?? null,
+      writingTargetDraftId: writingTarget?.draftId ?? null,
+      writingTargetFrom: writingTarget?.from ?? 0,
+      writingTargetTo: writingTarget?.to ?? 0,
+      writingTargetSelectedText: writingTarget?.selectedText ?? '',
+      writingTargetAnchorParagraphId: writingTarget?.anchorParagraphId ?? null,
     }),
     [
       activeView, selectedPaperId, selectionMode, multiIds,
       selectedConceptId, selectedMappingId, selectedMappingPaperId,
       selectedMappingConceptId, selectedSectionId, selectedArticleId, selectedDraftId,
       focusedGraphNodeId, focusedGraphNodeType, selectedMemoId, selectedNoteId,
-      excludedCount,
+      excludedCount, writingTarget,
     ],
   );
 }

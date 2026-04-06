@@ -93,6 +93,24 @@ describe('buildSystemPrompt — structural integrity', () => {
     expect(prompt).toContain('Metacognition in Education');
     expect(prompt).toContain('Flavell (1979)');
     expect(prompt).toContain('do NOT call `get_paper`');
+    expect(prompt).not.toContain('[ID:');
+  });
+
+  it('does not expose internal IDs in focused concept or rules', () => {
+    const prompt = buildSystemPrompt(makeMinimalContext({
+      activeConcept: {
+        id: 'concept-1',
+        nameEn: 'Metacognition',
+        definition: 'Monitoring and regulating cognition.',
+        maturity: 'working',
+        mappedPaperCount: 4,
+      },
+    }));
+
+    expect(prompt).toContain('Metacognition');
+    expect(prompt).not.toContain('[ID:');
+    expect(prompt).not.toContain('Cite paper IDs when referencing papers');
+    expect(prompt).toContain('Refer to papers by title, authors, or citations rather than internal IDs');
   });
 
   it('includes tool count in rules', () => {

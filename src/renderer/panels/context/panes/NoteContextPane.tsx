@@ -9,6 +9,7 @@ import { useMemo as useMemoHook } from '../../../core/ipc/hooks/useMemos';
 import { useNote } from '../../../core/ipc/hooks/useNotes';
 import { useUpgradeMemoToNote } from '../../../core/ipc/hooks/useMemos';
 import { useAppStore } from '../../../core/store';
+import { useEntityDisplayNameCache } from '../../../views/notes/shared/entityDisplayNameCache';
 
 interface NoteContextPaneProps {
   nodeId: string;
@@ -19,6 +20,7 @@ export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nod
   const { t } = useTranslation();
   const { data: memo, isLoading: memoLoading } = useMemoHook(nodeType === 'memo' ? nodeId : null);
   const { data: note, isLoading: noteLoading } = useNote(nodeType === 'note' ? nodeId : null);
+  const displayNames = useEntityDisplayNameCache();
   const navigateTo = useAppStore((s) => s.navigateTo);
   const upgradeMemoToNote = useUpgradeMemoToNote();
 
@@ -59,10 +61,30 @@ export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nod
 
           {/* Linked entities */}
           {memo.paperIds.length > 0 && (
-            <EntitySection label={t('notes.memo.linkedPapers')} ids={memo.paperIds} color="#3B82F6" />
+            <EntitySection
+              label={t('notes.memo.linkedPapers')}
+              ids={memo.paperIds}
+              color="#3B82F6"
+              resolveLabel={(id, index) => {
+                const resolved = displayNames.getPaperName(id);
+                return resolved === id || resolved === id.slice(0, 10)
+                  ? `${t('context.header.paper')} ${index + 1}`
+                  : resolved;
+              }}
+            />
           )}
           {memo.conceptIds.length > 0 && (
-            <EntitySection label={t('notes.memo.linkedConcepts')} ids={memo.conceptIds} color="#10B981" />
+            <EntitySection
+              label={t('notes.memo.linkedConcepts')}
+              ids={memo.conceptIds}
+              color="#10B981"
+              resolveLabel={(id, index) => {
+                const resolved = displayNames.getConceptName(id);
+                return resolved === id || resolved === id.slice(0, 10)
+                  ? `${t('context.header.concept')} ${index + 1}`
+                  : resolved;
+              }}
+            />
           )}
           {memo.tags.length > 0 && (
             <div style={{ marginTop: 8 }}>
@@ -109,10 +131,30 @@ export const NoteContextPane = React.memo(function NoteContextPane({ nodeId, nod
 
           {/* Linked entities */}
           {note.linkedPaperIds.length > 0 && (
-            <EntitySection label={t('notes.note.linkedPapers')} ids={note.linkedPaperIds} color="#3B82F6" />
+            <EntitySection
+              label={t('notes.note.linkedPapers')}
+              ids={note.linkedPaperIds}
+              color="#3B82F6"
+              resolveLabel={(id, index) => {
+                const resolved = displayNames.getPaperName(id);
+                return resolved === id || resolved === id.slice(0, 10)
+                  ? `${t('context.header.paper')} ${index + 1}`
+                  : resolved;
+              }}
+            />
           )}
           {note.linkedConceptIds.length > 0 && (
-            <EntitySection label={t('notes.note.linkedConcepts')} ids={note.linkedConceptIds} color="#10B981" />
+            <EntitySection
+              label={t('notes.note.linkedConcepts')}
+              ids={note.linkedConceptIds}
+              color="#10B981"
+              resolveLabel={(id, index) => {
+                const resolved = displayNames.getConceptName(id);
+                return resolved === id || resolved === id.slice(0, 10)
+                  ? `${t('context.header.concept')} ${index + 1}`
+                  : resolved;
+              }}
+            />
           )}
 
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
@@ -176,19 +218,29 @@ function extractPreviewText(docJson: string, maxLen: number): string {
   return full.length > maxLen ? full.slice(0, maxLen) + '...' : full;
 }
 
-function EntitySection({ label, ids, color }: { label: string; ids: string[]; color: string }) {
+function EntitySection({
+  label,
+  ids,
+  color,
+  resolveLabel,
+}: {
+  label: string;
+  ids: string[];
+  color: string;
+  resolveLabel: (id: string, index: number) => string;
+}) {
   return (
     <div style={{ marginTop: 8 }}>
       <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
         {label}
       </span>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-        {ids.map((id) => (
+        {ids.map((id, index) => (
           <span key={id} style={{
             display: 'inline-block', padding: '1px 6px', borderRadius: 10,
             fontSize: 10, color, backgroundColor: `${color}12`, border: `1px solid ${color}30`,
           }}>
-            {id.slice(0, 12)}
+            {resolveLabel(id, index)}
           </span>
         ))}
       </div>

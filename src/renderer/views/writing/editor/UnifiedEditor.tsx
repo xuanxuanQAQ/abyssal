@@ -13,7 +13,7 @@ import type { JSONContent } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { useAppStore } from '../../../core/store';
 import { useEditorStore } from '../../../core/store/useEditorStore';
-import { useAIOperations } from '../ai/useAIOperations';
+import type { PersistedWritingTarget } from '../../../core/store/useEditorStore';
 import { useEditorCommandBridge } from '../ai/useEditorCommandBridge';
 import { useSelectionPreview } from '../ai/useSelectionPreview';
 import { EditorToolbar } from './EditorToolbar';
@@ -26,6 +26,7 @@ import { onCitationInsertRequest } from '../shared/citationActions';
 import { useDraftOutline } from '../../../core/ipc/hooks/useDrafts';
 import { getAPI } from '../../../core/ipc/bridge';
 import { contentHash } from '../../../../shared/writing/documentOutline';
+import { useChatStore } from '../../../core/store/useChatStore';
 
 function resolveActiveSectionId(editor: Editor, selectionPos: number): string | null {
   let activeSectionId: string | null = null;
@@ -56,10 +57,10 @@ interface UnifiedEditorProps {
 export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocumentJsonChange }: UnifiedEditorProps) {
   const selectedSectionId = useAppStore((s) => s.selectedSectionId);
   const selectSection = useAppStore((s) => s.selectSection);
-  const aiGenerating = useEditorStore((s) => s.aiGenerating);
   const setLiveDocumentState = useEditorStore((s) => s.setLiveDocumentState);
   const clearLiveDocumentState = useEditorStore((s) => s.clearLiveDocumentState);
   const setEditorSelection = useEditorStore((s) => s.setEditorSelection);
+  const setPersistedWritingTarget = useEditorStore((s) => s.setPersistedWritingTarget);
 
   const [documentJson, setDocumentJson] = useState<JSONContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -206,11 +207,65 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
       return;
     }
 
+    /**
+     * 从选区位置找到最近段落的 pid 属性
+     */
+    const findAnchorParagraphId = (pos: number): string | null => {
+      const resolved = editor.state.doc.resolve(pos);
+      for (let depth = resolved.depth; depth >= 0; depth--) {
+        const node = resolved.node(depth);
+        if (node.type.name === 'paragraph' && typeof node.attrs.pid === 'string') {
+          return node.attrs.pid as string;
+        }
+      }
+      return null;
+    };
+
+    /**
+     * 提取选区前后文本用于锚点重定位
+     */
+    const getSurroundingText = (from: number, to: number): { beforeText: string; afterText: string } => {
+      const docSize = editor.state.doc.content.size;
+      const beforeStart = Math.max(0, from - 80);
+      const afterEnd = Math.min(docSize, to + 80);
+      return {
+        beforeText: editor.state.doc.textBetween(beforeStart, from, '\n'),
+        afterText: editor.state.doc.textBetween(to, afterEnd, '\n'),
+      };
+    };
+
     const syncEditorSelection = () => {
       const { from, to } = editor.state.selection;
       const sectionId = resolveActiveSectionId(editor, from);
-      if (from === to || !sectionId) {
+
+      // 跳过无意义的重复更新 — 防止与 ghost selection plugin 形成无限循环
+      const prev = useEditorStore.getState().persistedWritingTarget;
+      const sameTarget = prev
+        && prev.from === from
+        && prev.to === (from === to ? from : to)
+        && prev.sectionId === sectionId
+        && prev.articleId === articleId;
+
+      if (from === to) {
+        // 光标（无选区）：更新为 caret target，但不自动展开 ChatDock
+        // sectionId 可以为 null（文档无 section 结构时），仍然设置 target
         setEditorSelection(null);
+        if (sameTarget && prev?.kind === 'caret') return; // 无变化
+        const anchorParagraphId = findAnchorParagraphId(from);
+        const { beforeText, afterText } = getSurroundingText(from, from);
+        setPersistedWritingTarget({
+          kind: 'caret',
+          articleId,
+          draftId,
+          sectionId,
+          from,
+          to: from,
+          selectedText: '',
+          anchorParagraphId,
+          beforeText,
+          afterText,
+          capturedAt: Date.now(),
+        });
         return;
       }
 
@@ -228,26 +283,45 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
         to,
         selectedText,
       });
+
+      // 持久化 range target — 仅当选区足够有意义时
+      // 短于 8 字符的选区视为阅读/校对行为，不升级为写作操作态
+      const SELECTION_THRESHOLD = 8;
+      const anchorParagraphId = findAnchorParagraphId(from);
+      const { beforeText, afterText } = getSurroundingText(from, to);
+
+      if (selectedText.length >= SELECTION_THRESHOLD) {
+        if (sameTarget && prev?.kind === 'range') return; // 无变化
+        setPersistedWritingTarget({
+          kind: 'range',
+          articleId,
+          draftId,
+          sectionId,
+          from,
+          to,
+          selectedText,
+          anchorParagraphId,
+          beforeText,
+          afterText,
+          capturedAt: Date.now(),
+        });
+
+        // 有意义的选区时自动展开 ChatDock
+        useChatStore.getState().setChatDockMode('expanded');
+      }
     };
 
     syncEditorSelection();
     editor.on('selectionUpdate', syncEditorSelection);
-    editor.on('transaction', syncEditorSelection);
 
     return () => {
       editor.off('selectionUpdate', syncEditorSelection);
-      editor.off('transaction', syncEditorSelection);
+      // 编辑器卸载时清除即时选区，但不清除 persistedWritingTarget
       setEditorSelection(null);
     };
-  }, [articleId, draftId, editor, setEditorSelection]);
+  }, [articleId, draftId, editor, setEditorSelection, setPersistedWritingTarget]);
 
-  // ── AI Operations ──
-  const aiOps = useAIOperations({
-    editor,
-    articleId,
-    draftId,
-    sectionId: currentSectionId,
-  });
+  // ── AI Operations — now unified through ChatDock, no standalone hooks ──
 
   // ── Image upload ──
   const { uploadAndInsert: handleInsertImage } = useImageUpload({
@@ -295,11 +369,6 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
     },
     [articleId, draftId, onDocumentJsonChange, setLiveDocumentState],
   );
-
-  const handleAICancel = useCallback(() => aiOps.cancel(), [aiOps]);
-  const handleAIRewrite = useCallback(() => aiOps.rewrite(), [aiOps]);
-  const handleAIExpand = useCallback(() => aiOps.expand(), [aiOps]);
-  const handleAICompress = useCallback(() => aiOps.compress(), [aiOps]);
 
   const handleInsertCitation = useCallback(() => {
     editor?.chain().focus().insertContent('[@').run();
@@ -355,8 +424,6 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
         {/* ── Toolbar ── */}
         <EditorToolbar
           editor={editor}
-          aiGenerating={aiGenerating}
-          onAICancel={handleAICancel}
           onInsertCitation={handleInsertCitation}
           onInsertMath={handleInsertMath}
           onInsertImage={handleInsertImage}
@@ -374,13 +441,10 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
         sectionPaperIds={currentSectionPaperIds}
       />
 
-      {/* ── Floating toolbar ── */}
+      {/* ── Floating toolbar — formatting only, AI buttons removed ── */}
       {editor && (
         <FloatingToolbar
           editor={editor}
-          onAIRewrite={handleAIRewrite}
-          onAIExpand={handleAIExpand}
-          onAICompress={handleAICompress}
         />
       )}
 

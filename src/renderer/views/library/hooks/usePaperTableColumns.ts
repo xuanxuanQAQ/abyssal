@@ -1,8 +1,8 @@
 /**
  * usePaperTableColumns — TanStack Table 列定义（§3.2）
  *
- * 10 列：select, relevance, title, authors, year, paperType,
- *        fulltextStatus, analysisStatus, decisionNote, dateAdded
+ * 11 列：select, relevance, title, authors, year, paperType,
+ *        fulltextStatus, processStatus, analysisStatus, decisionNote, dateAdded
  *
  * 自定义排序比较函数：relevance 权重、status 优先级、Intl.Collator 中文排序。
  */
@@ -119,7 +119,7 @@ export function usePaperTableColumns() {
       columnHelper.accessor('fulltextStatus', {
         id: 'fulltextStatus',
         header: '全文',
-        size: 48,
+        size: 56,
         minSize: 32,
         maxSize: 100,
         enableResizing: true,
@@ -128,11 +128,29 @@ export function usePaperTableColumns() {
           FULLTEXT_WEIGHT[rowB.original.fulltextStatus],
       }),
 
+      columnHelper.accessor((paper) => (paper.textPath ? 2 : paper.fulltextPath || paper.fulltextStatus === 'available' ? 1 : 0), {
+        id: 'processStatus',
+        header: '处理',
+        size: 56,
+        minSize: 32,
+        maxSize: 100,
+        enableResizing: true,
+        sortingFn: (rowA, rowB) => {
+          const processWeight = (paper: Paper) => {
+            if (paper.textPath) return 2;
+            if (paper.fulltextPath || paper.fulltextStatus === 'available') return 1;
+            return 0;
+          };
+
+          return processWeight(rowA.original) - processWeight(rowB.original);
+        },
+      }),
+
       // analysisStatus
       columnHelper.accessor('analysisStatus', {
         id: 'analysisStatus',
         header: '分析',
-        size: 48,
+        size: 56,
         minSize: 32,
         maxSize: 100,
         enableResizing: true,

@@ -1,5 +1,6 @@
 import { getAPI } from '../../../core/ipc/bridge';
 import { useEditorStore } from '../../../core/store/useEditorStore';
+import { buildWritingOperationContext } from '../../../views/writing/ai/buildWritingOperationContext';
 import type { ChatContext } from '../../../../shared-types/ipc';
 import type {
   CopilotIntent,
@@ -10,6 +11,7 @@ import type {
   CopilotSurface,
   ToolCallEvent,
 } from '../../../../copilot-runtime/types';
+import type { JSONContent } from '@tiptap/core';
 
 function getFocusedPaperIds(chatCtx?: ChatContext): string[] {
   const focused = chatCtx?.selectedPaperIds ?? [];
@@ -23,14 +25,67 @@ function getFocusedPaperIds(chatCtx?: ChatContext): string[] {
 }
 
 export function chatContextToSnapshot(chatCtx?: ChatContext): ContextSnapshot {
+  const editorState = useEditorStore.getState();
+  const writingTarget = editorState.persistedWritingTarget;
   const articleId = chatCtx?.selectedArticleId ?? null;
+
+  // 写作视图下使用统一的深度上下文构造
+  if (chatCtx?.activeView === 'writing' && articleId && writingTarget) {
+    // Lazy-parse: only parse when document exists. buildWritingOperationContext
+    // caches section continuity internally, so repeated messages skip the heavy work.
+    const documentJson = editorState.liveDocumentJson
+      ? JSON.parse(editorState.liveDocumentJson) as JSONContent
+      : null;
+
+    const snapshot = buildWritingOperationContext({
+      articleId,
+      draftId: chatCtx.selectedDraftId ?? null,
+      sectionId: writingTarget.sectionId,
+      documentJson,
+      writingTarget,
+    });
+
+    // 合并 chat 特有的 focusEntities
+    snapshot.focusEntities = {
+      paperIds: getFocusedPaperIds(chatCtx),
+      conceptIds: chatCtx.selectedConceptId ? [chatCtx.selectedConceptId] : [],
+    };
+
+    return snapshot;
+  }
+
+  // 非写作视图或无锚点时走标准路径
   const sectionId = chatCtx?.selectedSectionId ?? null;
-  const unsavedChanges = useEditorStore.getState().unsavedChanges;
-  const hasEditorSelection = Boolean(
+  const unsavedChanges = editorState.unsavedChanges;
+
+  // range 选区（有选中文本）或 caret 锚点（仅有位置）都应产出有效的
+  // EditorSelectionContext，以便 IntentRouter 和 Recipe 识别写作表面。
+  const hasEditorRange = Boolean(
     articleId &&
-    sectionId &&
     chatCtx?.editorSelectionText,
   );
+  const hasEditorCaret = Boolean(
+    !hasEditorRange &&
+    articleId &&
+    chatCtx?.activeView === 'writing' &&
+    chatCtx?.editorSelectionFrom != null,
+  );
+
+
+
+  const editorSelection = (hasEditorRange || hasEditorCaret)
+    ? {
+        kind: 'editor' as const,
+        articleId: articleId as string,
+        sectionId: sectionId ?? null,
+        selectedText: chatCtx?.editorSelectionText ?? '',
+        from: chatCtx?.editorSelectionFrom ?? 0,
+        to: chatCtx?.editorSelectionTo ?? 0,
+        ...(writingTarget?.anchorParagraphId ? { anchorParagraphId: writingTarget.anchorParagraphId } : {}),
+        ...(writingTarget?.beforeText ? { beforeText: writingTarget.beforeText } : {}),
+        ...(writingTarget?.afterText ? { afterText: writingTarget.afterText } : {}),
+      }
+    : null;
 
   return {
     activeView: chatCtx?.activeView ?? 'library',
@@ -41,16 +96,8 @@ export function chatContextToSnapshot(chatCtx?: ChatContext): ContextSnapshot {
           sectionId,
         }
       : null,
-    selection: hasEditorSelection
-      ? {
-          kind: 'editor',
-          articleId,
-          sectionId: sectionId ?? '',
-          selectedText: chatCtx?.editorSelectionText ?? '',
-          from: chatCtx?.editorSelectionFrom ?? 0,
-          to: chatCtx?.editorSelectionTo ?? 0,
-        }
-      : chatCtx?.selectedQuote
+    selection: editorSelection
+      ?? (chatCtx?.selectedQuote
         ? {
             kind: 'reader',
             paperId: chatCtx.selectedPaperId ?? '',
@@ -58,7 +105,7 @@ export function chatContextToSnapshot(chatCtx?: ChatContext): ContextSnapshot {
             ...(chatCtx.pdfPage != null ? { pdfPage: chatCtx.pdfPage } : {}),
             ...(chatCtx.imageClips ? { imageClips: chatCtx.imageClips } : {}),
           }
-        : null,
+        : null),
     focusEntities: {
       paperIds: getFocusedPaperIds(chatCtx),
       conceptIds: chatCtx?.selectedConceptId ? [chatCtx.selectedConceptId] : [],
@@ -83,19 +130,21 @@ export function buildChatCopilotEnvelope(
   prompt: string,
   chatCtx?: ChatContext,
   options?: {
-    surface?: CopilotSurface;
-    intent?: CopilotIntent;
-    skipIdempotency?: boolean;
+    surface?: CopilotSurface | undefined;
+    intent?: CopilotIntent | undefined;
+    skipIdempotency?: boolean | undefined;
   },
 ): CopilotOperationEnvelope {
+  const context = chatContextToSnapshot(chatCtx);
+  const intent = options?.intent ?? 'ask';
   return {
     operation: {
       id: crypto.randomUUID(),
       sessionId,
       surface: options?.surface ?? 'chat',
-      intent: options?.intent ?? 'ask',
+      intent,
       prompt,
-      context: chatContextToSnapshot(chatCtx),
+      context,
       outputTarget: { type: 'chat-message' },
     },
     ...(options?.skipIdempotency ? { options: { skipIdempotency: true } } : {}),
@@ -126,10 +175,10 @@ function collectOperationText(
 
 export async function executeCopilotTextRequest(options: {
   prompt: string;
-  context?: ChatContext;
-  sessionId?: string;
-  surface?: CopilotSurface;
-  intent?: CopilotIntent;
+  context?: ChatContext | undefined;
+  sessionId?: string | undefined;
+  surface?: CopilotSurface | undefined;
+  intent?: CopilotIntent | undefined;
 }): Promise<string> {
   const api = getAPI();
   const sessionId = options.sessionId ?? `copilot:${crypto.randomUUID()}`;

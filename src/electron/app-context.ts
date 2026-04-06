@@ -18,7 +18,7 @@ import type { BibliographyService } from '../core/bibliography';
 import type { SearchService } from '../core/search';
 import type { AcquireService } from '../core/acquire';
 import type { ProcessService } from '../core/process';
-import type { RagService } from '../core/rag';
+import type { RagServiceLike } from '../core/rag';
 import type { LockHandle } from './lock';
 import type { PushManager } from './ipc/push';
 import type { LlmClient } from '../adapter/llm-client/llm-client';
@@ -75,7 +75,7 @@ export interface AppContext {
   searchModule: SearchService | null;
   acquireModule: AcquireService | null;
   processModule: ProcessService | null;
-  ragModule: RagService | null;
+  ragModule: RagServiceLike | null;
   bibliographyModule: BibliographyService | null;
 
   // ── Adaptation layer modules ──
@@ -102,8 +102,11 @@ export interface AppContext {
   /** CookieJar for institutional access (china-institutional source) */
   cookieJar: CookieJar | null;
 
-  /** Read-only direct DB connection for RagService (sync access). Closed on shutdown. */
-  ragDbService: import('../core/database').DatabaseService | null;
+  /** Managed RAG runtime handle used by Electron for lifecycle management. */
+  ragRuntime: {
+    close: () => Promise<void>;
+    updateConfig?: (config: AbyssalConfig) => Promise<void>;
+  } | null;
 
   /** DLA (Document Layout Analysis) subsystem */
   dlaProxy: DlaProxy | null;
@@ -138,7 +141,7 @@ export interface CreateAppContextOpts {
   searchModule?: SearchService | null;
   acquireModule?: AcquireService | null;
   processModule?: ProcessService | null;
-  ragModule?: RagService | null;
+  ragModule?: RagServiceLike | null;
   bibliographyModule?: BibliographyService | null;
 }
 
@@ -157,7 +160,7 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
 
     // Core modules
     dbProxy: opts.dbProxy,
-    ragDbService: null,
+    ragRuntime: null,
     searchModule: opts.searchModule ?? null,
     acquireModule: opts.acquireModule ?? null,
     processModule: opts.processModule ?? null,

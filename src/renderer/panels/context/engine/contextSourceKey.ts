@@ -20,6 +20,8 @@ export function contextSourceKey(source: ContextSource): string {
       return `mapping:${source.mappingId}`;
     case 'section':
       return `section:${source.sectionId}`;
+    case 'writing-selection':
+      return `writing-sel:${source.sectionId}:${source.from}-${source.to}`;
     case 'graphNode':
       return `graphNode:${source.nodeId}`;
     case 'memo':

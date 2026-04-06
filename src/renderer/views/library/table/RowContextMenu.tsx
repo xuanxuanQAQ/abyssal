@@ -12,13 +12,14 @@ import { useAppStore } from '../../../core/store';
 import { useUpdatePaper, useDeletePaper, useResetProcess, useResetFulltext } from '../../../core/ipc/hooks/usePapers';
 import { useAcquireFulltext, useLinkLocalPdf } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
+import { useDeferredMenuAction } from '../../../shared/useDeferredMenuAction';
+import { useAppDialog } from '../../../shared/useAppDialog';
 import type { Paper } from '../../../../shared-types/models';
 import type { Relevance } from '../../../../shared-types/enums';
 import { RELEVANCE_CONFIG as RELEVANCE_OPTIONS } from '../shared/relevanceConfig';
 
 interface RowContextMenuProps {
   paper: Paper;
-  isSelected: boolean;
   children: React.ReactNode;
 }
 
@@ -44,7 +45,7 @@ const menuItemStyle: React.CSSProperties = {
   gap: 8,
 };
 
-export function RowContextMenu({ paper, isSelected, children }: RowContextMenuProps) {
+export function RowContextMenu({ paper, children }: RowContextMenuProps) {
   const { t } = useTranslation();
   const navigateTo = useAppStore((s) => s.navigateTo);
   const updatePaper = useUpdatePaper();
@@ -54,6 +55,8 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
   const resetProcess = useResetProcess();
   const resetFulltext = useResetFulltext();
   const startPipeline = useStartPipeline();
+  const deferMenuAction = useDeferredMenuAction();
+  const { confirm, dialog } = useAppDialog();
 
   // ── 状态派生 ──
   const hasFulltext = paper.fulltextStatus === 'available' || !!paper.fulltextPath;
@@ -61,30 +64,41 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
   const hasAnalysis = paper.analysisStatus === 'completed';
   const isAcquiring = paper.fulltextStatus === 'pending';
   const isAnalyzing = paper.analysisStatus === 'in_progress';
+  const paperTitle = typeof paper.title === 'string' && paper.title.trim().length > 0
+    ? paper.title.trim()
+    : t('common.paper');
 
   const handleSetRelevance = (rel: Relevance) => {
-    updatePaper.mutate({ id: paper.id, patch: { relevance: rel } });
+    deferMenuAction(() => {
+      updatePaper.mutate({ id: paper.id, patch: { relevance: rel } });
+    });
   };
 
   const handleDelete = () => {
-    const pr = paper as unknown as Record<string, unknown>;
-    const confirmed = window.confirm(
-      t('library.contextMenu.deleteConfirm', { title: (pr['title'] as string) ?? paper.id })
-    );
-    if (!confirmed) return;
-    deletePaper.mutate(paper.id);
+    deferMenuAction(async () => {
+      const confirmed = await confirm({
+        title: t('common.delete'),
+        description: t('library.contextMenu.deleteConfirm', { title: paperTitle }),
+        confirmLabel: t('common.delete'),
+        confirmTone: 'danger',
+      });
+      if (!confirmed) return;
+      deletePaper.mutate(paper.id);
+    });
   };
 
   const handleCopyBibtex = () => {
-    const pr = paper as unknown as Record<string, unknown>;
-    const key = (pr['bibtexKey'] as string) ?? (pr['id'] as string) ?? 'unknown';
-    const title = (pr['title'] as string) ?? '';
-    const authors = (pr['authors'] as string) ?? '';
-    const year = (pr['year'] as number) ?? 0;
-    const doi = (pr['doi'] as string) ?? '';
-    const bibtex = `@article{${key},\n  title = {${title}},\n  author = {${authors}},\n  year = {${year}}${doi ? `,\n  doi = {${doi}}` : ''}\n}`;
-    navigator.clipboard.writeText(bibtex).then(() => {
-      toast.success(t('library.contextMenu.bibtexCopied'));
+    deferMenuAction(() => {
+      const pr = paper as unknown as Record<string, unknown>;
+      const key = (pr['bibtexKey'] as string) ?? (pr['id'] as string) ?? 'unknown';
+      const title = (pr['title'] as string) ?? '';
+      const authors = (pr['authors'] as string) ?? '';
+      const year = (pr['year'] as number) ?? 0;
+      const doi = (pr['doi'] as string) ?? '';
+      const bibtex = `@article{${key},\n  title = {${title}},\n  author = {${authors}},\n  year = {${year}}${doi ? `,\n  doi = {${doi}}` : ''}\n}`;
+      navigator.clipboard.writeText(bibtex).then(() => {
+        toast.success(t('library.contextMenu.bibtexCopied'));
+      });
     });
   };
 
@@ -92,6 +106,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
   const dangerStyle: React.CSSProperties = { ...menuItemStyle, color: 'var(--danger)' };
 
   return (
+    <>
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         {children}
@@ -102,7 +117,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasFulltext && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => navigateTo({ type: 'paper', id: paper.id, view: 'reader' })}
+              onSelect={() => deferMenuAction(() => navigateTo({ type: 'paper', id: paper.id, view: 'reader' }))}
             >
               {t('library.contextMenu.openInReader')}
             </ContextMenu.Item>
@@ -110,10 +125,10 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasFulltext && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => {
+              onSelect={() => deferMenuAction(() => {
                 const fp = paper.fulltextPath;
                 if (fp) window.open(`file://${fp}`);
-              }}
+              })}
             >
               {t('library.contextMenu.openPdf')}
             </ContextMenu.Item>
@@ -121,14 +136,14 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasAnalysis && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => navigateTo({ type: 'paper', id: paper.id, view: 'analysis' })}
+              onSelect={() => deferMenuAction(() => navigateTo({ type: 'paper', id: paper.id, view: 'analysis' }))}
             >
               {t('library.contextMenu.viewAnalysisReport')}
             </ContextMenu.Item>
           )}
           <ContextMenu.Item
             style={menuItemStyle}
-            onSelect={() => navigateTo({ type: 'graph', focusNodeId: paper.id })}
+            onSelect={() => deferMenuAction(() => navigateTo({ type: 'graph', focusNodeId: paper.id }))}
           >
             {t('library.contextMenu.locateInGraph')}
           </ContextMenu.Item>
@@ -160,7 +175,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {!hasFulltext && !isAcquiring && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => acquireFulltext.mutate(paper.id)}
+              onSelect={() => deferMenuAction(() => acquireFulltext.mutate(paper.id))}
             >
               {t('library.contextMenu.acquireFulltext')}
             </ContextMenu.Item>
@@ -168,7 +183,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {!hasFulltext && !isAcquiring && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => linkLocalPdf.mutate({ paperId: paper.id })}
+              onSelect={() => deferMenuAction(() => linkLocalPdf.mutate({ paperId: paper.id }))}
             >
               {t('library.contextMenu.linkLocalPdf')}
             </ContextMenu.Item>
@@ -176,7 +191,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasFulltext && !hasText && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => startPipeline.mutate({ workflow: 'process', config: { paperIds: [paper.id] } })}
+              onSelect={() => deferMenuAction(() => startPipeline.mutate({ workflow: 'process', config: { paperIds: [paper.id] } }))}
             >
               {t('library.contextMenu.triggerProcess')}
             </ContextMenu.Item>
@@ -184,7 +199,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasFulltext && !hasAnalysis && !isAnalyzing && (
             <ContextMenu.Item
               style={menuItemStyle}
-              onSelect={() => startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paper.id] } })}
+              onSelect={() => deferMenuAction(() => startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paper.id] } }))}
             >
               {t('library.contextMenu.triggerAnalysis')}
             </ContextMenu.Item>
@@ -205,14 +220,16 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasText && (
             <ContextMenu.Item
               style={dangerStyle}
-              onSelect={() => {
-                const pr = paper as unknown as Record<string, unknown>;
-                const confirmed = window.confirm(
-                  t('library.contextMenu.resetProcessConfirm', { title: (pr['title'] as string) ?? paper.id })
-                );
+              onSelect={() => deferMenuAction(async () => {
+                const confirmed = await confirm({
+                  title: t('library.contextMenu.resetProcess'),
+                  description: t('library.contextMenu.resetProcessConfirm', { title: paperTitle }),
+                  confirmLabel: t('library.contextMenu.resetProcess'),
+                  confirmTone: 'danger',
+                });
                 if (!confirmed) return;
                 resetProcess.mutate(paper.id);
-              }}
+              })}
             >
               {t('library.contextMenu.resetProcess')}
             </ContextMenu.Item>
@@ -220,14 +237,16 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
           {hasFulltext && (
             <ContextMenu.Item
               style={dangerStyle}
-              onSelect={() => {
-                const pr = paper as unknown as Record<string, unknown>;
-                const confirmed = window.confirm(
-                  t('library.contextMenu.resetFulltextConfirm', { title: (pr['title'] as string) ?? paper.id })
-                );
+              onSelect={() => deferMenuAction(async () => {
+                const confirmed = await confirm({
+                  title: t('library.contextMenu.resetFulltext'),
+                  description: t('library.contextMenu.resetFulltextConfirm', { title: paperTitle }),
+                  confirmLabel: t('library.contextMenu.resetFulltext'),
+                  confirmTone: 'danger',
+                });
                 if (!confirmed) return;
                 resetFulltext.mutate(paper.id);
-              }}
+              })}
             >
               {t('library.contextMenu.resetFulltext')}
             </ContextMenu.Item>
@@ -241,5 +260,7 @@ export function RowContextMenu({ paper, isSelected, children }: RowContextMenuPr
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+    {dialog}
+    </>
   );
 }

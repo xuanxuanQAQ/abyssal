@@ -22,7 +22,9 @@ import type {
   ArticleFocus,
   SelectionContext,
   WritingContextState,
+  EvidenceChunk,
 } from './types';
+import { estimateTokens } from '../core/infra/token-counter';
 
 export interface ContextBuildDeps {
   session: ResearchSession;
@@ -102,7 +104,12 @@ export class ContextSnapshotBuilder {
       frozenAt: Date.now(),
     };
 
-    return Object.freeze(snapshot) as ContextSnapshot;
+    // ── Priority-based truncation ──
+    // Eviction order (lowest priority first): history turns → retrieval evidence → focus entities
+    // Selection and article focus are never truncated (essential for intent routing).
+    const truncated = this.truncateToBudget(snapshot, budget.tokenBudget);
+
+    return Object.freeze(truncated) as ContextSnapshot;
   }
 
   private resolveSelection(operation: CopilotOperation): SelectionContext | null {
@@ -214,6 +221,79 @@ export class ContextSnapshotBuilder {
     }
 
     return { recentTurns: [] };
+  }
+
+  /**
+   * Truncate context layers to fit within the token budget.
+   * Eviction priority (trimmed first → last):
+   *   1. Conversation history turns (oldest first)
+   *   2. Retrieval evidence (lowest-score first)
+   *   3. Focus entity IDs (excess trimmed)
+   * Selection and article focus are never truncated.
+   */
+  private truncateToBudget(snapshot: ContextSnapshot, tokenBudget: number): ContextSnapshot {
+    const estimate = (s: ContextSnapshot) => {
+      let tokens = 0;
+      // Selection text
+      if (s.selection && 'selectedText' in s.selection) {
+        tokens += estimateTokens(s.selection.selectedText);
+      }
+      // Article focus summaries
+      if (s.article?.previousSectionSummaries) {
+        for (const summary of s.article.previousSectionSummaries) {
+          tokens += estimateTokens(summary);
+        }
+      }
+      // Conversation turns
+      for (const turn of s.conversation.recentTurns) {
+        tokens += estimateTokens(turn.text);
+      }
+      // Evidence chunks
+      for (const chunk of s.retrieval.evidence) {
+        tokens += estimateTokens(chunk.text);
+      }
+      return tokens;
+    };
+
+    let current = estimate(snapshot);
+    if (current <= tokenBudget) return snapshot;
+
+    // Mutable shallow copy for truncation
+    let result = { ...snapshot };
+
+    // Phase 1: Trim conversation history (oldest first)
+    if (result.conversation.recentTurns.length > 0 && current > tokenBudget) {
+      const turns = [...result.conversation.recentTurns];
+      while (turns.length > 1 && current > tokenBudget) {
+        const removed = turns.shift()!;
+        current -= estimateTokens(removed.text);
+      }
+      result = { ...result, conversation: { ...result.conversation, recentTurns: turns } };
+    }
+
+    // Phase 2: Trim retrieval evidence (lowest-score first)
+    if (result.retrieval.evidence.length > 0 && current > tokenBudget) {
+      const evidence = [...result.retrieval.evidence].sort((a, b) => b.score - a.score);
+      while (evidence.length > 0 && current > tokenBudget) {
+        const removed = evidence.pop()!;
+        current -= estimateTokens(removed.text);
+      }
+      result = { ...result, retrieval: { ...result.retrieval, evidence } };
+    }
+
+    // Phase 3: Trim focus entity lists
+    if (current > tokenBudget) {
+      result = {
+        ...result,
+        focusEntities: {
+          ...result.focusEntities,
+          paperIds: result.focusEntities.paperIds.slice(0, 2),
+          conceptIds: result.focusEntities.conceptIds.slice(0, 2),
+        },
+      };
+    }
+
+    return result;
   }
 
   private resolveRetrieval(

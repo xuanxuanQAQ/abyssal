@@ -129,7 +129,7 @@ export function buildSystemPrompt(
       // Multi-paper context (Library multi-select)
       lines.push(`## Selected Papers (${ctx.activePapers.length})`);
       for (const p of ctx.activePapers.slice(0, 8)) {
-        lines.push(`- **${p.title}** (${p.authors}${p.year ? `, ${p.year}` : ''}) [ID: ${p.id}]`);
+        lines.push(`- **${p.title}** (${p.authors}${p.year ? `, ${p.year}` : ''})`);
         if (p.abstract) {
           lines.push(`  Abstract: ${p.abstract.slice(0, 200)}${p.abstract.length > 200 ? '...' : ''}`);
         }
@@ -147,7 +147,7 @@ export function buildSystemPrompt(
     } else if (ctx.activePaper) {
       const p = ctx.activePaper;
       lines.push('## Current Paper');
-      lines.push(`**${p.title}** (${p.authors}${p.year ? `, ${p.year}` : ''}) [ID: ${p.id}]`);
+      lines.push(`**${p.title}** (${p.authors}${p.year ? `, ${p.year}` : ''})`);
       lines.push(`Analysis: ${p.analysisStatus} | Fulltext: ${p.fulltextStatus}${p.doi ? ` | DOI: ${p.doi}` : ''}`);
       if (p.abstract) {
         lines.push(`Abstract: ${p.abstract.slice(0, 500)}${p.abstract.length > 500 ? '...' : ''}`);
@@ -170,7 +170,7 @@ export function buildSystemPrompt(
     if (ctx.activeConcept) {
       const c = ctx.activeConcept;
       lines.push('## Current Concept');
-      lines.push(`**${c.nameEn}** [ID: ${c.id}] — ${c.maturity}, ${c.mappedPaperCount} papers`);
+      lines.push(`**${c.nameEn}** — ${c.maturity}, ${c.mappedPaperCount} papers`);
       if (c.definition) {
         lines.push(`Definition: ${c.definition.slice(0, 500)}${c.definition.length > 500 ? '...' : ''}`);
       }
@@ -205,7 +205,7 @@ export function buildSystemPrompt(
     }
 
     rules.push('Use `retrieve` for fulltext search, `get_paper`/`get_concept` for other entities');
-    rules.push('Cite paper IDs when referencing papers');
+    rules.push('Refer to papers by title, authors, or citations rather than internal IDs');
     rules.push('When the user only sends a greeting, reply briefly and do not proactively list capabilities or project state.');
     if (interactionMode === 'assistant_profile') {
       rules.push('The user is explicitly asking who you are or what you can do. Introduce yourself as the Abyssal academic workstation AI research assistant, summarize your core capabilities, and keep any current project snapshot brief.');

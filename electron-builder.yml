@@ -13,6 +13,10 @@ extraResources:
     to: models/
     filter:
       - "**/*.onnx"
+  - from: assets/tesseract/
+    to: tesseract/
+    filter:
+      - "**/*.traineddata"
 win:
   target:
     - nsis

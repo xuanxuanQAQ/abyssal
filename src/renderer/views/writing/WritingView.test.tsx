@@ -55,11 +55,17 @@ vi.mock('../../core/store', () => ({
   }),
 }));
 
-vi.mock('../../core/store/useEditorStore', () => ({
-  useEditorStore: (selector: (store: { unsavedChanges: boolean }) => unknown) => selector({
+vi.mock('../../core/store/useEditorStore', () => {
+  const hook = (selector: (store: { unsavedChanges: boolean }) => unknown) => selector({
     unsavedChanges: state.unsavedChanges,
-  }),
-}));
+  });
+  hook.getState = () => ({
+    unsavedChanges: state.unsavedChanges,
+    clearPersistedWritingTarget: vi.fn(),
+    clearDraftStreamText: vi.fn(),
+  });
+  return { useEditorStore: hook };
+});
 
 vi.mock('../../core/hooks/useHotkey', () => ({
   useHotkey: vi.fn(),
@@ -115,7 +121,6 @@ describe('WritingView', () => {
     state.deleteArticle.mutate.mockReset();
     state.createDraft.mutate.mockReset();
     state.deleteDraft.mutate.mockReset();
-    vi.stubGlobal('confirm', vi.fn(() => true));
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -126,11 +131,10 @@ describe('WritingView', () => {
       root.unmount();
     });
     container.remove();
-    vi.unstubAllGlobals();
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = false;
   });
 
-  it('deletes article with confirmation mentioning routes', () => {
+  it('deletes article with confirmation mentioning routes', async () => {
     act(() => {
       root.render(<WritingView />);
     });
@@ -142,11 +146,22 @@ describe('WritingView', () => {
       articleDeleteButton?.click();
     });
 
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('变体'));
+    const dialog = document.body.querySelector('[data-testid="app-dialog"]') as HTMLDivElement | null;
+    expect(dialog?.textContent).toContain('相关变体也会一并删除');
+    expect(state.deleteArticle.mutate).not.toHaveBeenCalled();
+
+    const confirmButton = dialog?.querySelector('[data-dialog-action="confirm"]') as HTMLButtonElement | null;
+    expect(confirmButton?.textContent).toBe('删除文章');
+
+    await act(async () => {
+      confirmButton?.click();
+      await Promise.resolve();
+    });
+
     expect(state.deleteArticle.mutate).toHaveBeenCalledWith('article-1', expect.any(Object));
   });
 
-  it('deletes route with proper confirmation text', () => {
+  it('deletes route with proper confirmation text', async () => {
     act(() => {
       root.render(<WritingView />);
     });
@@ -158,7 +173,18 @@ describe('WritingView', () => {
       routeDeleteButton?.click();
     });
 
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('不影响其他变体'));
+    const dialog = document.body.querySelector('[data-testid="app-dialog"]') as HTMLDivElement | null;
+    expect(dialog?.textContent).toContain('不影响其他变体');
+    expect(state.deleteDraft.mutate).not.toHaveBeenCalled();
+
+    const confirmButton = dialog?.querySelector('[data-dialog-action="confirm"]') as HTMLButtonElement | null;
+    expect(confirmButton?.textContent).toBe('删除变体');
+
+    await act(async () => {
+      confirmButton?.click();
+      await Promise.resolve();
+    });
+
     expect(state.deleteDraft.mutate).toHaveBeenCalledWith('draft-1', expect.any(Object));
   });
 

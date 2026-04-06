@@ -29,7 +29,7 @@ import type { ResearchNote } from '../types/note';
 import type { SuggestedConcept, SuggestionStatus } from '../types/suggestion';
 import type { PaperRelation } from '../types/relation';
 import type { SeedType } from '../types/config';
-import type { ChatMessageRecord, ChatSessionSummary, PaginationOpts } from '../../shared-types/models';
+import type { ChatMessageRecord, ChatSessionSummary, GraphData, PaginationOpts } from '../../shared-types/models';
 
 // ─── 连接 & 迁移 ───
 import { openDatabase, walCheckpoint } from './connection';
@@ -87,8 +87,6 @@ export type { Seed } from './dao/seeds';
 export type { SearchLogEntry } from './dao/search-log';
 export type {
   SemanticSearchFn,
-  GraphNode,
-  GraphEdge,
   RelationGraphFilter,
 } from './dao/relations';
 export type { DatabaseStats, IntegrityReport, IntegrityCheckResult } from './dao/stats';
@@ -684,6 +682,8 @@ export class DatabaseService implements IDbService {
     closestExistingConceptId?: ConceptId | null;
     closestExistingConceptSimilarity?: string | null;
     reason: string;
+    suggestedDefinition?: string | null;
+    suggestedKeywords?: string[] | null;
   }): SuggestionId {
     return this.withOp(() => suggestionsDao.addSuggestedConcept(this.db, input));
   }
@@ -909,7 +909,7 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => relationsDao.recomputeAllRelations(this.db, semanticSearchFn));
   }
 
-  getRelationGraph(filter: relationsDao.RelationGraphFilter): { nodes: relationsDao.GraphNode[]; edges: relationsDao.GraphEdge[] } {
+  getRelationGraph(filter: relationsDao.RelationGraphFilter): GraphData {
     return this.withOp(() => relationsDao.getRelationGraph(this.db, filter));
   }
 
@@ -955,6 +955,10 @@ export class DatabaseService implements IDbService {
 
   saveChatMessage(record: ChatMessageRecord): void {
     this.withOp(() => chatDao.saveMessage(this.db, record));
+  }
+
+  deleteChatMessage(messageId: string): void {
+    this.withOp(() => chatDao.deleteMessage(this.db, messageId));
   }
 
   getChatHistory(contextKey: string, opts?: PaginationOpts): ChatMessageRecord[] {
@@ -1272,6 +1276,8 @@ export interface CreateDatabaseServiceOptions {
   logger: Logger;
   /** 只读模式，默认 false */
   readOnly?: boolean | undefined;
+  /** 跳过应用级文件锁，仅供同一应用内的受控内部连接使用 */
+  skipFileLock?: boolean | undefined;
   /** 跳过 sqlite-vec 加载（测试用） */
   skipVecExtension?: boolean | undefined;
   /** 迁移 SQL 目录。默认为 __dirname/migrations（tsc 模式）。esbuild bundle 需要显式指定 */
@@ -1292,7 +1298,14 @@ export interface CreateDatabaseServiceOptions {
 export function createDatabaseService(
   options: CreateDatabaseServiceOptions,
 ): DatabaseService {
-  const { dbPath, config, logger, readOnly = false, skipVecExtension } = options;
+  const {
+    dbPath,
+    config,
+    logger,
+    readOnly = false,
+    skipFileLock = false,
+    skipVecExtension,
+  } = options;
 
   // 步骤 1-2：打开连接 + PRAGMA + 扩展加载
   const db = openDatabase({
@@ -1317,11 +1330,11 @@ export function createDatabaseService(
 
     // 步骤 5：创建文件锁（只读模式跳过）
     const fileLock = new FileLock(dbPath);
-    if (!readOnly) {
+    if (!readOnly && !skipFileLock) {
       fileLock.acquire();
     }
 
-    logger.info('DatabaseService initialized', { dbPath, readOnly });
+    logger.info('DatabaseService initialized', { dbPath, readOnly, skipFileLock });
 
     return new DatabaseService(db, config, logger, dbPath, fileLock, stmts);
   } catch (err) {

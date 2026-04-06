@@ -63,7 +63,7 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
     if (!paperId || !enabled) return;
 
     const api = getAPI();
-    console.log(`[DLA-Hook] Subscribing to dlaPageReady for paper=${paperId.slice(0, 8)}`);
+    console.log('[DLA-Hook] Subscribing to dlaPageReady for current document');
     const unsub = api.on.dlaPageReady((event) => {
       if (event.paperId !== paperId) return;
 
@@ -105,7 +105,7 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
 
       if (cancelled || loaded.size === 0) return;
 
-      console.log(`[DLA-Hook] Loaded ${loaded.size} pages from DB for paper=${paperId.slice(0, 8)}`);
+      console.log(`[DLA-Hook] Loaded ${loaded.size} pages from DB for current document`);
       setBlockMap(loaded);
     };
 
@@ -124,7 +124,7 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
 
     const api = getAPI();
     triggeredDocRef.current = paperId;
-    console.log(`[DLA-Hook] Triggering full document analysis for paper=${paperId.slice(0, 8)} (${totalPages} pages)`);
+    console.log(`[DLA-Hook] Triggering full document analysis for current document (${totalPages} pages)`);
     api.dla.analyzeDocument(paperId, pdfPath, totalPages).catch((err) => {
       console.warn('[DLA-Hook] analyzeDocument failed (non-critical):', err);
     });

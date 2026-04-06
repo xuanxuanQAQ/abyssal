@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
+import { useDeferredMenuAction } from '../../../shared/useDeferredMenuAction';
 import type { Annotation } from '../../../../shared-types/models';
 import type { HighlightColor } from '../../../../shared-types/enums';
 import {
@@ -39,6 +40,7 @@ export function AnnotationCard({
   onUpdateColor: (color: HighlightColor) => void;
 }) {
   const { t } = useTranslation();
+  const deferMenuAction = useDeferredMenuAction();
   const highlightColor = (annotation.color as HighlightColor) ?? 'yellow';
   const displayColor = COLOR_MAP[highlightColor] ?? COLOR_MAP.yellow;
 
@@ -185,7 +187,7 @@ export function AnnotationCard({
                 {ALL_COLORS.map((color) => (
                   <ContextMenu.Item
                     key={color}
-                    onSelect={() => onUpdateColor(color)}
+                    onSelect={() => deferMenuAction(() => onUpdateColor(color))}
                     style={menuItemStyle}
                   >
                     <span
@@ -214,7 +216,7 @@ export function AnnotationCard({
           />
 
           <ContextMenu.Item
-            onSelect={onDelete}
+            onSelect={() => deferMenuAction(onDelete)}
             style={{
               ...menuItemStyle,
               color: '#f87171',

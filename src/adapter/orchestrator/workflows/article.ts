@@ -37,6 +37,7 @@ import { buildProtectionBlock, verifyProtection } from './paragraph-protection/p
 import { resetForNewVersion } from './paragraph-protection/edit-tracker';
 import { generateSectionSummary, formatPrecedingContext } from './section-summary/deterministic-summary';
 import { buildDocumentProjection, parseArticleDocument } from '../../../shared/writing/documentOutline';
+import { resolveCurrentRagService } from './rag-service-resolver';
 
 const ARTICLE_STAGE_WORKFLOWS = {
   section: 'article.section',
@@ -67,6 +68,7 @@ export interface ArticleServices {
   ragService: {
     retrieve: (request: Record<string, unknown>) => Promise<{ chunks: RankedChunk[]; totalTokenCount: number }>;
   } | null;
+  getRagService?: (() => ArticleServices['ragService']) | undefined;
   logger: Logger;
   workspacePath: string;
   enableCorrectiveRag?: boolean;
@@ -263,6 +265,7 @@ async function generateSection(
   let ragChunks: RankedChunk[] = [];
   let synthesisFragments = '';
   let qualityReport: QualityReport = defaultPassReport();
+  const ragService = resolveCurrentRagService(services);
 
   // Path A: Load synthesis fragments
   for (const conceptId of current.conceptIds) {
@@ -275,9 +278,9 @@ async function generateSection(
   }
 
   // Path B: RAG retrieval
-  if (services.ragService) {
+  if (ragService) {
     try {
-      const result = await services.ragService.retrieve({
+      const result = await ragService.retrieve({
         queryText: current.thesis + ' ' + current.writingInstruction,
         taskType: 'article',
         conceptIds: current.conceptIds,
@@ -297,7 +300,7 @@ async function generateSection(
   }
 
   // ══ Step 4: Corrective RAG loop ══
-  if (services.enableCorrectiveRag !== false && ragChunks.length > 0 && services.ragService) {
+  if (services.enableCorrectiveRag !== false && ragChunks.length > 0 && ragService) {
     runner.reportProgress({ currentStage: 'crag_evaluation' });
 
     const llmCallFn: LlmCallFn = async (sys, user) => {
@@ -310,7 +313,7 @@ async function generateSection(
     };
 
     const retrieveFn = async (query: string, opts: Record<string, unknown>) => {
-      const r = await services.ragService!.retrieve({ ...opts, queryText: query });
+      const r = await ragService.retrieve({ ...opts, queryText: query });
       return r.chunks;
     };
 

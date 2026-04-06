@@ -24,7 +24,7 @@ export const silentLogger: Logger = {
 /** 测试用最小配置——字段与 AbyssalConfig 接口严格对齐 */
 export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalConfig {
   return {
-    project: { name: 'test-project', description: '', mode: 'auto' },
+    project: { name: 'test-project', description: '' },
     workspace: {
       baseDir: '/tmp/test-workspace',
       dbFileName: ':memory:',

@@ -6,6 +6,7 @@ export * from './types';
 export { CopilotRuntime } from './runtime';
 export { RecipeRegistry } from './recipe-registry';
 export { IntentRouter } from './intent-router';
+export { IntentEmbeddingIndex } from './intent-embedding-index';
 export { ContextSnapshotBuilder } from './context-builder';
 export { ExecutionCoordinator } from './execution-coordinator';
 export { OperationEventEmitter } from './event-emitter';

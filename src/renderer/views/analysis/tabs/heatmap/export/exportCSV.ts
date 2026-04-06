@@ -31,14 +31,14 @@ export function exportHeatmapCSV(
   // Header row: empty corner cell + paper labels
   const headerCells = ['Concept'];
   for (let col = 0; col < numPapers; col++) {
-    headerCells.push(escapeCSV(paperLabels[col] ?? paperIds[col] ?? `P${col}`));
+    headerCells.push(escapeCSV(paperLabels[col] ?? `Paper ${col + 1}`));
   }
   lines.push(headerCells.join(','));
 
   // Data rows: one per concept
   for (let row = 0; row < numConcepts; row++) {
     const rowCells: string[] = [
-      escapeCSV(conceptNames[row] ?? conceptIds[row] ?? `C${row}`),
+      escapeCSV(conceptNames[row] ?? `Concept ${row + 1}`),
     ];
     for (let col = 0; col < numPapers; col++) {
       const cell = cellMap.get(`${row}:${col}`);

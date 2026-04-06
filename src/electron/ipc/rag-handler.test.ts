@@ -91,6 +91,7 @@ describe('registerRagHandlers', () => {
       { docId: 'n1', text: 'related private note', score: 0.5 },
     ]);
     expect(result.ragPassages).toHaveLength(1);
+    expect(result.ragStatus).toBe('ok');
   });
 
   it('falls back to semantic search when retrieve fails', async () => {
@@ -129,6 +130,30 @@ describe('registerRagHandlers', () => {
 
     expect(searchSemantic).toHaveBeenCalledTimes(1);
     expect(result.ragPassages).toHaveLength(1);
+    expect(result.ragStatus).toBe('ok');
+  });
+
+  it('returns ragStatus unavailable when ragModule is null', async () => {
+    const ctx = {
+      logger: makeLogger(),
+      ragModule: null,
+      workspaceRoot: 'C:/workspace',
+      dbProxy: {
+        getOutlineEntry: vi.fn(async () => null),
+        getArticle: vi.fn(async () => null),
+        getOutline: vi.fn(async () => []),
+        getSectionDrafts: vi.fn(async () => []),
+        queryNotes: vi.fn(async () => []),
+      },
+    } as any;
+
+    registerRagHandlers(ctx);
+
+    const handler = registeredHandlers.get('rag:getWritingContext');
+    const result = await handler!({} as any, 'section-x');
+
+    expect(result.ragStatus).toBe('unavailable');
+    expect(result.ragPassages).toHaveLength(0);
   });
 
   it('prefers live document continuity when request carries documentJson', async () => {
@@ -187,5 +212,6 @@ describe('registerRagHandlers', () => {
     expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({
       queryText: expect.stringContaining('Live Method'),
     }));
+    expect(result.ragStatus).toBe('ok');
   });
 });

@@ -44,8 +44,9 @@ export class OperationEventEmitter {
     for (const listener of this.listeners) {
       try {
         listener(fullEvent);
-      } catch {
+      } catch (err) {
         // listener errors must not break the main chain
+        console.warn('[OperationEventEmitter] listener threw:', err);
       }
     }
 

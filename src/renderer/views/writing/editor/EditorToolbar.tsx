@@ -3,12 +3,11 @@
  *
  * Groups:
  *   1. Text format   — Bold, Italic, Strikethrough, Code
- *   2. Heading        — H2, H3 only (no H1 per section-level design)
+ *   2. Heading        — H1, H2, H3
  *   3. Block          — BulletList, OrderedList, Blockquote
  *   4. Insert         — Link, Math, Cite, Image
  *
- * When `aiGenerating === true` the toolbar shows a compact
- * "[generating...] [cancel]" indicator.
+ * AI operations are now routed through ChatDock per chat-writing unification.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -29,16 +28,12 @@ import {
   Sigma,
   AtSign,
   ImagePlus,
-  Sparkles,
-  StopCircle,
 } from 'lucide-react';
 
 // ── Types ──
 
 interface EditorToolbarProps {
   editor: Editor | null;
-  aiGenerating: boolean;
-  onAICancel?: (() => void) | undefined;
   onInsertCitation?: (() => void) | undefined;
   onInsertMath?: (() => void) | undefined;
   onInsertImage?: (() => void) | undefined;
@@ -89,22 +84,6 @@ function buttonStyle(active: boolean, disabled: boolean): React.CSSProperties {
   };
 }
 
-const aiLabelStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  height: 28,
-  padding: '0 8px',
-  borderRadius: 'var(--radius-sm)',
-  border: 'none',
-  cursor: 'pointer',
-  backgroundColor: 'transparent',
-  color: 'var(--text-secondary)',
-  fontSize: 'var(--text-xs)',
-  flexShrink: 0,
-  whiteSpace: 'nowrap',
-};
-
 // ── Separator ──
 
 function Separator() {
@@ -141,8 +120,6 @@ function ToolbarButton({ icon, title, active, disabled, onClick }: TBProps) {
 
 export function EditorToolbar({
   editor,
-  aiGenerating,
-  onAICancel,
   onInsertCitation,
   onInsertMath,
   onInsertImage,
@@ -365,14 +342,38 @@ export function EditorToolbar({
           />
           <button
             type="button"
-            style={aiLabelStyle}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              height: 28,
+              padding: '0 8px',
+              borderRadius: 'var(--radius-sm)',
+              border: 'none',
+              cursor: 'pointer',
+              backgroundColor: 'transparent',
+              color: 'var(--text-secondary)',
+              fontSize: 'var(--text-xs)',
+              whiteSpace: 'nowrap',
+            }}
             onClick={applyLink}
           >
             {t('common.apply', { defaultValue: '应用' })}
           </button>
           <button
             type="button"
-            style={aiLabelStyle}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              height: 28,
+              padding: '0 8px',
+              borderRadius: 'var(--radius-sm)',
+              border: 'none',
+              cursor: 'pointer',
+              backgroundColor: 'transparent',
+              color: 'var(--text-secondary)',
+              fontSize: 'var(--text-xs)',
+              whiteSpace: 'nowrap',
+            }}
             onClick={() => setLinkEditOpen(false)}
           >
             {t('common.cancel')}
@@ -380,32 +381,6 @@ export function EditorToolbar({
           <Separator />
         </>
       )}
-
-      {aiGenerating ? (
-        <>
-          <span
-            style={{
-              ...aiLabelStyle,
-              cursor: 'default',
-              color: 'var(--accent-color)',
-            }}
-          >
-            <Sparkles size={ICON_SIZE} />
-            {t('writing.editor.generating')}
-          </span>
-          <button
-            type="button"
-            style={{
-              ...aiLabelStyle,
-              color: 'var(--text-danger)',
-            }}
-            onClick={() => onAICancel?.()}
-          >
-            <StopCircle size={ICON_SIZE} />
-            {t('common.cancel')}
-          </button>
-        </>
-      ) : null}
     </div>
   );
 }

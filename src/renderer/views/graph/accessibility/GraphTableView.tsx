@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import type Graph from 'graphology';
 import { useAppStore } from '../../../core/store';
+import { resolveNodeType, resolveNodeLabel } from '../resolveNode';
 
 interface GraphTableViewProps {
   graph: Graph | null;
@@ -8,7 +9,7 @@ interface GraphTableViewProps {
 
 interface NodeRow {
   id: string;
-  type: string;
+  type: 'paper' | 'concept' | 'memo' | 'note';
   label: string;
   degree: number;
   neighbors: string[];
@@ -65,15 +66,15 @@ function GraphTableView({ graph }: GraphTableViewProps) {
       let count = 0;
       graph.forEachNeighbor(nodeId, (neighborId, neighborAttrs) => {
         if (count < 3) {
-          neighbors.push((neighborAttrs.label as string) ?? neighborId);
+          neighbors.push(resolveNodeLabel(neighborAttrs as Record<string, unknown>, count + 1));
         }
         count++;
       });
 
       result.push({
         id: nodeId,
-        type: (attributes.type as string) ?? 'unknown',
-        label: (attributes.label as string) ?? nodeId,
+        type: resolveNodeType(attributes as Record<string, unknown>),
+        label: resolveNodeLabel(attributes as Record<string, unknown>, result.length + 1),
         degree: graph.degree(nodeId),
         neighbors,
       });
@@ -111,11 +112,11 @@ function GraphTableView({ graph }: GraphTableViewProps) {
               tabIndex={0}
               role="button"
               aria-label={`Focus on ${row.label}`}
-              onClick={() => focusGraphNode(row.id)}
+              onClick={() => focusGraphNode(row.id, row.type)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  focusGraphNode(row.id);
+                  focusGraphNode(row.id, row.type);
                 }
               }}
             >

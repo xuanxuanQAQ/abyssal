@@ -38,7 +38,15 @@ export function buildWritingContextQueryKey(request: WritingContextRequest | nul
 export function useWritingContext(request: WritingContextRequest | null) {
   return useQuery({
     queryKey: buildWritingContextQueryKey(request),
-    queryFn: () => getAPI().rag.getWritingContext(request!),
+    queryFn: async () => {
+      console.debug('[useWritingContext] fetching', request);
+      try {
+        return await getAPI().rag.getWritingContext(request!);
+      } catch (err) {
+        console.error('[useWritingContext] failed', { request, err });
+        throw err;
+      }
+    },
     enabled: request?.sectionId !== null && request?.sectionId !== undefined,
     refetchOnMount: 'always',
     staleTime: 30_000,

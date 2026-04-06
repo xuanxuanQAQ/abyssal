@@ -24,6 +24,8 @@ export function useLayerFilter(
   const layerVisibility = useAppStore((s) => s.layerVisibility);
   const similarityThreshold = useAppStore((s) => s.similarityThreshold);
   const showConceptNodes = useAppStore((s) => s.showConceptNodes);
+  const showNoteNodes = useAppStore((s) => s.showNoteNodes);
+  const focusedGraphNodeId = useAppStore((s) => s.focusedGraphNodeId);
 
   useEffect(() => {
     if (!graph) return;
@@ -55,12 +57,17 @@ export function useLayerFilter(
     // Node filtering -- concept nodes
     // -------------------------------------------------------------------
     graph.forEachNode((node, attrs) => {
-      const nodeType = attrs.nodeType as string | undefined;
+      const nodeType = (attrs.nodeType ?? attrs.type) as string | undefined;
 
-      if (nodeType === 'concept' && !showConceptNodes) {
+      if (nodeType === 'concept' && !showConceptNodes && node !== focusedGraphNodeId) {
         graph.setNodeAttribute(node, 'forceHidden', true);
-      } else if (nodeType === 'concept' && showConceptNodes) {
-        // Only clear forceHidden if WE set it (concept toggle)
+      } else if (nodeType === 'concept') {
+        graph.setNodeAttribute(node, 'forceHidden', false);
+      }
+
+      if ((nodeType === 'memo' || nodeType === 'note') && !showNoteNodes && node !== focusedGraphNodeId) {
+        graph.setNodeAttribute(node, 'forceHidden', true);
+      } else if (nodeType === 'memo' || nodeType === 'note') {
         graph.setNodeAttribute(node, 'forceHidden', false);
       }
     });
@@ -69,7 +76,7 @@ export function useLayerFilter(
     // Refresh rendering (guard against lost WebGL context)
     // -------------------------------------------------------------------
     safeSigmaRefresh(sigma);
-  }, [sigma, graph, layerVisibility, similarityThreshold, showConceptNodes]);
+  }, [sigma, graph, layerVisibility, similarityThreshold, showConceptNodes, showNoteNodes, focusedGraphNodeId]);
 }
 
 export default useLayerFilter;

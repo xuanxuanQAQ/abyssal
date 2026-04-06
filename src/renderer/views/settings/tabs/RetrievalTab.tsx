@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Database, Search, BarChart3, DollarSign, AlertTriangle } from 'lucide-react';
+import { Database, Search, BarChart3, DollarSign, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SettingsData } from '../../../../shared-types/models';
 import type { UpdateSectionFn } from '../types';
 import { Section, Row, Select, NumberInput, SegmentedControl, SliderRow } from '../components/ui';
@@ -9,10 +9,14 @@ import {
   defaultModelForProvider,
   type EmbeddingProvider,
 } from '../../../../core/config/config-schema';
+import { useAppDialog } from '../../../shared/useAppDialog';
+import { getAPI } from '../../../core/ipc/bridge';
 
 export function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; onUpdate: UpdateSectionFn }) {
   const { t } = useTranslation();
+  const { confirm, dialog } = useAppDialog();
   const { rag, contextBudget, discovery } = settings;
+  const [rebuilding, setRebuilding] = useState(false);
 
   return (
     <>
@@ -25,11 +29,17 @@ export function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; o
               { value: 'jina', label: 'Jina' },
               { value: 'openai', label: 'OpenAI' },
             ]}
-            onChange={(v) => {
+            onChange={async (v) => {
               const provider = v as EmbeddingProvider;
               if (provider === (rag.embeddingProvider ?? 'openai')) return;
               const def = defaultModelForProvider(provider);
-              if (!window.confirm(t('settings.retrieval.embeddingChangeConfirm'))) return;
+              const confirmed = await confirm({
+                title: t('settings.retrieval.embeddingModel'),
+                description: t('settings.retrieval.embeddingChangeConfirm'),
+                confirmLabel: t('common.confirm'),
+                confirmTone: 'danger',
+              });
+              if (!confirmed) return;
               onUpdate('rag', {
                 embeddingProvider: provider,
                 embeddingModel: def.model,
@@ -45,9 +55,15 @@ export function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; o
               (EMBEDDING_MODEL_REGISTRY[(rag.embeddingProvider ?? 'openai') as EmbeddingProvider] ?? [])
                 .map((m) => ({ value: m.model, label: m.label }))
             }
-            onChange={(v) => {
+            onChange={async (v) => {
               if (v === rag.embeddingModel) return;
-              if (!window.confirm(t('settings.retrieval.embeddingChangeConfirm'))) return;
+              const confirmed = await confirm({
+                title: t('settings.retrieval.embeddingModel'),
+                description: t('settings.retrieval.embeddingChangeConfirm'),
+                confirmLabel: t('common.confirm'),
+                confirmTone: 'danger',
+              });
+              if (!confirmed) return;
               const models = EMBEDDING_MODEL_REGISTRY[(rag.embeddingProvider ?? 'openai') as EmbeddingProvider] ?? [];
               const picked = models.find((m) => m.model === v);
               onUpdate('rag', {
@@ -61,6 +77,36 @@ export function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; o
           <AlertTriangle size={12} />
           {t('settings.retrieval.embeddingChangeNote')}
         </div>
+        <Row label={t('settings.retrieval.rebuildIntentEmbeddings')} hint={t('settings.retrieval.rebuildIntentEmbeddingsHint')}>
+          <button
+            disabled={rebuilding}
+            onClick={async () => {
+              setRebuilding(true);
+              try {
+                await getAPI().settings.rebuildIntentEmbeddings();
+                // Simple inline feedback
+                alert(t('settings.retrieval.rebuildIntentEmbeddingsSuccess'));
+              } catch {
+                alert(t('settings.retrieval.rebuildIntentEmbeddingsFailed'));
+              } finally {
+                setRebuilding(false);
+              }
+            }}
+            style={{
+              padding: '4px 12px', fontSize: 12,
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--bg-elevated, transparent)',
+              color: 'var(--text-secondary)',
+              cursor: rebuilding ? 'wait' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: 4,
+              opacity: rebuilding ? 0.6 : 1,
+            }}
+          >
+            <RefreshCw size={12} style={rebuilding ? { animation: 'spin 1s linear infinite' } : undefined} />
+            {rebuilding ? t('settings.retrieval.rebuilding') : t('settings.retrieval.rebuildIntentEmbeddings')}
+          </button>
+        </Row>
       </Section>
 
       <Section icon={<Search size={16} />} title={t('settings.retrieval.retrievalParams')}>
@@ -223,6 +269,7 @@ export function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; o
           />
         </Row>
       </Section>
+      {dialog}
     </>
   );
 }

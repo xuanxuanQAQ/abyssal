@@ -88,6 +88,8 @@ const INVOKE_CHANNELS = [
   'search:paperDetails', 'search:citations', 'search:related', 'search:byAuthor',
   // rag
   'rag:search', 'rag:searchWithReport', 'rag:getWritingContext',
+  // pipeline
+  'pipeline:start', 'pipeline:cancel',
   // fs
   'fs:openPDF', 'fs:savePDFAnnotations', 'fs:exportArticle', 'fs:importFiles',
   'fs:createSnapshot', 'fs:restoreSnapshot', 'fs:listSnapshots', 'fs:cleanupSnapshots',
@@ -97,7 +99,7 @@ const INVOKE_CHANNELS = [
   // settings
   'settings:getAll', 'settings:updateSection', 'settings:updateApiKey',
   'settings:testApiKey', 'settings:testApiKeyDirect', 'settings:getDbStats', 'settings:getSystemInfo',
-  'settings:openWorkspaceFolder', 'settings:getIndexHealth',
+  'settings:openWorkspaceFolder', 'settings:getIndexHealth', 'settings:rebuildIntentEmbeddings',
   // app
   'app:getConfig', 'app:updateConfig', 'app:getProjectInfo', 'app:switchProject',
   'app:listProjects', 'app:createProject', 'app:globalSearch',

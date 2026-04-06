@@ -1,17 +1,30 @@
-export type EdgeLayer = 'citation' | 'conceptAgree' | 'conceptConflict' | 'semanticNeighbor';
+export type EdgeLayer =
+  | 'citation'
+  | 'conceptAgree'
+  | 'conceptConflict'
+  | 'conceptExtend'
+  | 'semanticNeighbor'
+  | 'conceptMapping'
+  | 'notes';
 
 export const EDGE_COLORS: Record<EdgeLayer, string> = {
   citation: '#9CA3AF',
   conceptAgree: '#22C55E',
   conceptConflict: '#EF4444',
+  conceptExtend: '#F59E0B',
   semanticNeighbor: '#3B82F6',
+  conceptMapping: '#8B5CF6',
+  notes: '#14B8A6',
 };
 
 export const EDGE_OPACITIES: Record<EdgeLayer, number | ((weight: number) => number)> = {
   citation: 0.6,
   conceptAgree: 0.5,
   conceptConflict: 0.7,
+  conceptExtend: 0.65,
   semanticNeighbor: (w: number) => w * 0.6,
+  conceptMapping: 0.55,
+  notes: 0.6,
 };
 
 export function computeEdgeColor(layer: EdgeLayer): string {
@@ -26,8 +39,14 @@ export function computeEdgeSize(layer: EdgeLayer, weight: number): number {
       return 1.5 * weight;
     case 'conceptConflict':
       return 1.5 * weight;
+    case 'conceptExtend':
+      return 1.5 * weight;
     case 'semanticNeighbor':
       return 1;
+    case 'conceptMapping':
+      return 1.1;
+    case 'notes':
+      return 1.2;
   }
 }
 

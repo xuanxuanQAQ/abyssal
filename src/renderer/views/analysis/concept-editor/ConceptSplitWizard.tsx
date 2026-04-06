@@ -678,6 +678,7 @@ Respond ONLY with a JSON object, no other text.`;
                         key={`a1-${m.id}`}
                         mapping={m}
                         paperTitle={state.paperTitles[m.paperId]}
+                        fallbackPaperLabel="论文"
                         currentTarget={state.assignments[m.id] ?? 'a1'}
                         onAssign={(target) =>
                           dispatch({
@@ -708,6 +709,7 @@ Respond ONLY with a JSON object, no other text.`;
                         key={`a2-${m.id}`}
                         mapping={m}
                         paperTitle={state.paperTitles[m.paperId]}
+                        fallbackPaperLabel="论文"
                         currentTarget={state.assignments[m.id] ?? 'a1'}
                         onAssign={(target) =>
                           dispatch({
@@ -866,11 +868,13 @@ Respond ONLY with a JSON object, no other text.`;
 function MappingCard({
   mapping,
   paperTitle,
+  fallbackPaperLabel,
   currentTarget,
   onAssign,
 }: {
   mapping: ConceptMapping;
   paperTitle?: string | undefined;
+  fallbackPaperLabel: string;
   currentTarget: AssignTarget;
   onAssign: (target: AssignTarget) => void;
 }) {
@@ -878,7 +882,7 @@ function MappingCard({
     <div style={mappingCardStyle}>
       <div style={mappingCardBodyStyle}>
         <div style={mappingCardTitleStyle}>
-          {paperTitle ?? mapping.paperId}
+          {paperTitle?.trim() || fallbackPaperLabel}
         </div>
         <div style={mappingCardMetaStyle}>
           {mapping.relationType} · 置信度 {mapping.confidence.toFixed(2)}

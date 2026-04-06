@@ -34,7 +34,7 @@ import type {
 
 import type {
   PaperFilter, GraphFilter, RAGFilter,
-  PipelineProgressEvent, StreamChunkEvent,
+  PipelineProgressEvent, StreamChunkEvent, WorkflowConfig,
   ChatContext, WindowMaximizedEvent, SectionSearchResult,
   AcquireStatusInfo,
   InstitutionalSessionStatus, InstitutionListItem, InstitutionalLoginResult,
@@ -206,6 +206,10 @@ export interface IpcContract {
   'rag:searchWithReport':             { args: [query: string, filter?: RAGFilter];       result: RetrievalResult };
   'rag:getWritingContext':            { args: [request: WritingContextRequest | string];  result: WritingContext };
 
+  // ── pipeline ──
+  'pipeline:start':                   { args: [workflow: WorkflowType, config?: WorkflowConfig]; result: string };
+  'pipeline:cancel':                  { args: [taskId: string];                          result: boolean };
+
   // ── acquire ──
   'acquire:fulltext':                 { args: [paperId: string];                         result: string };
   'acquire:batch':                    { args: [paperIds: string[]];                      result: string };
@@ -252,6 +256,7 @@ export interface IpcContract {
   'settings:getSystemInfo':           { args: [];                                        result: SystemInfo };
   'settings:openWorkspaceFolder':     { args: [];                                        result: void };
   'settings:getIndexHealth':          { args: [];                                        result: Record<string, unknown> };
+  'settings:rebuildIntentEmbeddings': { args: [];                                        result: void };
 
   // ── app ──
   'app:getConfig':                    { args: [];                                        result: AppConfig };
@@ -326,7 +331,7 @@ export interface IpcPushContract {
 
 export type AICommandPayload =
   | { command: 'navigate'; view: ViewType; target?: { paperId?: string; conceptId?: string; page?: number; noteId?: string; articleId?: string }; reason?: string }
-  | { command: 'apply-editor-patch'; patch: unknown }
+  | { command: 'apply-editor-patch'; patch: unknown; deferToChat?: boolean; messageId?: string; summary?: string }
   | { command: 'persist-document'; articleId: string; sectionId?: string }
   | { command: 'highlightPassage'; paperId: string; page: number; text: string; persistent: boolean; rect?: { x: number; y: number; w: number; h: number } }
   | { command: 'suggest'; suggestion: { id: string; title: string; description: string; actions: Array<{ id: string; label: string; primary?: boolean }>; priority: number; dismissAfterMs: number } }

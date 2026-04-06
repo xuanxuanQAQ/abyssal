@@ -7,6 +7,7 @@
 
 import type { ViewType, WorkflowType } from '../shared-types/enums';
 import type { ChatImageClip } from '../shared-types/ipc';
+import type { ToolRouteFamily } from '../adapter/capabilities/types';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Surface & Intent
@@ -125,7 +126,7 @@ export interface ReaderSelectionContext {
 export interface EditorSelectionContext {
   kind: 'editor';
   articleId: string;
-  sectionId: string;
+  sectionId: string | null;
   selectedText: string;
   from: number;
   to: number;
@@ -199,7 +200,7 @@ export interface EditorSelectionReplaceTarget {
   type: 'editor-selection-replace';
   editorId: string;
   articleId: string;
-  sectionId: string;
+  sectionId: string | null;
   from: number;
   to: number;
 }
@@ -208,7 +209,7 @@ export interface EditorInsertAfterTarget {
   type: 'editor-insert-after';
   editorId: string;
   articleId: string;
-  sectionId: string;
+  sectionId: string | null;
   pos: number;
 }
 
@@ -289,7 +290,7 @@ export interface AnnotateRangePatch {
 
 export interface PatchPrecondition {
   articleId: string;
-  sectionId: string;
+  sectionId: string | null;
   editorId: string;
   anchorParagraphId?: string;
   expectedSelection?: { from: number; to: number };
@@ -334,7 +335,7 @@ export interface ExecutionPlan {
 
 export type ExecutionStep =
   | { kind: 'retrieve'; query: string; source: 'rag' | 'notes' | 'graph' }
-  | { kind: 'llm_generate'; mode: 'chat' | 'draft' | 'patch' }
+  | { kind: 'llm_generate'; mode: 'chat' | 'draft' | 'patch'; allowedToolFamilies?: ToolRouteFamily[] }
   | { kind: 'validate_citation' }
   | { kind: 'apply_patch'; patchTarget: OutputTarget }
   | { kind: 'run_workflow'; workflow: WorkflowType; config?: Record<string, unknown> }
@@ -478,6 +479,7 @@ export type CopilotOperationEvent =
   | ToolCallEvent
   | PatchProposedEvent
   | PatchAppliedEvent
+  | PatchDeferredEvent
   | OperationClarificationRequiredEvent
   | OperationCompletedEvent
   | OperationFailedEvent
@@ -538,6 +540,13 @@ export interface PatchProposedEvent extends BaseOperationEvent {
 export interface PatchAppliedEvent extends BaseOperationEvent {
   type: 'patch.applied';
   patch: EditorPatch;
+}
+
+/** Patch deferred to chat message for explicit user confirmation (two-stage) */
+export interface PatchDeferredEvent extends BaseOperationEvent {
+  type: 'patch.deferred';
+  patch: EditorPatch;
+  summary: string;
 }
 
 export interface OperationClarificationRequiredEvent extends BaseOperationEvent {

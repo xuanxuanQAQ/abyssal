@@ -17,6 +17,28 @@ export function deriveConceptId(nameSeed: string): string {
   );
 }
 
+function appendConceptSuffix(baseId: string, suffix: number): string {
+  const suffixText = `_${suffix}`;
+  const truncatedBase = baseId.slice(0, Math.max(1, 64 - suffixText.length));
+  return `${truncatedBase}${suffixText}`;
+}
+
+async function resolveUniqueConceptId(dbProxy: DbProxyInstance, nameSeed: string) {
+  const baseId = deriveConceptId(nameSeed);
+  let candidate = baseId;
+  let suffix = 2;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const existing = await dbProxy.getConcept(asConceptId(candidate));
+    if (!existing) {
+      return asConceptId(candidate);
+    }
+    candidate = appendConceptSuffix(baseId, suffix);
+    suffix += 1;
+  }
+}
+
 export async function createConceptFromDraft(
   dbProxy: DbProxyInstance,
   draft: ConceptDraft | Record<string, unknown>,
@@ -24,7 +46,7 @@ export async function createConceptFromDraft(
 ): Promise<string> {
   const nameEn = typeof draft['nameEn'] === 'string' ? draft['nameEn'].trim() : '';
   const nameZh = typeof draft['nameZh'] === 'string' ? draft['nameZh'].trim() : '';
-  const conceptId = asConceptId(deriveConceptId(nameEn || nameZh));
+  const conceptId = await resolveUniqueConceptId(dbProxy, nameEn || nameZh);
   const definition = typeof draft['definition'] === 'string'
     ? draft['definition']
     : fallbackDefinition ?? '';

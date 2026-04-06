@@ -9,6 +9,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageSquare, Trash2, FileText, Brain, GitMerge, BookOpen, Globe, StickyNote, Lightbulb } from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
+import { useEntityDisplayNameCache } from '../../../views/notes/shared/entityDisplayNameCache';
 import type { ChatSessionSummary } from '../../../../shared-types/models';
 
 const iconStyle: React.CSSProperties = { flexShrink: 0, opacity: 0.6 };
@@ -34,30 +35,56 @@ interface ChatSessionListProps {
   onClose: () => void;
 }
 
+function isFallbackEntityLabel(id: string, label: string | null | undefined): boolean {
+  if (!label) return true;
+  return label === id || label === id.slice(0, 10);
+}
+
 /** Parse contextSourceKey → display label & icon */
-function parseSessionKey(key: string, t: ReturnType<typeof import('react-i18next').useTranslation>['t']): { label: string; icon: React.ReactNode } {
+function parseSessionKey(
+  key: string,
+  t: ReturnType<typeof import('react-i18next').useTranslation>['t'],
+  resolvePaperName: (id: string) => string,
+  resolveConceptName: (id: string) => string,
+): { label: string; icon: React.ReactNode } {
   if (key === 'global') {
     return { label: t('context.chat.sessions.global'), icon: <Globe size={12} style={iconStyle} /> };
   }
   const [type, ...rest] = key.split(':');
   const id = rest.join(':');
-  const shortId = id.length > 12 ? id.slice(0, 6) + '…' + id.slice(-4) : id;
 
   switch (type) {
     case 'paper':
-      return { label: t('context.chat.sessions.paper', { id: shortId }), icon: <FileText size={12} style={iconStyle} /> };
+      return {
+        label: isFallbackEntityLabel(id, resolvePaperName(id)) ? t('context.chat.sessions.paper') : resolvePaperName(id),
+        icon: <FileText size={12} style={iconStyle} />,
+      };
+    case 'papers':
+      return {
+        label: t('context.chat.sessions.papers', { count: id.split('+').filter(Boolean).length }),
+        icon: <FileText size={12} style={iconStyle} />,
+      };
     case 'concept':
-      return { label: t('context.chat.sessions.concept', { id: shortId }), icon: <Brain size={12} style={iconStyle} /> };
+      return {
+        label: isFallbackEntityLabel(id, resolveConceptName(id)) ? t('context.chat.sessions.concept') : resolveConceptName(id),
+        icon: <Brain size={12} style={iconStyle} />,
+      };
     case 'mapping':
-      return { label: t('context.chat.sessions.mapping', { id: shortId }), icon: <GitMerge size={12} style={iconStyle} /> };
+      return { label: t('context.chat.sessions.mapping'), icon: <GitMerge size={12} style={iconStyle} /> };
     case 'section':
-      return { label: t('context.chat.sessions.section', { id: shortId }), icon: <BookOpen size={12} style={iconStyle} /> };
+      return { label: t('context.chat.sessions.section'), icon: <BookOpen size={12} style={iconStyle} /> };
+    case 'writing-sel':
+      return { label: t('context.chat.sessions.writingSelection'), icon: <BookOpen size={12} style={iconStyle} /> };
+    case 'graphNode':
+      return { label: t('context.chat.sessions.graphNode'), icon: <MessageSquare size={12} style={iconStyle} /> };
     case 'memo':
-      return { label: t('context.chat.sessions.memo', { id: shortId }), icon: <Lightbulb size={12} style={iconStyle} /> };
+      return { label: t('context.chat.sessions.memo'), icon: <Lightbulb size={12} style={iconStyle} /> };
     case 'note':
-      return { label: t('context.chat.sessions.note', { id: shortId }), icon: <StickyNote size={12} style={iconStyle} /> };
+      return { label: t('context.chat.sessions.note'), icon: <StickyNote size={12} style={iconStyle} /> };
+    case 'allSelected':
+      return { label: t('context.chat.sessions.allSelected'), icon: <Globe size={12} style={iconStyle} /> };
     default:
-      return { label: key, icon: <MessageSquare size={12} style={iconStyle} /> };
+      return { label: t('context.chat.sessions.global'), icon: <MessageSquare size={12} style={iconStyle} /> };
   }
 }
 
@@ -73,6 +100,7 @@ function formatTime(ts: number, t: ReturnType<typeof import('react-i18next').use
 
 export const ChatSessionList = React.memo(function ChatSessionList({ currentKey, onSelect, onClose }: ChatSessionListProps) {
   const { t } = useTranslation();
+  const displayNames = useEntityDisplayNameCache();
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -130,7 +158,12 @@ export const ChatSessionList = React.memo(function ChatSessionList({ currentKey,
         </div>
       ) : (
         sessions.map((s) => {
-          const { label, icon } = parseSessionKey(s.contextSourceKey, t);
+          const { label, icon } = parseSessionKey(
+            s.contextSourceKey,
+            t,
+            displayNames.getPaperName,
+            displayNames.getConceptName,
+          );
           const isActive = s.contextSourceKey === currentKey;
           return (
             <div

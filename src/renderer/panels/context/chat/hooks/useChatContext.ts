@@ -83,6 +83,13 @@ export function useChatContext(): () => ChatContext {
         }
         context.selectedSectionId = source.sectionId;
         break;
+      case 'writing-selection':
+        context.selectedArticleId = source.articleId;
+        if (source.draftId) {
+          context.selectedDraftId = source.draftId;
+        }
+        context.selectedSectionId = source.sectionId;
+        break;
       case 'graphNode':
         // graphNode 根据 nodeType 注入对应 ID
         if (source.nodeType === 'paper') {
@@ -104,22 +111,39 @@ export function useChatContext(): () => ChatContext {
         break;
     }
 
+    // 使用 persistedWritingTarget（不依赖原生 selection 对齐）
+    const writingTarget = editorState.persistedWritingTarget;
     if (
       appState.activeView === 'writing' &&
-      editorState.editorSelection &&
-      editorState.editorSelection.articleId === (context.selectedArticleId ?? editorState.editorSelection.articleId) &&
-      editorState.editorSelection.sectionId === (context.selectedSectionId ?? editorState.editorSelection.sectionId)
+      writingTarget &&
+      writingTarget.kind === 'range' &&
+      writingTarget.selectedText.length > 0
     ) {
-      context.selectedArticleId = editorState.editorSelection.articleId;
-      if (editorState.editorSelection.draftId) {
-        context.selectedDraftId = editorState.editorSelection.draftId;
+      context.selectedArticleId = writingTarget.articleId;
+      if (writingTarget.draftId) {
+        context.selectedDraftId = writingTarget.draftId;
       }
-      if (editorState.editorSelection.sectionId) {
-        context.selectedSectionId = editorState.editorSelection.sectionId;
+      if (writingTarget.sectionId) {
+        context.selectedSectionId = writingTarget.sectionId;
       }
-      context.editorSelectionText = editorState.editorSelection.selectedText;
-      context.editorSelectionFrom = editorState.editorSelection.from;
-      context.editorSelectionTo = editorState.editorSelection.to;
+      context.editorSelectionText = writingTarget.selectedText;
+      context.editorSelectionFrom = writingTarget.from;
+      context.editorSelectionTo = writingTarget.to;
+    } else if (
+      appState.activeView === 'writing' &&
+      writingTarget &&
+      writingTarget.kind === 'caret'
+    ) {
+      // caret target — 注入位置信息但无选区文本
+      context.selectedArticleId = writingTarget.articleId;
+      if (writingTarget.draftId) {
+        context.selectedDraftId = writingTarget.draftId;
+      }
+      if (writingTarget.sectionId) {
+        context.selectedSectionId = writingTarget.sectionId;
+      }
+      context.editorSelectionFrom = writingTarget.from;
+      context.editorSelectionTo = writingTarget.to;
     }
 
     return context;

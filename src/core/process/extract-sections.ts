@@ -23,8 +23,8 @@ import type { Logger } from '../infra/logger';
 
 // ─── §2.2 节标题正则 ───
 
-// 层级 1：编号+标题（1 Introduction, 3.2 Experimental Setup）
-const NUMBERED_RE = /^(\d+(?:\.\d+)*)\s*\.?\s+(.+)$/;
+// 层级 1：编号+标题（1 Introduction, 3.2 Experimental Setup, １0 标题）
+const NUMBERED_RE = /^(\d+(?:\.\d+)*)\s+(.+)$/;
 
 // 层级 2：全大写标题（INTRODUCTION, RELATED WORK）
 const UPPERCASE_RE = /^([A-Z][A-Z\s\-:]{2,})$/;
@@ -32,28 +32,148 @@ const UPPERCASE_RE = /^([A-Z][A-Z\s\-:]{2,})$/;
 // 层级 3：罗马数字编号（I. Introduction, IV. Results）
 const ROMAN_RE = /^(I{1,3}|IV|VI{0,3}|IX|X{0,3})\.\s+(.+)$/i;
 
+// 层级 4：中文标题编号（第一章 绪论、二、方法、（一）实验设置）
+const CJK_CHAPTER_RE = /^(第[一二三四五六七八九十百千万\d]+[章节部分篇])\s*(.+)$/;
+const CJK_LIST_RE = /^([一二三四五六七八九十百千万\d]+[、.．])\s*(.+)$/;
+const CJK_PAREN_RE = /^(?:\(|（)([一二三四五六七八九十百千万\d]+)(?:\)|）)\s*(.+)$/;
+
+const HEADING_PREFIX_RE = /^(?:(?:\d+(?:\.\d+)*)\s+|(?:I{1,3}|IV|VI{0,3}|IX|X{0,3})\.\s+|(?:第[一二三四五六七八九十百千万\d]+[章节部分篇])\s*|(?:[一二三四五六七八九十百千万\d]+[、.．])\s*|(?:\(|（)[一二三四五六七八九十百千万\d]+(?:\)|）)\s*)/i;
+
 // ─── §2.4 关键词→SectionLabel 映射（按优先级排列） ───
 
 const LABEL_KEYWORDS: [SectionLabel, string[]][] = [
-  ['abstract', ['abstract']],
-  ['introduction', ['introduction', 'overview']],
-  ['background', ['background', 'preliminary', 'preliminaries']],
-  ['literature_review', ['related work', 'literature review', 'prior work', 'state of the art']],
-  ['method', ['method', 'methodology', 'approach', 'framework', 'system design', 'model', 'proposed', 'experimental setup', 'implementation']],
-  ['results', ['result', 'finding', 'experiment', 'evaluation', 'performance', 'empirical']],
-  ['discussion', ['discussion', 'analysis', 'implications']],
-  ['conclusion', ['conclusion', 'summary', 'future work', 'concluding']],
-  ['appendix', ['appendix', 'supplementary']],
+  ['abstract', ['abstract', '摘要', '提要']],
+  ['introduction', ['introduction', 'overview', '引言', '绪论', '导论']],
+  ['background', ['background', 'preliminary', 'preliminaries', '研究背景', '理论基础', '理论分析', '背景']],
+  ['literature_review', ['related work', 'literature review', 'prior work', 'state of the art', '相关工作', '文献综述', '研究现状']],
+  ['method', ['method', 'methodology', 'approach', 'framework', 'system design', 'model', 'proposed', 'experimental setup', 'implementation', '方法', '研究方法', '实验方法', '材料与方法', '模型', '模型构建', '测度', '算法', '系统设计']],
+  ['results', ['result', 'finding', 'experiment', 'evaluation', 'performance', 'empirical', '结果', '实验结果', '评价', '性能']],
+  ['discussion', ['discussion', 'analysis', 'implications', '讨论', '分析', '结果分析']],
+  ['conclusion', ['conclusion', 'summary', 'future work', 'concluding', '结论', '总结', '结语', '展望']],
+  ['appendix', ['appendix', 'supplementary', '附录', '补充材料']],
 ];
 
-function classifyTitle(title: string): SectionLabel {
-  const lower = title.toLowerCase();
+const STANDALONE_HEADING_PATTERNS: [SectionLabel, RegExp[]][] = [
+  ['abstract', [/^(abstract|摘要|提要)$/i]],
+  ['introduction', [/^(introduction|overview|引言|绪论|导论)$/i]],
+  ['background', [/^(background|研究背景|背景|理论基础|理论分析)$/i]],
+  ['literature_review', [/^(related work|literature review|prior work|state of the art|相关工作|文献综述|研究现状)$/i]],
+  ['method', [/^(method|methodology|approach|framework|implementation|experimental setup|方法|研究方法|实验方法|材料与方法|模型设定|研究设计|模型构建)$/i]],
+  ['results', [/^(results?|findings?|evaluation|performance|结果|实验结果|实证结果|评价结果|性能分析)$/i]],
+  ['discussion', [/^(discussion|analysis|讨论|分析|结果分析)$/i]],
+  ['conclusion', [/^(conclusion|summary|future work|concluding|结论|总结|结语|结论与展望)$/i]],
+  ['appendix', [/^(appendix|appendices|supplementary|附录|补充材料)$/i]],
+];
+
+function normalizeHeadingTitle(title: string): string {
+  return normalizeDocumentLine(title)
+    .replace(HEADING_PREFIX_RE, '')
+    .replace(/^[\s\-:：、.．]+/, '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeFullWidthDigits(text: string): string {
+  return text.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0));
+}
+
+function normalizeDocumentLine(text: string): string {
+  return normalizeFullWidthDigits(text)
+    .replace(/[\u3000\u00A0]/g, ' ')
+    .replace(/[．﹒·•‧∙⋅。]/g, '.')
+    .replace(/(\d)[ư](\d)/g, '$1.$2')
+    .replace(/([一二三四五六七八九十百千万])\s+([、章节部分篇])/g, '$1$2')
+    .replace(/([摘参考文献引绪结论方法讨相关工研])\s+([要考文献言论法果析作究])/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function looksLikeRunningHeaderOrFooter(title: string): boolean {
+  const normalized = normalizeDocumentLine(title).toLowerCase();
+  if (!normalized) return true;
+  if (/^[-—\s\d]+$/.test(normalized)) return true;
+  if (/^第\d+期/.test(normalized)) return true;
+  if (/journal of|industrial technological economics|general, no\.?/i.test(normalized)) return true;
+  if (/^may\.? \d{4}$/i.test(normalized)) return true;
+  if (/^\d{4} 年 \d+ 月/.test(normalized)) return true;
+  if (/^[（(]?责任编辑/.test(normalized)) return true;
+  return false;
+}
+
+function looksLikeReferenceEntry(title: string): boolean {
+  const normalized = normalizeDocumentLine(title);
+  return (/^(?:\[?\d+\]?|\(\d+\))/.test(normalized) && /(?:19|20)\d{2}/.test(normalized))
+    || /\[[JCMDPR]\]/i.test(normalized)
+    || /doi[:：]/i.test(normalized);
+}
+
+function looksLikeFormulaOrEnumeratedBodyLine(title: string): boolean {
+  const normalized = normalizeDocumentLine(title);
+
+  if (/^(?:\(|（)\d{4}(?:\)|）)\s*\[\d+\]/.test(normalized)) {
+    return true;
+  }
+
+  if (/^(?:\(|（)\d+(?:\)|）)/.test(normalized) && normalized.length > 20) {
+    return true;
+  }
+
+  const numbered = matchNumberedHeading(normalized);
+  if (!numbered) {
+    return false;
+  }
+
+  const remainder = numbered[2]?.trim() ?? '';
+  if (remainder.length === 0 || remainder.length <= 4) {
+    return true;
+  }
+
+  if (/^[0-9A-Za-zΑ-Ωα-ωϑσβγλμνξπρτφχψω._=+\-/*()\s]+$/u.test(remainder)) {
+    return true;
+  }
+
+  return false;
+}
+
+function detectStackedChineseReferencesHeading(lines: string[], index: number): boolean {
+  if (index + 3 >= lines.length) return false;
+  const joined = lines.slice(index, index + 4)
+    .map((line) => normalizeDocumentLine(line).replace(/\s+/g, ''))
+    .join('');
+  return joined === '参考文献';
+}
+
+function matchNumberedHeading(title: string): RegExpExecArray | null {
+  return NUMBERED_RE.exec(normalizeDocumentLine(title));
+}
+
+function matchLabelByKeywords(title: string): SectionLabel {
   for (const [label, keywords] of LABEL_KEYWORDS) {
     for (const kw of keywords) {
-      if (lower.includes(kw)) return label;
+      if (title.includes(kw)) return label;
     }
   }
   return 'unknown';
+}
+
+function classifyTitle(title: string): SectionLabel {
+  const normalized = normalizeHeadingTitle(title);
+  if (!normalized) return 'unknown';
+  return matchLabelByKeywords(normalized);
+}
+
+function classifyStandaloneHeading(title: string): SectionLabel | null {
+  const normalized = normalizeHeadingTitle(title);
+  if (!normalized || normalized.length > 24) return null;
+  if (/^[—–-]/.test(title.trim())) return null;
+  if (/[，,、；;。.!?：:]/.test(title)) return null;
+
+  for (const [label, patterns] of STANDALONE_HEADING_PATTERNS) {
+    if (patterns.some((pattern) => pattern.test(normalized))) {
+      return label;
+    }
+  }
+  return null;
 }
 
 // ─── §2.4 SectionLabel → SectionType ───
@@ -130,10 +250,12 @@ function buildStyledByLineIndex(
 // ─── Fix #7: 标题层级深度 ───
 
 function computeHeadingDepth(title: string): number {
-  const m = NUMBERED_RE.exec(title.trim());
+  const m = matchNumberedHeading(title);
   if (m && m[1]) {
     return m[1].split('.').length;
   }
+  if (CJK_PAREN_RE.test(title.trim())) return 2;
+  if (CJK_CHAPTER_RE.test(title.trim()) || CJK_LIST_RE.test(title.trim())) return 1;
   // 全大写和罗马数字视为顶层
   return 1;
 }
@@ -151,8 +273,8 @@ function extractAbstract(
   for (let i = 0; i < Math.min(searchLimit, lines.length); i++) {
     const line = lines[i]!.trim();
 
-    // 独立行 "Abstract"
-    if (/^abstract\s*$/i.test(line)) {
+    // 独立行 "Abstract" / "摘要"
+    if (/^(?:abstract|摘要|摘\s*要|〔摘\s*要〕)\s*$/i.test(normalizeDocumentLine(line))) {
       const textLines: string[] = [];
       for (let j = i + 1; j < lines.length; j++) {
         // Fix #8: 使用 detectHeading 代替裸正则，防止 Abstract 内编号列表误截断
@@ -167,8 +289,8 @@ function extractAbstract(
       return { text: textLines.join('\n'), endLine: lines.length };
     }
 
-    // 行内 "Abstract." 或 "Abstract—"
-    const inlineMatch = /^abstract[.—:\-]\s*/i.exec(line);
+    // 行内 "Abstract." / "摘要："
+    const inlineMatch = /^(?:abstract|摘要|〔摘\s*要〕|摘\s*要)\s*[.—:：\-]?\s*/i.exec(normalizeDocumentLine(line));
     if (inlineMatch) {
       const firstPart = line.slice(inlineMatch[0].length);
       const textLines: string[] = [firstPart];
@@ -225,21 +347,38 @@ function detectHeading(
   const trimmed = line.trim();
   if (!trimmed || trimmed.length >= 100) return null;
 
+  const normalizedTrimmed = normalizeDocumentLine(trimmed);
+  if (looksLikeRunningHeaderOrFooter(normalizedTrimmed) || looksLikeReferenceEntry(normalizedTrimmed)) {
+    return null;
+  }
+
+  void lineIndex;
+
   let regexMatch = false;
 
   // 层级 1：编号+标题
-  const m1 = NUMBERED_RE.exec(trimmed);
+  const m1 = matchNumberedHeading(trimmed);
   if (m1 && m1[2] && !/^[a-z]/.test(m1[2])) {
     regexMatch = true;
   }
 
   // 层级 2：全大写
-  if (!regexMatch && trimmed.length < 60 && UPPERCASE_RE.test(trimmed) && !/^\d+$/.test(trimmed)) {
+  if (!regexMatch && normalizedTrimmed.length < 60 && UPPERCASE_RE.test(normalizedTrimmed) && !/^\d+$/.test(normalizedTrimmed)) {
     regexMatch = true;
   }
 
   // 层级 3：罗马数字
-  if (!regexMatch && ROMAN_RE.test(trimmed)) {
+  if (!regexMatch && ROMAN_RE.test(normalizedTrimmed)) {
+    regexMatch = true;
+  }
+
+  // 层级 4：中文编号
+  if (!regexMatch && (CJK_CHAPTER_RE.test(normalizedTrimmed) || CJK_LIST_RE.test(normalizedTrimmed) || CJK_PAREN_RE.test(normalizedTrimmed))) {
+    regexMatch = true;
+  }
+
+  // 层级 5：短关键词标题（如“摘要”“引言”“结论”）
+  if (!regexMatch && classifyStandaloneHeading(normalizedTrimmed) !== null) {
     regexMatch = true;
   }
 
@@ -256,8 +395,8 @@ function detectHeading(
     }
   }
 
-  const depth = computeHeadingDepth(trimmed);
-  return { lineIndex, title: trimmed, depth };
+  const depth = computeHeadingDepth(normalizedTrimmed);
+  return { lineIndex, title: normalizedTrimmed, depth };
 }
 
 // ─── Fix #9: References 区域定位（两轮扫描） ───
@@ -265,13 +404,19 @@ function detectHeading(
 function findReferencesLine(lines: string[]): number | null {
   // 第一轮：从末尾到 70%
   for (let i = lines.length - 1; i >= Math.floor(lines.length * 0.7); i--) {
-    if (REFERENCES_RE.test(lines[i]!.trim())) {
+    if (REFERENCES_RE.test(normalizeDocumentLine(lines[i]!)) || detectStackedChineseReferencesHeading(lines, i)) {
       return i;
     }
   }
   // 第二轮：从 70% 到 40%（覆盖短论文）
   for (let i = Math.floor(lines.length * 0.7) - 1; i >= Math.floor(lines.length * 0.4); i--) {
-    if (i >= 0 && REFERENCES_RE.test(lines[i]!.trim())) {
+    if (i >= 0 && (REFERENCES_RE.test(normalizeDocumentLine(lines[i]!)) || detectStackedChineseReferencesHeading(lines, i))) {
+      return i;
+    }
+  }
+  // 第三轮：短文档或竖排标题可能更靠前
+  for (let i = Math.floor(lines.length * 0.4) - 1; i >= 0; i--) {
+    if (REFERENCES_RE.test(normalizeDocumentLine(lines[i]!)) || detectStackedChineseReferencesHeading(lines, i)) {
       return i;
     }
   }
@@ -358,9 +503,18 @@ export function extractSections(
       // 跳过 abstract（已单独处理）
       if (label === 'abstract') continue;
 
+      if (label === 'unknown' && looksLikeFormulaOrEnumeratedBodyLine(heading.title)) {
+        continue;
+      }
+
       // Fix #7: 深层子节（depth >= 2）且与父节同 label 时不作为独立 boundary
       // 而是在后续切分中保留为段落分隔
       if (heading.depth >= 2 && label === lastTopLevelLabel) {
+        continue;
+      }
+
+      // 深层 unknown 子节通常是正文枚举、公式行或误切分，不单独作为 section boundary
+      if (heading.depth >= 2 && label === 'unknown') {
         continue;
       }
 
@@ -458,10 +612,16 @@ export function extractSections(
   logger?.info('[extractSections] Section detection complete (regex path)', {
     sections: sectionMap.size,
     labels: Array.from(sectionMap.keys()),
+    recognizedSections: Array.from(sectionMap.keys()).filter((label) => label !== 'unknown').length,
     boundaries: boundaries.length,
     hasAbstract: sectionMap.has('abstract'),
     hasStyledLines: !!styledLines,
     referencesLine: referencesStartLine,
+    boundarySample: boundaries.slice(0, 8).map((boundary) => ({
+      title: boundary.title,
+      label: boundary.label,
+      depth: boundary.depth ?? 1,
+    })),
     durationMs: Date.now() - t0,
   });
 

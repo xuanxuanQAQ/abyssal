@@ -61,6 +61,12 @@ export function getHistory(
   `).all(contextKey, limit) as ChatMessageRecord[];
 }
 
+// ─── deleteMessage ───
+
+export function deleteMessage(db: Database.Database, messageId: string): void {
+  db.prepare('DELETE FROM chat_messages WHERE id = ?').run(messageId);
+}
+
 // ─── deleteSession ───
 
 export function deleteSession(db: Database.Database, contextKey: string): void {

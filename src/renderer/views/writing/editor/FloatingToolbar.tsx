@@ -3,7 +3,10 @@
  *
  * Appears above the selected text and provides:
  *   - Basic formatting: Bold, Italic, Strikethrough
- *   - AI operation on the selection: Compress
+ *   - AI quick actions: Rewrite, Expand, Compress, Continue Writing
+ *
+ * AI actions dispatch a custom DOM event (`ai:writingIntent`) that
+ * ChatDock listens for to trigger intent-aware copilot operations.
  *
  * Uses @tiptap/react BubbleMenu which internally manages positioning
  * via the ProseMirror BubbleMenu plugin.
@@ -13,16 +16,14 @@ import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Editor } from '@tiptap/react';
-import { Bold, Italic, Strikethrough, Sparkles, RefreshCw, Expand } from 'lucide-react';
+import { Bold, Italic, Strikethrough, PenLine, Expand, Shrink, ArrowRight } from 'lucide-react';
 import { Z_INDEX } from '../../../styles/zIndex';
+import type { CopilotIntent } from '../../../../copilot-runtime/types';
 
 // ── Types ──
 
 interface FloatingToolbarProps {
   editor: Editor;
-  onAICompress?: (() => void) | undefined;
-  onAIRewrite?: (() => void) | undefined;
-  onAIExpand?: (() => void) | undefined;
 }
 
 // ── Styles ──
@@ -57,22 +58,6 @@ function btnStyle(active: boolean): React.CSSProperties {
   };
 }
 
-const aiButtonStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 3,
-  height: 26,
-  padding: '0 6px',
-  borderRadius: 'var(--radius-sm)',
-  border: 'none',
-  cursor: 'pointer',
-  backgroundColor: 'transparent',
-  color: 'var(--text-secondary)',
-  fontSize: 'var(--text-xs)',
-  whiteSpace: 'nowrap',
-  flexShrink: 0,
-};
-
 const separatorStyle: React.CSSProperties = {
   width: 1,
   height: 16,
@@ -81,17 +66,33 @@ const separatorStyle: React.CSSProperties = {
   flexShrink: 0,
 };
 
+const aiBtnStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 26,
+  height: 26,
+  borderRadius: 'var(--radius-sm)',
+  border: 'none',
+  cursor: 'pointer',
+  backgroundColor: 'transparent',
+  color: 'var(--accent-color)',
+  flexShrink: 0,
+  opacity: 0.8,
+};
+
 // ── Component ──
 
 export function FloatingToolbar({
   editor,
-  onAICompress,
-  onAIRewrite,
-  onAIExpand,
 }: FloatingToolbarProps) {
   const { t } = useTranslation();
   const preventFocusLoss = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+  }, []);
+
+  const dispatchIntent = useCallback((intent: CopilotIntent) => {
+    window.dispatchEvent(new CustomEvent('ai:writingIntent', { detail: { intent } }));
   }, []);
 
   return (
@@ -134,39 +135,43 @@ export function FloatingToolbar({
         </button>
 
         {/* ── Separator ── */}
-        <div style={separatorStyle} aria-hidden />
+        <div style={separatorStyle} />
 
-        {/* ── AI selection operations ── */}
+        {/* ── AI action buttons ── */}
         <button
           type="button"
-          title={t('writing.editor.aiRewrite')}
-          style={aiButtonStyle}
-          onClick={() => onAIRewrite?.()}
-          aria-label={t('writing.editor.aiRewrite')}
+          title={t('writing.editor.rewrite', { defaultValue: '改写' })}
+          style={aiBtnStyle}
+          onClick={() => dispatchIntent('rewrite-selection')}
         >
-          <RefreshCw size={ICON_SIZE} />
-          {t('writing.editor.rewrite')}
+          <PenLine size={ICON_SIZE} />
         </button>
 
         <button
           type="button"
-          title={t('writing.editor.aiExpand')}
-          style={aiButtonStyle}
-          onClick={() => onAIExpand?.()}
-          aria-label={t('writing.editor.aiExpand')}
+          title={t('writing.editor.expand', { defaultValue: '扩展' })}
+          style={aiBtnStyle}
+          onClick={() => dispatchIntent('expand-selection')}
         >
           <Expand size={ICON_SIZE} />
-          {t('writing.editor.expand')}
         </button>
 
         <button
           type="button"
-          title={t('writing.editor.aiCompress')}
-          style={aiButtonStyle}
-          onClick={() => onAICompress?.()}
+          title={t('writing.editor.compress', { defaultValue: '压缩' })}
+          style={aiBtnStyle}
+          onClick={() => dispatchIntent('compress-selection')}
         >
-          <Sparkles size={ICON_SIZE} />
-          {t('writing.editor.compress')}
+          <Shrink size={ICON_SIZE} />
+        </button>
+
+        <button
+          type="button"
+          title={t('writing.editor.continueWriting', { defaultValue: '续写' })}
+          style={aiBtnStyle}
+          onClick={() => dispatchIntent('continue-writing')}
+        >
+          <ArrowRight size={ICON_SIZE} />
         </button>
       </div>
     </BubbleMenu>

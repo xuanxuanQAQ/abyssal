@@ -9,17 +9,38 @@
 
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, X, Quote, Image as ImageIcon, Loader2, Wrench } from 'lucide-react';
+import { Send, Square, X, Quote, Image as ImageIcon, Loader2, Wrench, PenTool, MapPin, PenLine, Expand, Shrink, ArrowRight } from 'lucide-react';
+import type { CopilotIntent } from '../../../../copilot-runtime/types';
 import { useChatStore } from '../../../core/store/useChatStore';
 import { useReaderStore } from '../../../core/store/useReaderStore';
+import { useEditorStore } from '../../../core/store/useEditorStore';
+import { useSectionTitle } from '../../../views/writing/hooks/useSectionTitle';
 import type { ContextSource } from '../../../../shared-types/models';
 
 const MIN_HEIGHT = 44;
 const MAX_HEIGHT = 160;
 
+const quickActionStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '4px 10px',
+  fontSize: 12,
+  lineHeight: 1,
+  border: '1px solid color-mix(in srgb, var(--accent-color) 18%, var(--border-subtle))',
+  borderRadius: 14,
+  background: 'color-mix(in srgb, var(--accent-color) 6%, var(--bg-surface))',
+  color: 'var(--accent-color)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  transition: 'background 140ms, border-color 140ms',
+};
+
 interface ChatInputProps {
   source: ContextSource;
   onSend: (text: string) => void;
+  /** Dispatch a writing-specific intent directly (bypasses IntentRouter guessing). */
+  onIntentSend?: (text: string, intent: CopilotIntent) => void;
   onAbort?: () => void;
   disabled?: boolean;
   streaming?: boolean;
@@ -39,6 +60,8 @@ function getPlaceholder(source: ContextSource, t: ReturnType<typeof import('reac
       return t('context.chat.placeholder.mapping');
     case 'section':
       return t('context.chat.placeholder.section');
+    case 'writing-selection':
+      return t('context.chat.placeholder.writingSelection', { defaultValue: '对选中内容说点什么…' });
     case 'graphNode':
       return t('context.chat.placeholder.graphNode');
     case 'memo':
@@ -52,7 +75,7 @@ function getPlaceholder(source: ContextSource, t: ReturnType<typeof import('reac
   }
 }
 
-export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort, disabled, streaming, statusText, statusMode = 'generating' }: ChatInputProps) {
+export const ChatInput = React.memo(function ChatInput({ source, onSend, onIntentSend, onAbort, disabled, streaming, statusText, statusMode = 'generating' }: ChatInputProps) {
   const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shadowRef = useRef<HTMLDivElement>(null);
@@ -69,6 +92,16 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
     clearQuote();
     clearPayload();
   }, [clearPayload, clearQuote]);
+
+  // 写作锚点 — editor selection card
+  const writingTarget = useEditorStore((s) => s.persistedWritingTarget);
+  const writingTargetSectionTitle = useSectionTitle(
+    writingTarget?.articleId ?? null,
+    writingTarget?.sectionId ?? null,
+  );
+  const clearWritingTarget = useCallback(() => {
+    useEditorStore.getState().clearPersistedWritingTarget();
+  }, []);
 
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -125,7 +158,7 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
       data-focused={isFocused ? 'true' : 'false'}
       data-streaming={streaming ? 'true' : 'false'}
       data-has-draft={hasDraft ? 'true' : 'false'}
-      data-has-selection={mappedText || selectionPayload?.images?.length ? 'true' : 'false'}
+      data-has-selection={mappedText || selectionPayload?.images?.length || writingTarget ? 'true' : 'false'}
       style={{
         padding: '10px 10px 10px',
         flexShrink: 0,
@@ -267,6 +300,144 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onAbort
           >
             <X size={12} />
           </button>
+        </div>
+      )}
+
+      {/* 写作选区 / 光标锚点卡片 */}
+      {writingTarget && (
+        <div
+          className="chat-input-attachment-card chat-input-selection-card"
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            marginBottom: 10,
+            padding: '9px 10px',
+            background: 'color-mix(in srgb, var(--accent-color) 6%, var(--bg-surface))',
+            border: '1px solid color-mix(in srgb, var(--accent-color) 18%, var(--border-subtle))',
+            borderRadius: 12,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: 'var(--text-secondary)',
+          }}
+        >
+          {writingTarget.kind === 'range' ? (
+            <PenTool size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.6, color: 'var(--accent-color)' }} />
+          ) : (
+            <MapPin size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.6, color: 'var(--accent-color)' }} />
+          )}
+          <div style={{ flex: 1 }}>
+            {writingTarget.kind === 'range' ? (
+              <div
+                className="chat-input-selection-text"
+                style={{
+                  overflow: 'hidden',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical',
+                }}
+              >
+                {writingTarget.selectedText}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                {t('context.chat.caretTarget', { defaultValue: '当前插入位置' })}
+              </div>
+            )}
+            {writingTarget.sectionId && (
+              <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-muted)' }}>
+                {writingTargetSectionTitle ?? t('context.header.section')}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={clearWritingTarget}
+            className="chat-input-attachment-clear"
+            style={{
+              flexShrink: 0,
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: 2,
+              borderRadius: 4,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* 写作快捷操作 */}
+      {writingTarget && !streaming && onIntentSend && (
+        <div
+          className="chat-input-writing-actions"
+          style={{
+            display: 'flex',
+            gap: 6,
+            marginBottom: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          {writingTarget.kind === 'caret' && (
+            <button
+              type="button"
+              className="chat-input-quick-action"
+              onClick={() => onIntentSend('续写', 'continue-writing')}
+              disabled={disabled}
+              style={quickActionStyle}
+            >
+              <ArrowRight size={12} />
+              {t('context.chat.action.continueWriting', { defaultValue: '续写' })}
+            </button>
+          )}
+          {writingTarget.kind === 'range' && (
+            <>
+              <button
+                type="button"
+                className="chat-input-quick-action"
+                onClick={() => onIntentSend('改写选区', 'rewrite-selection')}
+                disabled={disabled}
+                style={quickActionStyle}
+              >
+                <PenLine size={12} />
+                {t('context.chat.action.rewrite', { defaultValue: '改写' })}
+              </button>
+              <button
+                type="button"
+                className="chat-input-quick-action"
+                onClick={() => onIntentSend('扩展选区', 'expand-selection')}
+                disabled={disabled}
+                style={quickActionStyle}
+              >
+                <Expand size={12} />
+                {t('context.chat.action.expand', { defaultValue: '扩展' })}
+              </button>
+              <button
+                type="button"
+                className="chat-input-quick-action"
+                onClick={() => onIntentSend('压缩选区', 'compress-selection')}
+                disabled={disabled}
+                style={quickActionStyle}
+              >
+                <Shrink size={12} />
+                {t('context.chat.action.compress', { defaultValue: '压缩' })}
+              </button>
+              <button
+                type="button"
+                className="chat-input-quick-action"
+                onClick={() => onIntentSend('续写', 'continue-writing')}
+                disabled={disabled}
+                style={quickActionStyle}
+              >
+                <ArrowRight size={12} />
+                {t('context.chat.action.continueWriting', { defaultValue: '续写' })}
+              </button>
+            </>
+          )}
         </div>
       )}
 

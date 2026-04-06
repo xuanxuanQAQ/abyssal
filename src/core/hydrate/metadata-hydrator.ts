@@ -46,6 +46,121 @@ export interface HydrateResult {
   fieldsMissing: string[];
 }
 
+export interface TitleSearchCandidateScore {
+  titleScore: number;
+  authorScore: number;
+  yearScore: number;
+  totalScore: number;
+  accepted: boolean;
+}
+
+function normalizeTitleForMatch(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function containsCjk(text: string): boolean {
+  return /[\u3400-\u9fff]/.test(text);
+}
+
+function titleTokenSimilarity(query: string, candidate: string): number {
+  const q = normalizeTitleForMatch(query);
+  const c = normalizeTitleForMatch(candidate);
+  if (!q || !c) return 0;
+  if (q === c) return 1;
+
+  if (containsCjk(q) || containsCjk(c)) {
+    const qChars = new Set([...q.replace(/\s+/g, '')]);
+    const cChars = new Set([...c.replace(/\s+/g, '')]);
+    const intersection = [...qChars].filter((char) => cChars.has(char)).length;
+    const union = new Set([...qChars, ...cChars]).size;
+    return union > 0 ? intersection / union : 0;
+  }
+
+  const qWords = new Set(q.split(' ').filter(Boolean));
+  const cWords = new Set(c.split(' ').filter(Boolean));
+  const intersection = [...qWords].filter((word) => cWords.has(word)).length;
+  const union = new Set([...qWords, ...cWords]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+function normalizeAuthorName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function authorOverlapScore(expected: string[], candidate: string[]): number {
+  if (expected.length === 0 || candidate.length === 0) return 0;
+
+  const expectedSet = new Set(expected.map(normalizeAuthorName).filter(Boolean));
+  const candidateSet = new Set(candidate.map(normalizeAuthorName).filter(Boolean));
+  if (expectedSet.size === 0 || candidateSet.size === 0) return 0;
+
+  let overlap = 0;
+  for (const name of expectedSet) {
+    for (const candidateName of candidateSet) {
+      if (name === candidateName || name.includes(candidateName) || candidateName.includes(name)) {
+        overlap++;
+        break;
+      }
+    }
+  }
+
+  return overlap / Math.max(expectedSet.size, candidateSet.size);
+}
+
+function yearCompatibilityScore(expected: number | null | undefined, candidate: number | null | undefined): number {
+  if (expected == null || candidate == null) return 0;
+  const delta = Math.abs(expected - candidate);
+  if (delta === 0) return 1;
+  if (delta === 1) return 0.5;
+  return 0;
+}
+
+export function scoreTitleSearchCandidate(
+  query: Pick<PaperMetadata, 'title' | 'authors' | 'year'>,
+  candidate: Partial<PaperMetadata>,
+): TitleSearchCandidateScore {
+  const titleScore = titleTokenSimilarity(query.title, candidate.title ?? '');
+  const authorScore = authorOverlapScore(query.authors ?? [], candidate.authors ?? []);
+  const yearScore = yearCompatibilityScore(query.year, candidate.year);
+  const totalScore = titleScore * 0.75 + authorScore * 0.15 + yearScore * 0.10;
+  const accepted = titleScore >= 0.97
+    || (titleScore >= 0.88 && (authorScore >= 0.2 || yearScore >= 0.5))
+    || (titleScore >= 0.74 && (authorScore >= 0.34 || yearScore >= 0.5));
+
+  return {
+    titleScore,
+    authorScore,
+    yearScore,
+    totalScore,
+    accepted,
+  };
+}
+
+export function pickBestTitleSearchResult(
+  query: Pick<PaperMetadata, 'title' | 'authors' | 'year'>,
+  results: Partial<PaperMetadata>[],
+): { candidate: Partial<PaperMetadata>; score: TitleSearchCandidateScore } | null {
+  let best: { candidate: Partial<PaperMetadata>; score: TitleSearchCandidateScore } | null = null;
+
+  for (const candidate of results) {
+    const score = scoreTitleSearchCandidate(query, candidate);
+    if (!best || score.totalScore > best.score.totalScore) {
+      best = { candidate, score };
+    }
+  }
+
+  if (!best || !best.score.accepted) return null;
+  return best;
+}
+
 // ─── 主水合函数 ───
 
 /**
@@ -157,7 +272,44 @@ export async function hydratePaperMetadata(
       try {
         const results = await deps.lookupService.searchByTitle(title);
         if (results.length > 0) {
-          apiMeta = results[0]!;
+          const query = {
+            title,
+            authors: paper.authors ?? [],
+            year: paper.year ?? null,
+          };
+          const best = pickBestTitleSearchResult(query, results);
+          const candidateSummary = results.slice(0, 3).map((candidate) => {
+            const score = scoreTitleSearchCandidate(query, candidate);
+            return {
+              title: candidate.title ?? null,
+              year: candidate.year ?? null,
+              doi: candidate.doi ?? null,
+              titleScore: Number(score.titleScore.toFixed(3)),
+              authorScore: Number(score.authorScore.toFixed(3)),
+              yearScore: Number(score.yearScore.toFixed(3)),
+              totalScore: Number(score.totalScore.toFixed(3)),
+              accepted: score.accepted,
+            };
+          });
+
+          if (best) {
+            apiMeta = best.candidate;
+            logger.info('[hydrate] Title search candidate accepted', {
+              queryTitle: title,
+              selectedTitle: best.candidate.title ?? null,
+              titleScore: Number(best.score.titleScore.toFixed(3)),
+              authorScore: Number(best.score.authorScore.toFixed(3)),
+              yearScore: Number(best.score.yearScore.toFixed(3)),
+              totalScore: Number(best.score.totalScore.toFixed(3)),
+              candidateSummary,
+            });
+          } else {
+            logger.warn('[hydrate] Title search rejected all candidates', {
+              queryTitle: title,
+              candidateCount: results.length,
+              candidateSummary,
+            });
+          }
         }
       } catch (err) {
         logger.debug('[hydrate] S2 title search failed', { error: (err as Error).message });

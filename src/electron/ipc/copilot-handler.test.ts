@@ -56,7 +56,7 @@ function makeCtx(overrides?: Record<string, unknown>) {
     session: { focus: { currentView: 'library', activePapers: [], activeConcepts: [], selected: {}, readerState: null } },
     eventBus: {},
     workspaceRoot: '/test',
-    dbProxy: { getArticle: vi.fn(), getChatHistory: vi.fn().mockResolvedValue([]) },
+    dbProxy: { getArticle: vi.fn(), getChatHistory: vi.fn().mockResolvedValue([]), saveChatMessage: vi.fn().mockResolvedValue(undefined), deleteChatMessage: vi.fn().mockResolvedValue(undefined) },
     pushManager: {
       pushCopilotEvent: vi.fn(),
       pushCopilotSessionChanged: vi.fn(),
@@ -66,7 +66,8 @@ function makeCtx(overrides?: Record<string, unknown>) {
     orchestrator: null,
     ragModule: null,
     configProvider: {
-      config: { language: { defaultOutputLanguage: 'zh-CN' }, project: { name: 'Test' } },
+      config: { language: { defaultOutputLanguage: 'zh-CN' }, project: { name: 'Test' }, rag: { embeddingModel: 'BAAI/bge-m3', embeddingProvider: 'siliconflow', embeddingDimension: 1024 }, apiKeys: { siliconflowApiKey: 'sk-test' } },
+      onChange: vi.fn().mockReturnValue(() => {}),
     },
     ...overrides,
   } as any;

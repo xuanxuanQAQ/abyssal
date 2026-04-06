@@ -2,12 +2,16 @@
  * SelectionPreviewOverlay — shows the AI-generated replacement inline
  * with Accept / Reject controls.
  *
+ * Two modes:
+ *   - Streaming: text appears progressively with a blinking cursor.
+ *     Accept/Reject buttons are disabled until generation finishes.
+ *   - Final: full diff is shown. User can accept or reject.
+ *
  * Positioned absolutely inside the editor container, anchored to the
- * bottom of the current editor viewport. Displays a compact diff:
- * original text (strikethrough + red) → replacement text (green).
+ * bottom of the current editor viewport.
  */
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import type { SelectionPreviewState } from '../ai/useSelectionPreview';
 
 interface SelectionPreviewOverlayProps {
@@ -99,6 +103,22 @@ const rejectButtonStyle: React.CSSProperties = {
   fontSize: '12px',
 };
 
+const disabledButtonStyle: React.CSSProperties = {
+  ...rejectButtonStyle,
+  opacity: 0.4,
+  cursor: 'default',
+};
+
+const cursorStyle: React.CSSProperties = {
+  display: 'inline-block',
+  width: 2,
+  height: '1em',
+  backgroundColor: 'var(--accent-color)',
+  marginLeft: 1,
+  verticalAlign: 'text-bottom',
+  animation: 'blink 1s steps(2) infinite',
+};
+
 // ── Component ──
 
 export function SelectionPreviewOverlay({
@@ -106,35 +126,110 @@ export function SelectionPreviewOverlay({
   onAccept,
   onReject,
 }: SelectionPreviewOverlayProps): React.JSX.Element {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom during streaming
+  useEffect(() => {
+    if (preview.streaming && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [preview.streaming, preview.replacementText]);
+
+  // Escape key dismisses / cancels the preview
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onReject();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onReject]);
+
+  const isReplace = preview.originalText.length > 0;
+  const hasError = Boolean(preview.error);
+
   return (
     <div style={overlayStyle} role="dialog" aria-label="AI 改写预览">
+      {/* Inline keyframes for cursor blink */}
+      <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
+
       <div style={headerStyle}>
-        <span style={headerLabelStyle}>AI 改写预览</span>
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          此改写仅修改选中内容，不创建新变体
+        <span style={{
+          ...headerLabelStyle,
+          ...(hasError ? { color: 'var(--color-danger, #ef4444)' } : {}),
+        }}>
+          {hasError
+            ? '生成失败'
+            : preview.streaming
+              ? (isReplace ? 'AI 正在改写...' : 'AI 正在续写...')
+              : (isReplace ? 'AI 改写预览' : 'AI 续写预览')}
         </span>
+        {!preview.streaming && !hasError && (
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {isReplace
+              ? '此改写仅修改选中内容，不创建新变体'
+              : '内容将插入到当前位置之后'}
+          </span>
+        )}
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Esc 关闭</span>
       </div>
-      <div style={diffContainerStyle}>
-        <div style={originalStyle}>{preview.originalText}</div>
-        <div style={replacementStyle}>{preview.replacementText}</div>
-      </div>
+
+      {hasError ? (
+        <div style={{ fontSize: '13px', color: 'var(--color-danger, #ef4444)', padding: '4px 0' }}>
+          {preview.error}
+        </div>
+      ) : (
+        <div ref={scrollRef} style={diffContainerStyle}>
+          {isReplace && <div style={originalStyle}>{preview.originalText}</div>}
+          <div style={replacementStyle}>
+            {preview.replacementText}
+            {preview.streaming && <span style={cursorStyle} />}
+          </div>
+        </div>
+      )}
+
       <div style={buttonRowStyle}>
-        <button
-          type="button"
-          style={rejectButtonStyle}
-          onClick={onReject}
-          aria-label="拒绝改写"
-        >
-          丢弃
-        </button>
-        <button
-          type="button"
-          style={acceptButtonStyle}
-          onClick={onAccept}
-          aria-label="接受改写"
-        >
-          接受
-        </button>
+        {preview.streaming ? (
+          <button
+            type="button"
+            style={rejectButtonStyle}
+            onClick={onReject}
+            aria-label="取消生成"
+          >
+            取消
+          </button>
+        ) : hasError ? (
+          <button
+            type="button"
+            style={rejectButtonStyle}
+            onClick={onReject}
+            aria-label="关闭"
+          >
+            关闭
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              style={rejectButtonStyle}
+              onClick={onReject}
+              aria-label="拒绝改写"
+            >
+              丢弃
+            </button>
+            <button
+              type="button"
+              style={acceptButtonStyle}
+              onClick={onAccept}
+              aria-label="接受改写"
+            >
+              接受
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

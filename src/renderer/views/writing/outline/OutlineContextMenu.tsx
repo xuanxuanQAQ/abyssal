@@ -15,6 +15,8 @@ import {
   useUpdateDraftSection,
 } from '../../../core/ipc/hooks/useDrafts';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
+import { useDeferredMenuAction } from '../../../shared/useDeferredMenuAction';
+import { useAppDialog } from '../../../shared/useAppDialog';
 import { useAppStore, type AppStoreState } from '../../../core/store';
 import type { SectionStatus } from '../../../../shared-types/enums';
 
@@ -79,68 +81,93 @@ export function OutlineContextMenu({
   const deleteSection = useDeleteDraftSection();
   const updateSection = useUpdateDraftSection();
   const startPipeline = useStartPipeline();
+  const deferMenuAction = useDeferredMenuAction();
+  const { confirm, prompt: promptDialog, dialog } = useAppDialog();
   const selectSection = useAppStore((s: AppStoreState) => s.selectSection);
 
   const handleAIGenerate = useCallback(() => {
-    selectSection(sectionId, articleId, draftId);
-    startPipeline.mutate({ workflow: 'generate', config: { articleId, draftId, sectionId } });
-  }, [articleId, draftId, sectionId, selectSection, startPipeline]);
+    deferMenuAction(() => {
+      selectSection(sectionId, articleId, draftId);
+      startPipeline.mutate({ workflow: 'generate', config: { articleId, draftId, sectionId } });
+    });
+  }, [articleId, deferMenuAction, draftId, sectionId, selectSection, startPipeline]);
 
   const handleWritingInstructions = useCallback(() => {
-    selectSection(sectionId, articleId, draftId);
-    const instructions = window.prompt('写作指令 / Writing instructions:');
-    if (instructions !== null) {
-      updateSection.mutate({ draftId, sectionId, patch: { writingInstructions: instructions } });
-    }
-  }, [articleId, draftId, sectionId, selectSection, updateSection]);
+    deferMenuAction(async () => {
+      selectSection(sectionId, articleId, draftId);
+      const instructions = await promptDialog({
+        title: t('writing.outline.setInstruction'),
+        description: '写作指令 / Writing instructions:',
+        confirmLabel: t('common.confirm'),
+      });
+      if (instructions !== null) {
+        updateSection.mutate({ draftId, sectionId, patch: { writingInstructions: instructions } });
+      }
+    });
+  }, [articleId, deferMenuAction, draftId, promptDialog, sectionId, selectSection, t, updateSection]);
 
   const handleAddChild = useCallback(() => {
-    createSection.mutate({
-      draftId,
-      parentId: sectionId,
-      sortIndex: 0,
+    deferMenuAction(() => {
+      createSection.mutate({
+        draftId,
+        parentId: sectionId,
+        sortIndex: 0,
+      });
     });
-  }, [draftId, sectionId, createSection]);
+  }, [createSection, deferMenuAction, draftId, sectionId]);
 
   const handleInsertAbove = useCallback(() => {
-    createSection.mutate({
-      draftId,
-      parentId,
-      sortIndex: sortIndex - 1,
+    deferMenuAction(() => {
+      createSection.mutate({
+        draftId,
+        parentId,
+        sortIndex: sortIndex - 1,
+      });
     });
-  }, [draftId, parentId, sortIndex, createSection]);
+  }, [createSection, deferMenuAction, draftId, parentId, sortIndex]);
 
   const handleInsertBelow = useCallback(() => {
-    createSection.mutate({
-      draftId,
-      parentId,
-      sortIndex: sortIndex + 1,
+    deferMenuAction(() => {
+      createSection.mutate({
+        draftId,
+        parentId,
+        sortIndex: sortIndex + 1,
+      });
     });
-  }, [draftId, parentId, sortIndex, createSection]);
+  }, [createSection, deferMenuAction, draftId, parentId, sortIndex]);
 
   const handleVersionHistory = useCallback(() => {
-    selectSection(sectionId, articleId, draftId);
-    window.dispatchEvent(new CustomEvent('abyssal:openVersionHistory', { detail: { sectionId, draftId } }));
-  }, [articleId, draftId, sectionId, selectSection]);
+    deferMenuAction(() => {
+      selectSection(sectionId, articleId, draftId);
+      window.dispatchEvent(new CustomEvent('abyssal:openVersionHistory', { detail: { sectionId, draftId } }));
+    });
+  }, [articleId, deferMenuAction, draftId, sectionId, selectSection]);
 
   const handleSetStatus = useCallback(
     (status: SectionStatus) => {
-      updateSection.mutate({ draftId, sectionId, patch: { status } });
+      deferMenuAction(() => {
+        updateSection.mutate({ draftId, sectionId, patch: { status } });
+      });
     },
-    [draftId, sectionId, updateSection],
+    [deferMenuAction, draftId, sectionId, updateSection],
   );
 
   const handleDelete = useCallback(() => {
-    // Simple confirm guard; a proper Dialog can replace this later
-    const confirmed = window.confirm(
-      t('writing.outline.deleteConfirm', { title: sectionTitle }),
-    );
-    if (confirmed) {
-      deleteSection.mutate({ draftId, sectionId });
-    }
-  }, [draftId, sectionId, sectionTitle, deleteSection, t]);
+    deferMenuAction(async () => {
+      const confirmed = await confirm({
+        title: t('common.delete'),
+        description: t('writing.outline.deleteConfirm', { title: sectionTitle }),
+        confirmLabel: t('common.delete'),
+        confirmTone: 'danger',
+      });
+      if (confirmed) {
+        deleteSection.mutate({ draftId, sectionId });
+      }
+    });
+  }, [confirm, deferMenuAction, draftId, sectionId, sectionTitle, deleteSection, t]);
 
   return (
+    <>
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
@@ -212,5 +239,7 @@ export function OutlineContextMenu({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+    {dialog}
+    </>
   );
 }

@@ -61,7 +61,7 @@ describe('EditorToolbar', () => {
     const editor = createMockEditor();
 
     act(() => {
-      root.render(<EditorToolbar editor={editor} aiGenerating={false} />);
+      root.render(<EditorToolbar editor={editor} />);
     });
 
     expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));

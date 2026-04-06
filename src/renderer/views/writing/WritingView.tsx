@@ -29,6 +29,7 @@ import { UnifiedEditor } from './editor/UnifiedEditor';
 import { ExportDialog } from './export/ExportDialog';
 import { VersionHistoryDialog } from './history/VersionHistoryDialog';
 import { useArticleList } from './hooks/useArticle';
+import { useAppDialog } from '../../shared/useAppDialog';
 import type { SectionNode } from '../../../shared-types/models';
 import { buildDocumentProjection } from '../../../shared/writing/documentOutline';
 import { ARTICLE_STYLES, ARTICLE_STYLE_LABELS } from '../../../core/types/article';
@@ -451,11 +452,19 @@ export function WritingView(): React.JSX.Element {
     if (articles.length > 0) return articles[0]?.id ?? null;
     return null;
   }, [activeArticleId, articles]);
-  const { data: drafts = [] } = useDraftList(resolvedArticleId);
+  const { data: drafts, isSuccess: draftsLoaded } = useDraftList(resolvedArticleId);
+  const draftList = drafts ?? [];
   const resolvedDraftId = useMemo(() => {
-    if (activeDraftId !== null && drafts.some((candidate) => candidate.id === activeDraftId)) return activeDraftId;
-    return drafts[0]?.id ?? null;
-  }, [activeDraftId, drafts]);
+    if (activeDraftId !== null) {
+      // Once drafts have loaded, verify the active draft still exists (handles deletion)
+      if (draftsLoaded && draftList.length > 0 && !draftList.some((c) => c.id === activeDraftId)) {
+        return draftList[0]?.id ?? null;
+      }
+      // Drafts not loaded or list empty — trust the active selection
+      return activeDraftId;
+    }
+    return draftList[0]?.id ?? null;
+  }, [activeDraftId, draftList, draftsLoaded]);
   const { data: draft } = useDraftOutline(resolvedDraftId);
   const { data: currentSectionContent } = useDraftSectionContent(resolvedDraftId, selectedSectionId);
   const outlineStructureKey = useMemo(
@@ -478,6 +487,7 @@ export function WritingView(): React.JSX.Element {
     () => summarizeSections(displaySections),
     [displaySections],
   );
+  const { confirm, dialog } = useAppDialog();
 
   // ── Callbacks ──
 
@@ -485,7 +495,7 @@ export function WritingView(): React.JSX.Element {
     createArticle.mutate('未命名文章', {
       onSuccess: (created) => {
         setActiveArticleId(created.id);
-        setActiveDraftId(null);
+        setActiveDraftId(created.defaultDraftId ?? null);
       },
     });
   }, [createArticle]);
@@ -515,9 +525,14 @@ export function WritingView(): React.JSX.Element {
     });
   }, [createDraft, newRouteCopyFromCurrent, newRouteStyle, newRouteTitle, resolvedArticleId, resolvedDraftId]);
 
-  const handleDeleteArticle = useCallback(() => {
+  const handleDeleteArticle = useCallback(async () => {
     if (!resolvedArticleId || !currentArticle) return;
-    const confirmed = window.confirm(`确定删除文章“${currentArticle.title}”吗？相关变体也会一并删除。`);
+    const confirmed = await confirm({
+      title: '删除文章',
+      description: `确定删除文章“${currentArticle.title}”吗？相关变体也会一并删除。`,
+      confirmLabel: '删除文章',
+      confirmTone: 'danger',
+    });
     if (!confirmed) return;
 
     const remainingArticles = articles.filter((candidate) => candidate.id !== resolvedArticleId);
@@ -527,14 +542,19 @@ export function WritingView(): React.JSX.Element {
         setActiveDraftId(null);
       },
     });
-  }, [articles, currentArticle, deleteArticle, resolvedArticleId]);
+  }, [articles, confirm, currentArticle, deleteArticle, resolvedArticleId]);
 
-  const handleDeleteRoute = useCallback(() => {
+  const handleDeleteRoute = useCallback(async () => {
     if (!resolvedDraftId || !draft) return;
-    const confirmed = window.confirm(`确定删除变体“${draft.title}”吗？此操作不影响其他变体和文章本体。`);
+    const confirmed = await confirm({
+      title: '删除变体',
+      description: `确定删除变体“${draft.title}”吗？此操作不影响其他变体和文章本体。`,
+      confirmLabel: '删除变体',
+      confirmTone: 'danger',
+    });
     if (!confirmed) return;
 
-    const remainingDrafts = drafts.filter((candidate) => candidate.id !== resolvedDraftId);
+    const remainingDrafts = draftList.filter((candidate) => candidate.id !== resolvedDraftId);
     deleteDraft.mutate(resolvedDraftId, {
       onSuccess: () => {
         setActiveDraftId(remainingDrafts[0]?.id ?? null);
@@ -543,7 +563,7 @@ export function WritingView(): React.JSX.Element {
         }
       },
     });
-  }, [deleteDraft, draft, drafts, resolvedDraftId, selectSection]);
+  }, [confirm, deleteDraft, draft, draftList, resolvedDraftId, selectSection]);
 
   const toggleExportDialog = useCallback(() => {
     setExportDialogOpen((prev) => !prev);
@@ -572,8 +592,20 @@ export function WritingView(): React.JSX.Element {
 
   useEffect(() => {
     setLiveDocumentJson(null);
-    selectSection(null);
-  }, [resolvedDraftId, selectSection]);
+    // Draft 切换时清空 sectionId 但保留 articleId/draftId，否则整个写作
+    // 上下文链路（ContextSource → ChatContext → copilotBridge）都会丢失文章信息。
+    selectSection(null, resolvedArticleId ?? undefined, resolvedDraftId ?? undefined);
+  }, [resolvedArticleId, resolvedDraftId, selectSection]);
+
+  // ── Clear writing-specific state when leaving writing view ──
+  // WritingView is keepAlive so it never unmounts — we watch activeView instead.
+  const activeView = useAppStore((s) => s.activeView);
+  useEffect(() => {
+    if (activeView !== 'writing') {
+      useEditorStore.getState().clearPersistedWritingTarget();
+      useEditorStore.getState().clearDraftStreamText();
+    }
+  }, [activeView]);
 
   // ── Keyboard shortcuts ──
   useHotkey('Ctrl+Shift+E', toggleExportDialog);
@@ -791,10 +823,10 @@ export function WritingView(): React.JSX.Element {
         {/* Row 2: meta info + route tabs */}
         <div style={metaRowStyle}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <span style={metaTextStyle}>{drafts.length} 个变体</span>
+            <span style={metaTextStyle}>{draftList.length} 个变体</span>
             <span style={metaTextStyle}>{totalSections} 个章节</span>
           </div>
-          {drafts.length > 0 ? (
+          {draftList.length > 0 ? (
             <div style={routeTabsRowStyle}>
               <div
                 ref={routeTabsViewportRef}
@@ -803,7 +835,7 @@ export function WritingView(): React.JSX.Element {
                 data-draft-tabs-viewport="true"
               >
                 <div style={routeTabsListStyle}>
-                  {drafts.map((candidate) => {
+                  {draftList.map((candidate) => {
                     const isSelected = candidate.id === resolvedDraftId;
                     const styleLabel = getStyleLabel(candidate.metadata?.writingStyle);
                     return (
@@ -973,6 +1005,7 @@ export function WritingView(): React.JSX.Element {
           </div>
         </div>
       )}
+      {dialog}
     </div>
   );
 }

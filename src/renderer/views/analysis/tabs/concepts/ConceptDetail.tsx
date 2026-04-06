@@ -323,7 +323,7 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
           setNotes(
             (noteResult ?? []).map((n: any) => ({
               id: n.id ?? n.noteId,
-              title: n.title ?? n.name ?? 'Untitled',
+              title: n.title ?? n.name ?? t('notes.note.untitled'),
             })),
           );
           setLoadState('ready');

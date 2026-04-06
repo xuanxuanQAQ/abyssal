@@ -38,6 +38,7 @@ import { hasEvidenceDeficiency, defaultPassReport, type QualityReport } from './
 import { validateCitations, extractCitedPaperIds } from './citation/citation-validator';
 import { preformatCitations, type CitationFormatter } from './citation/citation-preformatter';
 import { classifyError } from '../error-classifier';
+import { resolveCurrentRagService } from './rag-service-resolver';
 
 const SYNTHESIZE_STAGE_WORKFLOWS = {
   draft: 'synthesize.draft',
@@ -59,6 +60,7 @@ export interface SynthesizeServices {
   ragService: {
     retrieve: (request: Record<string, unknown>) => Promise<{ chunks: RankedChunk[]; totalTokenCount: number }>;
   } | null;
+  getRagService?: (() => SynthesizeServices['ragService']) | undefined;
   cslEngine?: {
     formatCitation: (papers: Array<{ paperId: string; metadata: Record<string, unknown> }>) => Array<{ inlineCitation: string }>;
   } | null;
@@ -84,7 +86,7 @@ export function createSynthesizeWorkflow(services: SynthesizeServices) {
       try {
         await synthesizeConcept(conceptId, {
           dbProxy, llmClient, contextBudgetManager, logger, workspacePath,
-          ragService: services.ragService,
+          ragService: resolveCurrentRagService(services),
           cslEngine: services.cslEngine ?? null,
           enableCorrectiveRag: services.enableCorrectiveRag ?? true,
           runner,

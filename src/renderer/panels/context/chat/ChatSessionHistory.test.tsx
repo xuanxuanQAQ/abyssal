@@ -1,9 +1,11 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatSessionHistory } from './ChatSessionHistory';
 
 const listSessionsMock = vi.fn();
+const deleteSessionMock = vi.fn();
 const switchSessionMock = vi.fn();
 const createNewSessionMock = vi.fn();
 
@@ -12,7 +14,7 @@ vi.mock('../../../core/ipc/bridge', () => ({
     db: {
       chat: {
         listSessions: listSessionsMock,
-        deleteSession: vi.fn(),
+        deleteSession: deleteSessionMock,
       },
     },
   }),
@@ -45,6 +47,7 @@ describe('ChatSessionHistory', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     listSessionsMock.mockReset();
+    deleteSessionMock.mockReset();
     switchSessionMock.mockReset();
     createNewSessionMock.mockReset();
     queryClient = new QueryClient();
@@ -85,5 +88,50 @@ describe('ChatSessionHistory', () => {
 
     expect(container.textContent).toContain('3 context.chat.messages');
     expect(container.textContent).not.toContain('context.chat.noSessionHistory');
+  });
+
+  it('confirms before deleting a session and then deletes it', async () => {
+    listSessionsMock.mockResolvedValue([
+      {
+        contextSourceKey: 'workspace',
+        messageCount: 3,
+        lastMessageAt: Date.now(),
+      },
+    ]);
+    deleteSessionMock.mockResolvedValue(undefined);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ChatSessionHistory />
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const deleteButton = container.querySelector('button[title="common.delete"]') as HTMLButtonElement | null;
+    expect(deleteButton).not.toBeNull();
+
+    await act(async () => {
+      deleteButton?.click();
+    });
+
+    const dialog = document.body.querySelector('[data-testid="app-dialog"]') as HTMLDivElement | null;
+    expect(dialog?.textContent).toContain('context.chat.confirmDeleteSession');
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+
+    const confirmButton = dialog?.querySelector('[data-dialog-action="confirm"]') as HTMLButtonElement | null;
+    expect(confirmButton?.textContent).toBe('common.delete');
+
+    await act(async () => {
+      confirmButton?.click();
+      await Promise.resolve();
+    });
+
+    expect(deleteSessionMock).toHaveBeenCalledWith('workspace');
+    expect(createNewSessionMock).toHaveBeenCalled();
   });
 });

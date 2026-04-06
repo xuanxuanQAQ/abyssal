@@ -32,20 +32,29 @@ import { useHotkey } from '../../core/hooks/useHotkey';
 export function GraphView() {
   const { t } = useTranslation();
   const focusedGraphNodeId = useAppStore((s) => s.focusedGraphNodeId);
+  const focusedGraphNodeType = useAppStore((s) => s.focusedGraphNodeType);
   const focusGraphNode = useAppStore((s) => s.focusGraphNode);
   const layerVisibility = useAppStore((s) => s.layerVisibility);
   const similarityThreshold = useAppStore((s) => s.similarityThreshold);
+  const focusDepth = useAppStore((s) => s.focusDepth);
+  const showConceptNodes = useAppStore((s) => s.showConceptNodes);
+  const showNoteNodes = useAppStore((s) => s.showNoteNodes);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [showTableView, setShowTableView] = useState(false);
 
   // Graph data from TanStack Query
   const filter: GraphFilter | undefined = useMemo(() => {
-    if (!focusedGraphNodeId) return undefined;
     return {
-      focusNodeId: focusedGraphNodeId,
+      ...(focusedGraphNodeId ? { focusNodeId: focusedGraphNodeId } : {}),
+      ...(focusedGraphNodeType ? { focusNodeType: focusedGraphNodeType } : {}),
+      hopDepth: focusDepth === 'global' ? 'global' : focusDepth === '1-hop' ? 1 : 2,
+      layers: layerVisibility,
+      similarityThreshold,
+      includeConcepts: showConceptNodes || focusedGraphNodeType === 'concept',
+      includeNotes: showNoteNodes || focusedGraphNodeType === 'memo' || focusedGraphNodeType === 'note',
     };
-  }, [focusedGraphNodeId]);
+  }, [focusDepth, focusedGraphNodeId, focusedGraphNodeType, layerVisibility, showConceptNodes, showNoteNodes, similarityThreshold]);
   const { data: graphData } = useGraphData(filter);
 
   // Graphology instance (persistent across data updates)
@@ -119,7 +128,7 @@ export function GraphView() {
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
     nodeId: string;
-    nodeType: 'paper' | 'concept';
+    nodeType: 'paper' | 'concept' | 'memo' | 'note';
     position: { x: number; y: number };
   } | null>(null);
 
@@ -132,10 +141,7 @@ export function GraphView() {
 
   // Sigma events
   useSigmaEvents(sigma, graph, {
-    onNodeRightClick: (nodeId, position) => {
-      const nodeType = graph.getNodeAttribute(nodeId, 'nodeType') as
-        | 'paper'
-        | 'concept';
+    onNodeRightClick: (nodeId, nodeType, position) => {
       setContextMenu({ nodeId, nodeType, position });
     },
     onEdgeHover: (edgeId, position) => {
@@ -183,8 +189,8 @@ export function GraphView() {
 
   // Select node from search
   const handleSelectNode = useCallback(
-    (nodeId: string) => {
-      focusGraphNode(nodeId);
+    (nodeId: string, nodeType: 'paper' | 'concept' | 'memo' | 'note') => {
+      focusGraphNode(nodeId, nodeType);
     },
     [focusGraphNode],
   );

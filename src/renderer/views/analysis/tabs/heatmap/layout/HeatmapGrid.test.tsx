@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { HeatmapCell } from '../../../../../../../shared-types/models';
+import type { HeatmapCell } from '../../../../../../shared-types/models';
 import { cellKey } from '../../../shared/cellKey';
 import { HeatmapGrid } from './HeatmapGrid';
 

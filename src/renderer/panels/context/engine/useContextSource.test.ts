@@ -29,6 +29,14 @@ function defaultInput(overrides?: Partial<DeriveContextInput>): DeriveContextInp
     selectedMemoId: null,
     selectedNoteId: null,
     excludedCount: 0,
+    hasWritingRangeTarget: false,
+    writingTargetSectionId: null,
+    writingTargetArticleId: null,
+    writingTargetDraftId: null,
+    writingTargetFrom: 0,
+    writingTargetTo: 0,
+    writingTargetSelectedText: '',
+    writingTargetAnchorParagraphId: null,
     ...overrides,
   };
 }
@@ -451,6 +459,14 @@ describe('store → deriveContextSource integration', () => {
       selectedMemoId: s.selectedMemoId,
       selectedNoteId: s.selectedNoteId,
       excludedCount: Object.keys(s.excludedIds).length,
+      hasWritingRangeTarget: false,
+      writingTargetSectionId: null,
+      writingTargetArticleId: null,
+      writingTargetDraftId: null,
+      writingTargetFrom: 0,
+      writingTargetTo: 0,
+      writingTargetSelectedText: '',
+      writingTargetAnchorParagraphId: null,
     };
   }
 

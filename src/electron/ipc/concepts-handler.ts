@@ -16,37 +16,9 @@ import { typedHandler } from './register';
 import type { ConceptDefinition } from '../../core/types/concept';
 import { asConceptId } from '../../core/types/common';
 import type { UpdateConceptFields, ConflictResolution } from '../../core/database/dao/concepts';
-import type { Concept, HistoryEntry } from '../../shared-types/models';
 import { buildHeatmapMatrix } from './shared/build-heatmap-matrix';
 import { createConceptFromDraft } from './shared/create-concept';
-
-function historyEntryToFrontend(entry: ConceptDefinition['history'][number]): HistoryEntry {
-  return {
-    timestamp: entry.timestamp,
-    type: entry.changeType,
-    details: {
-      summary: entry.oldValueSummary,
-      reason: entry.reason,
-      ...(entry.metadata ?? {}),
-    },
-  };
-}
-
-/** Convert backend ConceptDefinition to frontend Concept shape */
-function conceptToFrontend(c: ConceptDefinition): Concept {
-  return {
-    id: c.id,
-    name: c.nameEn,
-    nameZh: c.nameZh,
-    nameEn: c.nameEn,
-    description: c.definition,
-    parentId: c.parentId,
-    level: 0,
-    maturity: c.maturity,
-    keywords: c.searchKeywords,
-    history: Array.isArray(c.history) ? c.history.map(historyEntryToFrontend) : [],
-  };
-}
+import { mapConceptsToFrontend, findConceptFrontendById, historyEntryToFrontend } from './shared/concept-frontend';
 
 export function registerConceptsHandlers(ctx: AppContext): void {
   const { logger } = ctx;
@@ -59,14 +31,14 @@ export function registerConceptsHandlers(ctx: AppContext): void {
 
   // ── db:concepts:list ──
   typedHandler('db:concepts:list', logger, async () => {
-    return ((await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[]).map(conceptToFrontend);
+    return mapConceptsToFrontend((await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[]);
   });
 
   // ── db:concepts:getFramework ──
   typedHandler('db:concepts:getFramework', logger, async () => {
     const all = (await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[];
     const rootIds = all.filter((c) => !c.parentId).map((c) => c.id);
-    return { concepts: all.map(conceptToFrontend), rootIds };
+    return { concepts: mapConceptsToFrontend(all), rootIds };
   });
 
   // ── db:concepts:updateFramework ──
@@ -81,13 +53,12 @@ export function registerConceptsHandlers(ctx: AppContext): void {
   typedHandler('db:concepts:search', logger, async (_e, query) => {
     const all = (await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[];
     const q = query.toLowerCase();
-    return all
+    return mapConceptsToFrontend(all
       .filter((c) =>
         c.nameEn.toLowerCase().includes(q) ||
         c.nameZh.includes(q) ||
         c.definition.toLowerCase().includes(q),
-      )
-      .map(conceptToFrontend);
+      ));
   });
 
   // ── db:concepts:create ──
@@ -98,8 +69,10 @@ export function registerConceptsHandlers(ctx: AppContext): void {
       typeof draft.definition === 'string' ? draft.definition : '',
     );
     await afterMutation(['concepts'], 'insert');
-    const created = (await ctx.dbProxy.getConcept(asConceptId(conceptId))) as ConceptDefinition | null;
-    return created ? conceptToFrontend(created) : null;
+    return findConceptFrontendById(
+      (await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[],
+      asConceptId(conceptId),
+    );
   });
 
   // ── db:concepts:updateMaturity ──

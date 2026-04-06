@@ -24,6 +24,12 @@ export interface GovernorConfig {
   maxCallsPerTool: number;
   /** Detect result repetition if output is same for N consecutive calls (default: 2) */
   repetitionThreshold: number;
+  /**
+   * Per-tool override limits. Tools not listed here use maxCallsPerTool.
+   * Useful for restricting expensive tools (e.g., web search) to a lower budget.
+   * Example: { 'search_semantic_scholar': 2, 'search_web': 3 }
+   */
+  perToolLimits?: Record<string, number>;
 }
 
 export class ToolCallingGovernor {
@@ -78,12 +84,13 @@ export class ToolCallingGovernor {
       };
     }
 
-    // Check per-tool call limit
+    // Check per-tool call limit (individual override or default)
+    const toolLimit = this.config.perToolLimits?.[toolName] ?? this.config.maxCallsPerTool;
     const callCountForTool = this.callHistory.filter((c) => c.toolName === toolName).length;
-    if (callCountForTool >= this.config.maxCallsPerTool) {
+    if (callCountForTool >= toolLimit) {
       return {
         allowed: false,
-        reason: `Tool "${toolName}" call limit reached (${callCountForTool}/${this.config.maxCallsPerTool})`,
+        reason: `Tool "${toolName}" call limit reached (${callCountForTool}/${toolLimit})`,
       };
     }
 

@@ -84,6 +84,20 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
             lineStyle="dashed"
           />
           <LayerCheckbox
+            label={t('graph.layers.conceptExtend')}
+            checked={layerVisibility.conceptExtend}
+            onChange={() => toggleLayer('conceptExtend')}
+            color="#F59E0B"
+            lineStyle="solid"
+          />
+          <LayerCheckbox
+            label={t('graph.layers.conceptMapping')}
+            checked={layerVisibility.conceptMapping}
+            onChange={() => toggleLayer('conceptMapping')}
+            color="#8B5CF6"
+            lineStyle="solid"
+          />
+          <LayerCheckbox
             label={t('graph.layers.semanticNeighbor')}
             checked={layerVisibility.semanticNeighbor}
             onChange={() => toggleLayer('semanticNeighbor')}
@@ -128,7 +142,12 @@ export function LayerControls({ semanticNeighborCount, onRelayout }: LayerContro
             <input
               type="checkbox"
               checked={showNoteNodes}
-              onChange={(e) => setShowNoteNodes(e.target.checked)}
+              onChange={(e) => {
+                setShowNoteNodes(e.target.checked);
+                if (layerVisibility.notes !== e.target.checked) {
+                  toggleLayer('notes');
+                }
+              }}
               style={{ width: 16, height: 16, margin: 0 }}
             />
             {t('graph.showNoteNodes')}

@@ -97,21 +97,21 @@ export function NoteNodeTooltip({
       {/* Associated entities */}
       {(paperIds.length > 0 || conceptIds.length > 0) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
-          {paperIds.map((pid) => (
+          {paperIds.map((pid, index) => (
             <EntityTag
               key={pid}
               type="paper"
               id={pid}
-              label={paperLabels[pid] ?? pid.slice(0, 8)}
+              label={paperLabels[pid] ?? `Paper ${index + 1}`}
               maxChars={25}
             />
           ))}
-          {conceptIds.map((cid) => (
+          {conceptIds.map((cid, index) => (
             <EntityTag
               key={cid}
               type="concept"
               id={cid}
-              label={conceptLabels[cid] ?? cid}
+              label={conceptLabels[cid] ?? `Concept ${index + 1}`}
               maxChars={20}
             />
           ))}

@@ -9,7 +9,7 @@ import { safeSigmaRefresh } from './sigmaGuard';
 // ---------------------------------------------------------------------------
 
 export interface SigmaEventCallbacks {
-  onNodeRightClick: (nodeId: string, position: { x: number; y: number }) => void;
+  onNodeRightClick: (nodeId: string, nodeType: 'paper' | 'concept' | 'memo' | 'note', position: { x: number; y: number }) => void;
   onEdgeHover: (edgeId: string | null, position: { x: number; y: number } | null) => void;
 }
 
@@ -29,6 +29,19 @@ export function useSigmaEvents(
   callbacks: SigmaEventCallbacks,
 ): void {
   const focusGraphNode = useAppStore((s) => s.focusGraphNode);
+
+  const resolveNodeType = useCallback(
+    (nodeId: string): 'paper' | 'concept' | 'memo' | 'note' => {
+      const rawType = graph?.getNodeAttribute(nodeId, 'nodeType') as
+        | 'paper'
+        | 'concept'
+        | 'memo'
+        | 'note'
+        | undefined;
+      return rawType ?? 'paper';
+    },
+    [graph],
+  );
 
   // -----------------------------------------------------------------------
   // Highlight helpers
@@ -96,7 +109,7 @@ export function useSigmaEvents(
 
     // -- clickNode --------------------------------------------------------
     const onClickNode = ({ node }: { node: string }) => {
-      focusGraphNode(node);
+      focusGraphNode(node, resolveNodeType(node));
     };
 
     // -- rightClickNode ---------------------------------------------------
@@ -108,7 +121,7 @@ export function useSigmaEvents(
       event: { x: number; y: number; original: MouseEvent | TouchEvent };
     }) => {
       event.original.preventDefault();
-      callbacks.onNodeRightClick(node, { x: event.x, y: event.y });
+      callbacks.onNodeRightClick(node, resolveNodeType(node), { x: event.x, y: event.y });
     };
 
     // -- enterEdge --------------------------------------------------------
@@ -130,7 +143,7 @@ export function useSigmaEvents(
     // -- clickEdge --------------------------------------------------------
     const onClickEdge = ({ edge }: { edge: string }) => {
       const edgeType = graph.getEdgeAttribute(edge, 'edgeType') as string | undefined;
-      if (edgeType === 'concept_agree' || edgeType === 'conflict') {
+      if (edgeType === 'conceptAgree' || edgeType === 'conceptConflict') {
         // TODO: ContextPanel integration -- navigate to mapping evidence
       }
     };
@@ -154,7 +167,7 @@ export function useSigmaEvents(
       sigma.off('leaveEdge', onLeaveEdge);
       sigma.off('clickEdge', onClickEdge);
     };
-  }, [sigma, graph, highlightNode, unhighlightNode, focusGraphNode, callbacks]);
+  }, [sigma, graph, highlightNode, unhighlightNode, focusGraphNode, callbacks, resolveNodeType]);
 }
 
 export default useSigmaEvents;

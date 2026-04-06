@@ -14,6 +14,7 @@ import { useBatchUpdateRelevance, useBatchDeletePapers } from '../../../core/ipc
 import { useAcquireBatch } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import { useAppStore } from '../../../core/store';
+import { useAppDialog } from '../../../shared/useAppDialog';
 import type { Paper } from '../../../../shared-types/models';
 import type { Relevance } from '../../../../shared-types/enums';
 import { RELEVANCE_CONFIG } from '../shared/relevanceConfig';
@@ -39,6 +40,7 @@ export function BatchActionBar({
   const acquireBatch = useAcquireBatch();
   const startPipeline = useStartPipeline();
   const activeTasks = useAppStore((s) => s.activeTasks);
+  const { confirm, dialog } = useAppDialog();
 
   // 检查是否有正在运行的批量任务
   const runningTasks = Object.values(activeTasks).filter(
@@ -50,15 +52,18 @@ export function BatchActionBar({
     batchUpdateRelevance.mutate({ ids, rel });
   };
 
-  const handleDelete = () => {
+  const handleDelete = useCallback(async () => {
     const ids = getSelectedIds();
-    const confirmed = window.confirm(
-      t('library.batch.deleteConfirm', { count: ids.length })
-    );
+    const confirmed = await confirm({
+      title: t('common.delete'),
+      description: t('library.batch.deleteConfirm', { count: ids.length }),
+      confirmLabel: t('common.delete'),
+      confirmTone: 'danger',
+    });
     if (!confirmed) return;
     batchDelete.mutate(ids);
     onDeselect();
-  };
+  }, [batchDelete, confirm, getSelectedIds, onDeselect, t]);
 
   const handleExportBibtex = useCallback(() => {
     const ids = getSelectedIds();
@@ -79,24 +84,25 @@ export function BatchActionBar({
   }, [getSelectedIds, papers, t]);
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        height: 56,
-        backgroundColor: 'var(--bg-surface)',
-        borderTop: '1px solid var(--border-subtle)',
-        boxShadow: '0 -2px 8px rgba(0,0,0,0.08)',
-        display: 'flex',
-        alignItems: 'center',
-        padding: '0 16px',
-        gap: 12,
-        animation: 'slideUp 200ms ease-out',
-        zIndex: 25,
-      }}
-    >
+    <>
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 56,
+          backgroundColor: 'var(--bg-surface)',
+          borderTop: '1px solid var(--border-subtle)',
+          boxShadow: '0 -2px 8px rgba(0,0,0,0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 16px',
+          gap: 12,
+          animation: 'slideUp 200ms ease-out',
+          zIndex: 25,
+        }}
+      >
       <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>
         {t('library.batch.selected', { count: selectedCount })}
       </span>
@@ -189,7 +195,9 @@ export function BatchActionBar({
       >
         {t('common.delete')}
       </button>
-    </div>
+      </div>
+      {dialog}
+    </>
   );
 }
 

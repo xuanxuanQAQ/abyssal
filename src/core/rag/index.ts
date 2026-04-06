@@ -31,6 +31,27 @@ export { Reranker } from './reranker';
 export { expandQuery, expandQueryHierarchical } from './query-intelligence';
 export { assembleContext } from './context-assembler';
 
+export interface RagDiagnosticsSummary {
+  vectorConsistency: vectorDiagnostics.RowidConsistencyResult;
+  vectorSamples: vectorDiagnostics.VectorLengthSample[];
+  chunkStats: vectorDiagnostics.ChunkIndexStats[];
+  degraded: boolean;
+  degradedReason: string | null;
+}
+
+export interface RagServiceLike {
+  readonly degraded: boolean;
+  readonly degradedReason: string | null;
+  embedAndIndexChunks(chunks: TextChunk[]): Promise<IndexResult>;
+  retrieve(request: RetrievalRequest): Promise<RetrievalResult>;
+  searchSemantic(
+    queryText: string,
+    topK?: number,
+    filters?: MetadataFilters,
+  ): Promise<RankedChunk[]>;
+  getDiagnosticsSummary(): RagDiagnosticsSummary | Promise<RagDiagnosticsSummary>;
+}
+
 // ─── §8.1 MetadataFilters ───
 
 export interface MetadataFilters {
@@ -51,7 +72,7 @@ const HIGH_INFO_SECTION_TYPES: ReadonlySet<string> = new Set([
 
 // ═══ RagService ═══
 
-export class RagService {
+export class RagService implements RagServiceLike {
   private readonly embedder: Embedder;
   private readonly reranker: Reranker;
   private readonly dbService: DatabaseService;

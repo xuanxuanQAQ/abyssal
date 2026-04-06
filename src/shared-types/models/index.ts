@@ -397,7 +397,14 @@ export interface GraphEdge {
   id?: string | undefined;
   source: string;
   target: string;
-  type: 'citation' | 'conceptAgree' | 'conceptConflict' | 'conceptExtend' | 'semanticNeighbor';
+  type:
+    | 'citation'
+    | 'conceptAgree'
+    | 'conceptConflict'
+    | 'conceptExtend'
+    | 'semanticNeighbor'
+    | 'conceptMapping'
+    | 'notes';
   weight: number;
   /** §1.2 concept_agree/conflict 关联的概念 ID */
   conceptId?: string | undefined;
@@ -412,6 +419,8 @@ export interface LayerVisibility {
   citation: boolean;
   conceptAgree: boolean;
   conceptConflict: boolean;
+  conceptExtend: boolean;
+  conceptMapping: boolean;
   semanticNeighbor: boolean;
   /** v2.0 笔记节点层 */
   notes: boolean;
@@ -494,6 +503,10 @@ export interface WritingContext {
   privateKBMatches: KBMatch[];
   precedingSummary: string;
   followingSectionTitles: string[];
+  /** RAG retrieval status: ok = retrieved, unavailable = module not configured, error = runtime failure */
+  ragStatus: 'ok' | 'unavailable' | 'error';
+  /** Human-readable detail when ragStatus is 'error' */
+  ragStatusDetail?: string;
 }
 
 export interface WritingContextRequest {
@@ -542,6 +555,19 @@ export interface ChatMessage {
   clarification?: ChatClarificationState | undefined;
   /** 流式接收中的临时文本缓冲（仅内存态，不持久化） */
   streamBuffer?: string | undefined;
+  /** 待用户确认后应用到编辑器的 patch（两阶段确认，仅内存态） */
+  pendingEditorPatches?: PendingEditorPatch[] | undefined;
+}
+
+/** 待确认的编辑器 patch */
+export interface PendingEditorPatch {
+  id: string;
+  /** 对应的 EditorPatch JSON（保持类型解耦） */
+  patch: Record<string, unknown>;
+  /** 人类可读的描述 */
+  summary: string;
+  /** 是否已经被用户应用 */
+  applied: boolean;
 }
 
 export interface ToolCallInfo {
@@ -654,6 +680,18 @@ export interface AllSelectedContext {
   excludedCount: number;
 }
 
+/** 写作选区上下文（优先级高于 section，选区存在时覆盖 section 上下文） */
+export interface WritingSelectionContext {
+  type: 'writing-selection';
+  articleId: string;
+  draftId?: string | undefined;
+  sectionId: string;
+  from: number;
+  to: number;
+  selectedText: string;
+  anchorParagraphId?: string | undefined;
+}
+
 export type ContextSource =
   | PaperContext
   | PapersContext
@@ -661,6 +699,7 @@ export type ContextSource =
   | ConceptContext
   | MappingContext
   | SectionContext
+  | WritingSelectionContext
   | GraphNodeContext
   | MemoContext
   | NoteContext
@@ -867,12 +906,18 @@ export interface MergeConflictResolution {
 export interface SuggestedConcept {
   id: string;
   term: string;
-  paperCount: number;
+  termNormalized: string;
+  frequency: number;
   sourcePaperIds: string[];
-  closestExisting: { conceptId: string; conceptName: string; maturity: Maturity } | null;
-  contextSnippets: string[];
+  sourcePaperCount: number;
+  closestExisting: { conceptId: string; conceptName: string; maturity: Maturity; similarity: string | null } | null;
+  reason: string;
+  suggestedDefinition: string | null;
   suggestedKeywords: string[];
   status: 'pending' | 'adopted' | 'dismissed';
+  adoptedConceptId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ═══ v2.0 碎片笔记（Memo） ═══

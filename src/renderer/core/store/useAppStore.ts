@@ -129,7 +129,7 @@ export function resetAppStoreForProjectSwitch(): void {
     libraryColumnSizing: {},
     expandedRowIds: {},
     // GraphSlice
-    layerVisibility: { citation: true, conceptAgree: true, conceptConflict: true, semanticNeighbor: false, notes: false },
+    layerVisibility: { citation: true, conceptAgree: true, conceptConflict: true, conceptExtend: true, conceptMapping: true, semanticNeighbor: false, notes: true },
     showConceptNodes: false,
     showNoteNodes: false,
     similarityThreshold: 0.5,

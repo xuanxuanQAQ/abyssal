@@ -255,6 +255,8 @@ CREATE TABLE suggested_concepts (
   closest_existing_concept_id     TEXT REFERENCES concepts(id) ON DELETE SET NULL,
   closest_existing_concept_similarity TEXT,
   reason                          TEXT,
+  suggested_definition            TEXT,
+  suggested_keywords              TEXT NOT NULL DEFAULT '[]',
   status                          TEXT NOT NULL DEFAULT 'pending',
   adopted_concept_id              TEXT REFERENCES concepts(id) ON DELETE SET NULL,
   created_at                      TEXT NOT NULL,

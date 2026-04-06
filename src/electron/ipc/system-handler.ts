@@ -16,11 +16,37 @@ import { existsSync } from 'node:fs';
 import type { AppContext } from '../app-context';
 import type { GlobalSearchResult } from '../../shared-types/models';
 import type { CitationStyle } from '../../shared-types/enums';
+import type { GraphFilter } from '../../shared-types/ipc';
 import { typedHandler } from './register';
 import { asPaperId } from '../../core/types/common';
 import type { RelationGraphFilter } from '../../core/database/dao/relations';
 import { exportArticle } from './export-handler';
 import { insertBibEntries } from './shared/import-bibtex';
+
+function toRelationGraphFilter(filter?: GraphFilter): RelationGraphFilter {
+  if (!filter) {
+    return {};
+  }
+
+  const edgeTypes = [
+    ...(filter.layers?.citation !== false ? ['citation' as const] : []),
+    ...(filter.layers?.conceptAgree !== false ? ['conceptAgree' as const] : []),
+    ...(filter.layers?.conceptConflict !== false ? ['conceptConflict' as const] : []),
+    ...(filter.layers?.conceptExtend !== false ? ['conceptExtend' as const] : []),
+    ...(filter.layers?.semanticNeighbor !== false ? ['semanticNeighbor' as const] : []),
+    ...(filter.layers?.notes !== false ? ['notes' as const] : []),
+  ];
+
+  return {
+    ...(filter.hopDepth !== 'global' && filter.focusNodeId ? { centerId: filter.focusNodeId } : {}),
+    ...(filter.focusNodeType ? { centerType: filter.focusNodeType } : {}),
+    ...(filter.hopDepth !== 'global' ? { depth: filter.hopDepth } : {}),
+    edgeTypes,
+    ...(filter.similarityThreshold !== undefined ? { similarityThreshold: filter.similarityThreshold } : {}),
+    ...(filter.includeConcepts !== undefined ? { includeConcepts: filter.includeConcepts } : {}),
+    ...(filter.includeNotes !== undefined ? { includeNotes: filter.includeNotes } : {}),
+  };
+}
 
 export function registerSystemHandlers(ctx: AppContext): void {
   const { logger } = ctx;
@@ -34,17 +60,24 @@ export function registerSystemHandlers(ctx: AppContext): void {
   // ── db:relations ──
 
   typedHandler('db:relations:getGraph', logger, async (_e, filter?) => {
-    const f = (filter as Record<string, unknown>) ?? {};
-    return await ctx.dbProxy.getRelationGraph({
-      centerId: f['focusNodeId'] ? asPaperId(f['focusNodeId'] as string) : undefined,
-      depth: (f['hopDepth'] as number) ?? 2,
-    } as RelationGraphFilter) as any;
+    return await ctx.dbProxy.getRelationGraph(toRelationGraphFilter(filter as GraphFilter | undefined)) as any;
   });
 
-  typedHandler('db:relations:getNeighborhood', logger, async (_e, nodeId, depth, _layers?) => {
+  typedHandler('db:relations:getNeighborhood', logger, async (_e, nodeId, depth, layers?) => {
     return await ctx.dbProxy.getRelationGraph({
-      centerId: asPaperId(nodeId),
+      centerId: nodeId,
+      centerType: 'paper',
       depth: depth ?? 2,
+      edgeTypes: [
+        ...(layers?.citation !== false ? ['citation' as const] : []),
+        ...(layers?.conceptAgree !== false ? ['conceptAgree' as const] : []),
+        ...(layers?.conceptConflict !== false ? ['conceptConflict' as const] : []),
+        ...(layers?.conceptExtend !== false ? ['conceptExtend' as const] : []),
+        ...(layers?.semanticNeighbor !== false ? ['semanticNeighbor' as const] : []),
+        ...(layers?.notes !== false ? ['notes' as const] : []),
+      ],
+      includeConcepts: true,
+      includeNotes: true,
     } as RelationGraphFilter) as any;
   });
 

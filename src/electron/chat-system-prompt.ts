@@ -58,11 +58,14 @@ export async function buildChatSystemPromptContext(
     acquiredPapers,
     memoCount,
     noteCount,
-    topConcepts: activeConcepts.slice(0, 10).map((concept) => ({
-      nameEn: ((concept['nameEn'] ?? concept['name_en']) as string) ?? '',
-      maturity: (concept['maturity'] as string) ?? 'working',
-      mappedPapers: 0,
-    })),
+    topConcepts: activeConcepts
+      .map((concept) => ({
+        nameEn: ((concept['nameEn'] ?? concept['name_en'] ?? concept['nameZh'] ?? concept['name_zh']) as string) ?? '',
+        maturity: (concept['maturity'] as string) ?? 'working',
+        mappedPapers: Number(concept['mappedPaperCount'] ?? concept['mapped_paper_count'] ?? 0),
+      }))
+      .sort((left, right) => right.mappedPapers - left.mappedPapers)
+      .slice(0, 10),
     advisorySuggestions: appContext.advisoryAgent?.getLatestSuggestions() ?? [],
     toolCount: appContext.capabilityRegistry?.operationCount ?? 0,
     ...(activePaper ? { activePaper } : {}),

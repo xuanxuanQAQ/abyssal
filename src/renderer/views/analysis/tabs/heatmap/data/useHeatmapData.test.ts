@@ -181,4 +181,45 @@ describe('buildProcessedHeatmapSnapshot', () => {
     expect(snapshot.cellLookup.get('0:1')).toMatchObject({ mappingId: 'paper-b::root' });
     expect(snapshot.cellLookup.has('1:0')).toBe(false);
   });
+
+  it('uses generic paper and concept labels instead of internal ids when metadata is missing', () => {
+    const snapshot = buildProcessedHeatmapSnapshot({
+      matrix: {
+        conceptIds: ['raw-concept-id'],
+        paperIds: ['raw-paper-id'],
+        cells: [],
+      },
+      framework: null,
+      papers: [
+        {
+          id: 'raw-paper-id',
+          title: '',
+          authors: [],
+          year: 0,
+          abstract: null,
+          doi: null,
+          arxivId: null,
+          pmcid: null,
+          paperType: 'journal',
+          relevance: 'low',
+          fulltextStatus: 'not_attempted',
+          fulltextPath: null,
+          fulltextSource: null,
+          textPath: null,
+          analysisStatus: 'not_started',
+          decisionNote: null,
+          failureReason: null,
+          failureCount: 0,
+          tags: [],
+          dateAdded: '2026-01-01T00:00:00.000Z',
+          analysisReport: null,
+        },
+      ],
+      sortBy: 'relevance',
+      collapsedGroups: new Set(),
+    });
+
+    expect(snapshot.paperLabels).toEqual(['Paper 1']);
+    expect(snapshot.concepts.map((concept) => concept.name)).toEqual(['Concept 1']);
+  });
 });

@@ -33,7 +33,7 @@ const {
   const runnerStartCalls: Array<{ type: string; options: Record<string, unknown> }> = [];
   const runnerCompletionResults: Array<Promise<unknown> | unknown> = [];
   const workflowRunnerInstances: any[] = [];
-  const deriveFrameworkStateMock = vi.fn(() => 'working');
+  const deriveFrameworkStateMock = vi.fn((_stats: unknown) => 'working');
   const dbService = {
     getStats: vi.fn(),
     getSuggestedConcepts: vi.fn(),
@@ -134,7 +134,7 @@ vi.mock('../electron/lock', () => ({
 }));
 
 vi.mock('../core/config/framework-state', () => ({
-  deriveFrameworkState: (...args: unknown[]) => deriveFrameworkStateMock(...args),
+  deriveFrameworkState: (stats: unknown) => deriveFrameworkStateMock(stats),
 }));
 
 vi.mock('../core/config/config-validator', () => ({

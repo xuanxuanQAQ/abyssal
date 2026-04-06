@@ -315,7 +315,7 @@ export function registerSettingsHandlers(ctx: AppContext): void {
       };
     }
     try {
-      const diag = rag.getDiagnosticsSummary();
+      const diag = await rag.getDiagnosticsSummary();
       return { available: true, ...diag };
     } catch (err) {
       return {
@@ -327,5 +327,14 @@ export function registerSettingsHandlers(ctx: AppContext): void {
         chunkStats: [],
       };
     }
+  });
+
+  // ── settings:rebuildIntentEmbeddings ──
+  typedHandler('settings:rebuildIntentEmbeddings', logger, async () => {
+    // Lazy-import to avoid circular dependency at module load time
+    const { getOrCreateCopilotRuntime } = await import('./copilot-handler');
+    const runtime = getOrCreateCopilotRuntime(ctx);
+    await runtime.rebuildIntentEmbeddings();
+    logger.info('Intent embeddings rebuilt via settings trigger');
   });
 }

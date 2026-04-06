@@ -38,7 +38,6 @@ interface Segment {
 
 export function ConceptCoverageBar({
   conceptName,
-  conceptId,
   synthesized,
   analyzed,
   acquired,
@@ -101,14 +100,6 @@ export function ConceptCoverageBar({
             }}
           >
             {conceptName}
-          </span>
-          <span
-            style={{
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-muted)',
-            }}
-          >
-            ({conceptId})
           </span>
         </div>
 

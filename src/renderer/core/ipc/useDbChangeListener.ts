@@ -30,6 +30,7 @@ const TABLE_TO_QUERY_KEYS: Record<string, string[][]> = {
   annotations:        [['annotations']],
   relations:          [['relations'], ['graph']],
   articles:           [['articles']],
+  article_drafts:     [['drafts'], ['articles']],
   sections:           [['articles']],
   outlines:           [['articles']],
   tags:               [['tags']],

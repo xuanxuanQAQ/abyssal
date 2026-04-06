@@ -78,7 +78,7 @@ describe('AcquireService runtime branches', () => {
     buildStrategyMock.mockReturnValue({ simpleCandidates: [], complexCandidates: [] });
     computeSha256Mock.mockResolvedValue('sha256-test-value');
     deleteFileIfExistsMock.mockImplementation((filePath: string) => {
-      try { fs.unlinkSync(filePath); } catch {}
+      try { fs.unlinkSync(filePath); } catch { /* ignore */ }
     });
   });
 

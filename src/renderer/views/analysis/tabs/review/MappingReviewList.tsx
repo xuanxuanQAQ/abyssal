@@ -81,12 +81,13 @@ export function MappingReviewList({ paperId }: MappingReviewListProps) {
           gap: 8,
         }}
       >
-        {mappings.map((mapping) => (
+        {mappings.map((mapping, index) => (
           <MappingReviewCard
             key={mapping.id}
             mapping={mapping}
             paperId={paperId}
             conceptName={conceptNames.get(mapping.conceptId)}
+            fallbackConceptLabel={`Concept ${index + 1}`}
           />
         ))}
       </div>
@@ -100,12 +101,13 @@ interface MappingReviewCardProps {
   mapping: ConceptMapping;
   paperId: string;
   conceptName: string | undefined;
+  fallbackConceptLabel: string;
 }
 
-function MappingReviewCard({ mapping, paperId, conceptName }: MappingReviewCardProps) {
+function MappingReviewCard({ mapping, paperId, conceptName, fallbackConceptLabel }: MappingReviewCardProps) {
   const adjudicated = mapping.adjudicationStatus !== 'pending';
   const relation = getRelationIndicator(mapping.relationType);
-  const displayName = conceptName ?? mapping.conceptId;
+  const displayName = conceptName?.trim() || fallbackConceptLabel;
 
   return (
     <div
@@ -126,8 +128,7 @@ function MappingReviewCard({ mapping, paperId, conceptName }: MappingReviewCardP
           marginBottom: 6,
         }}
       >
-        {mapping.conceptId.startsWith('C-') ? mapping.conceptId : `C-${mapping.conceptId.slice(0, 2).toUpperCase()}`}
-        : {displayName}
+        {displayName}
       </div>
 
       {/* Relation type + confidence */}

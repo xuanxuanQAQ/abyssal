@@ -1787,6 +1787,11 @@ body.is-dragging [data-drag-inert] {
   50% { opacity: 0.4; }
 }
 
+@keyframes ghost-caret-blink {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.2; }
+}
+
 /* ctx-enter 已在上方统一定义，crossfade / multi-paper 共用 */
 
 /* ═══════════════════════════════════════════

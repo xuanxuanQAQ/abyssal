@@ -6,7 +6,7 @@ import { usePaper } from '../../../core/ipc/hooks/usePapers';
 
 interface NodeContextMenuProps {
   nodeId: string | null;
-  nodeType: 'paper' | 'concept' | null;
+  nodeType: 'paper' | 'concept' | 'memo' | 'note' | null;
   position: { x: number; y: number } | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -164,7 +164,7 @@ function NodeContextMenu({
       <MenuItem
         label={t('graph.nodeMenu.focusExpand')}
         onClick={() => {
-          focusGraphNode(nodeId);
+          focusGraphNode(nodeId, nodeType ?? 'paper');
           onOpenChange(false);
         }}
       />

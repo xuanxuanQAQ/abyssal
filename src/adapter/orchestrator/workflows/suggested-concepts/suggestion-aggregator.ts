@@ -83,11 +83,19 @@ export async function aggregateSuggestions(
 
           existingPaperIds.push(paperId);
           const newCount = existingPaperIds.length;
+          const mergedKeywords = Array.from(new Set([
+            ...parseJsonArray(existing['suggested_keywords'] as string),
+            ...(suggestion.suggestedKeywords ?? []),
+          ])).slice(0, 10);
 
           await db.updateSuggestedConcept(existing['id'] as string, {
             source_paper_count: newCount,
             source_paper_ids: JSON.stringify(existingPaperIds),
             frequency: (existing['frequency'] as number ?? 0) + suggestion.frequencyInPaper,
+            reason: selectLongerText(existing['reason'], suggestion.reason),
+            suggested_definition: selectPreferredDefinition(existing['suggested_definition'], suggestion.suggestedDefinition),
+            suggested_keywords: JSON.stringify(mergedKeywords),
+            closest_existing_concept_id: existing['closest_existing_concept_id'] ?? suggestion.closestExisting,
             updated_at: new Date().toISOString(),
           });
 
@@ -148,4 +156,15 @@ function parseJsonArray(json: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function selectLongerText(existing: unknown, incoming: string): string {
+  const existingText = typeof existing === 'string' ? existing : '';
+  return incoming.length > existingText.length ? incoming : existingText;
+}
+
+function selectPreferredDefinition(existing: unknown, incoming: string | null): string | null {
+  const existingText = typeof existing === 'string' ? existing.trim() : '';
+  if (existingText.length > 0) return existingText;
+  return typeof incoming === 'string' && incoming.trim().length > 0 ? incoming : null;
 }

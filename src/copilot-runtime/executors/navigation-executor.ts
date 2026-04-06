@@ -30,7 +30,12 @@ export class NavigationExecutor {
     operation: CopilotOperation,
     step: ExecutionStep & { kind: 'navigate' },
     emitter: OperationEventEmitter,
+    signal?: AbortSignal,
   ): Promise<NavigationExecutorResult> {
+    if (signal?.aborted) {
+      return { success: false, view: step.view };
+    }
+
     try {
       await this.deps.navigate(step.view, step.entityId);
       return { success: true, view: step.view, ...(step.entityId != null ? { entityId: step.entityId } : {}) };

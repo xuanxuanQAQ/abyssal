@@ -7,73 +7,178 @@
  * - 右：⋮ 更多菜单
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pin, PinOff, Eye, FileText, Lightbulb, PenTool, Network, MoreVertical, Trash2, PanelRightClose, Library } from 'lucide-react';
+import { Pin, PinOff, Eye, FileText, Lightbulb, PenTool, Network, MoreVertical, Trash2, PanelRightClose, Library, StickyNote } from 'lucide-react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useAppStore } from '../../core/store';
 import { useChatStore } from '../../core/store/useChatStore';
+import { useMemo as useMemoItem } from '../../core/ipc/hooks/useMemos';
+import { useNote } from '../../core/ipc/hooks/useNotes';
 import { useEffectiveSource } from './engine/useEffectiveSource';
 import { useDerivedContextSource } from './engine/useContextSource';
 import { contextSourceKey } from './engine/contextSourceKey';
+import { useArticle } from '../../views/writing/hooks/useArticle';
+import { useEntityDisplayNameCache } from '../../views/notes/shared/entityDisplayNameCache';
 import type { ContextSource } from '../../../shared-types/models';
 import { Z_INDEX } from '../../styles/zIndex';
 
-/**
- * §4.4 实体名称解析
- */
-function resolveEntityName(source: ContextSource, t: ReturnType<typeof import('react-i18next').useTranslation>['t']): { icon: React.ReactNode; name: string } {
+function isFallbackEntityLabel(id: string, label: string | null | undefined): boolean {
+  if (!label) return true;
+  return label === id || label === id.slice(0, 10);
+}
+
+function truncateLabel(value: string, maxLength = 40): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function buildMemoLabel(text: string | null | undefined, fallback: string): string {
+  if (!text) return fallback;
+  const normalized = truncateLabel(text, 36);
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function findSectionTitle(
+  sections: Array<{ id: string; title: string; children: Array<{ id: string; title: string; children: unknown[] }> }>,
+  sectionId: string,
+): string | null {
+  for (const section of sections) {
+    if (section.id === sectionId) {
+      return section.title;
+    }
+    const nested = findSectionTitle(section.children as Array<{ id: string; title: string; children: Array<{ id: string; title: string; children: unknown[] }> }>, sectionId);
+    if (nested) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+function resolveEntityIcon(source: ContextSource): React.ReactNode {
   switch (source.type) {
     case 'paper':
-      return {
-        icon: <FileText size={14} />,
-        name: t('context.header.paper', { id: source.paperId.slice(0, 12) }),
-      };
+      return <FileText size={14} />;
     case 'papers':
-      return {
-        icon: <FileText size={14} />,
-        name: t('context.header.papers', { count: source.paperIds.length }),
-      };
+      return <FileText size={14} />;
     case 'concept':
-      return {
-        icon: <Lightbulb size={14} />,
-        name: source.conceptId,
-      };
+      return <Lightbulb size={14} />;
     case 'mapping':
-      return {
-        icon: <Network size={14} />,
-        name: t('context.header.mapping', { id: source.mappingId.slice(0, 12) }),
-      };
+      return <Network size={14} />;
     case 'section':
-      return {
-        icon: <PenTool size={14} />,
-        name: `§${source.sectionId}`,
-      };
+      return <PenTool size={14} />;
+    case 'writing-selection':
+      return <PenTool size={14} />;
     case 'graphNode':
-      return {
-        icon: source.nodeType === 'paper' ? <FileText size={14} /> : <Lightbulb size={14} />,
-        name: source.nodeId.slice(0, 12) + '…',
-      };
+      if (source.nodeType === 'paper') return <FileText size={14} />;
+      if (source.nodeType === 'concept') return <Lightbulb size={14} />;
+      if (source.nodeType === 'note') return <StickyNote size={14} />;
+      return <PenTool size={14} />;
     case 'memo':
-      return {
-        icon: <PenTool size={14} />,
-        name: t('context.header.memo', { id: source.memoId.slice(0, 12) }),
-      };
+      return <PenTool size={14} />;
     case 'note':
-      return {
-        icon: <FileText size={14} />,
-        name: t('context.header.note', { id: source.noteId.slice(0, 12) }),
-      };
+      return <FileText size={14} />;
     case 'allSelected':
-      return {
-        icon: <Library size={14} />,
-        name: t('context.header.allSelected'),
-      };
+      return <Library size={14} />;
     case 'empty':
-      return {
-        icon: null,
-        name: t('context.title'),
-      };
+      return null;
+  }
+}
+
+function useResolvedEntityName(source: ContextSource, t: ReturnType<typeof import('react-i18next').useTranslation>['t']): string {
+  const displayNames = useEntityDisplayNameCache();
+  const { data: note } = useNote(
+    source.type === 'note'
+      ? source.noteId
+      : source.type === 'graphNode' && source.nodeType === 'note'
+        ? source.nodeId
+        : null,
+  );
+  const { data: memo } = useMemoItem(
+    source.type === 'memo'
+      ? source.memoId
+      : source.type === 'graphNode' && source.nodeType === 'memo'
+        ? source.nodeId
+        : null,
+  );
+  const { article } = useArticle(
+    source.type === 'section' || source.type === 'writing-selection'
+      ? source.articleId
+      : null,
+  );
+
+  const paperId = source.type === 'paper'
+    ? source.paperId
+    : source.type === 'mapping'
+      ? source.paperId
+      : source.type === 'graphNode' && source.nodeType === 'paper'
+        ? source.nodeId
+        : null;
+  const conceptId = source.type === 'concept'
+    ? source.conceptId
+    : source.type === 'mapping'
+      ? source.conceptId
+      : source.type === 'graphNode' && source.nodeType === 'concept'
+        ? source.nodeId
+        : null;
+
+  const resolvedPaperLabel = paperId ? displayNames.getPaperName(paperId) : null;
+  const paperLabel = paperId && !isFallbackEntityLabel(paperId, resolvedPaperLabel)
+    ? resolvedPaperLabel
+    : null;
+  const resolvedConceptLabel = conceptId ? displayNames.getConceptName(conceptId) : null;
+  const conceptLabel = conceptId && !isFallbackEntityLabel(conceptId, resolvedConceptLabel)
+    ? resolvedConceptLabel
+    : null;
+  const activeSectionId = source.type === 'section' || source.type === 'writing-selection'
+    ? source.sectionId
+    : null;
+  const sectionTitle = useMemo(() => {
+    if (!article || !activeSectionId) return null;
+    return findSectionTitle(article.sections as Array<{ id: string; title: string; children: Array<{ id: string; title: string; children: unknown[] }> }>, activeSectionId);
+  }, [article, activeSectionId]);
+
+  switch (source.type) {
+    case 'paper':
+      return paperLabel ?? t('context.header.paper');
+    case 'papers':
+      return t('context.header.papers', { count: source.paperIds.length });
+    case 'concept':
+      return conceptLabel ?? t('context.header.concept');
+    case 'mapping':
+      if (paperLabel && conceptLabel) {
+        return `${paperLabel} · ${conceptLabel}`;
+      }
+      return paperLabel ?? conceptLabel ?? t('context.header.mapping');
+    case 'section':
+      return sectionTitle ? truncateLabel(sectionTitle) : t('context.header.section');
+    case 'writing-selection': {
+      const selectedPreview = truncateLabel(source.selectedText, 34);
+      if (selectedPreview.length > 0) {
+        return selectedPreview;
+      }
+      return sectionTitle ? truncateLabel(sectionTitle) : t('context.header.section');
+    }
+    case 'graphNode':
+      if (source.nodeType === 'paper') {
+        return paperLabel ?? t('context.header.paper');
+      }
+      if (source.nodeType === 'concept') {
+        return conceptLabel ?? t('context.header.concept');
+      }
+      if (source.nodeType === 'note') {
+        return note?.title?.trim() ? truncateLabel(note.title, 36) : t('context.header.note');
+      }
+      return buildMemoLabel(memo?.text, t('context.header.memo'));
+    case 'memo':
+      return buildMemoLabel(memo?.text, t('context.header.memo'));
+    case 'note':
+      return note?.title?.trim() ? truncateLabel(note.title, 36) : t('context.header.note');
+    case 'allSelected':
+      return t('context.header.allSelected');
+    case 'empty':
+      return t('context.title');
   }
 }
 
@@ -104,7 +209,8 @@ export function ContextHeader() {
   const derivedSource = useDerivedContextSource();
   const isPeeking = peekSource !== null && contextPanelPinned;
 
-  const { icon, name } = resolveEntityName(effectiveSource, t);
+  const icon = resolveEntityIcon(effectiveSource);
+  const name = useResolvedEntityName(effectiveSource, t);
 
   const handlePinClick = useCallback(() => {
     if (isPeeking) {

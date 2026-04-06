@@ -19,7 +19,7 @@ import { useEffectiveSource } from '../engine/useEffectiveSource';
 import { ChunkAccumulator } from './streaming/ChunkAccumulator';
 import { buildChatCopilotEnvelope, mapCopilotToolStatus } from './copilotBridge';
 import { useChatStore, type ChatDockMode } from '../../../core/store/useChatStore';
-import { useReaderStore } from '../../../core/store/useReaderStore';
+import { useEditorStore } from '../../../core/store/useEditorStore';
 import { getAPI } from '../../../core/ipc/bridge';
 import type { ChatMessage } from '../../../../shared-types/models';
 import type { CopilotOperationEvent, CopilotSessionState } from '../../../../copilot-runtime/types';
@@ -27,7 +27,19 @@ import type { CopilotOperationEvent, CopilotSessionState } from '../../../../cop
 interface OperationBinding {
   messageId: string;
   sessionKey: string;
+  intent?: string;
 }
+
+/** Short status notes shown in chat for operations that don't produce chat text. */
+const DRAFT_INTENT_LABELS: Record<string, string> = {
+  'rewrite-selection': '✎ 已在编辑器中改写选区',
+  'expand-selection': '✎ 已在编辑器中扩展选区',
+  'compress-selection': '✎ 已在编辑器中压缩选区',
+  'continue-writing': '✎ 已在编辑器中续写',
+  'generate-section': '✎ 已生成章节内容',
+  'navigate': '↗ 已跳转到目标视图',
+  'run-workflow': '⚙ 工作流已启动',
+};
 
 function getToolDisplayLabel(
   toolName: string,
@@ -59,13 +71,25 @@ export const ChatDock = React.memo(function ChatDock() {
   const chatStreaming = useChatStore((s) => s.chatStreaming);
   const chatDockMode = useChatStore((s) => s.chatDockMode);
   const setChatDockMode = useChatStore((s) => s.setChatDockMode);
-  const quotedSelection = useReaderStore((s) => s.quotedSelection);
-  const selectionPayload = useReaderStore((s) => s.selectionPayload);
-
   const source = useEffectiveSource();
   const buildChatContext = useChatContext();
-  const hasSelectionMapping = Boolean(quotedSelection || selectionPayload?.images?.length || selectionPayload?.text);
-  const historyBottomInset = hasSelectionMapping ? 196 : 118;
+
+  // Dynamically measure the input overlay height so the chat history
+  // bottom padding always matches the actual input bar size.
+  const inputFrameRef = useRef<HTMLDivElement>(null);
+  const [historyBottomInset, setHistoryBottomInset] = useState(118);
+  useEffect(() => {
+    const el = inputFrameRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      // input overlay is positioned at bottom: 18px, add a small gap (12px)
+      const inset = Math.ceil(entry.contentRect.height) + 18 + 12;
+      setHistoryBottomInset(inset);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const streamingAssistantMessage = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant' && message.status === 'streaming');
@@ -203,6 +227,14 @@ export const ChatDock = React.memo(function ChatDock() {
       case 'model.delta':
         if (event.channel === 'chat') {
           accumulator.pushChunk(event.text);
+        } else if (event.channel === 'draft') {
+          // Draft deltas → editor store for streaming preview.
+          // Track the operationId so the preview overlay can abort it.
+          const es = useEditorStore.getState();
+          if (!es.activeDraftOperationId) {
+            es.setActiveDraftOperationId(event.operationId);
+          }
+          es.appendDraftStreamText(event.text);
         }
         break;
 
@@ -215,22 +247,66 @@ export const ChatDock = React.memo(function ChatDock() {
         });
         break;
 
-      case 'operation.completed':
+      case 'operation.completed': {
+        // For draft-mode operations (rewrite/expand/compress/continue-writing)
+        // the accumulator never receives chat-channel text — the assistant
+        // message would be empty.  Inject a short status note so the chat
+        // history shows what happened instead of an empty bubble.
+        const completedMsg = useChatStore.getState().sessions[binding.sessionKey]
+          ?.messages.find((m) => m.id === binding.messageId);
+        const hasContent = Boolean(
+          completedMsg && ((completedMsg.streamBuffer ?? completedMsg.content).trim().length > 0),
+        );
+        if (!hasContent) {
+          const label = DRAFT_INTENT_LABELS[binding.intent ?? '']
+            ?? (event as { resultSummary?: string }).resultSummary
+            ?? '✓ 操作已完成';
+          accumulator.pushChunk(label);
+        }
         finalizeOperation(event.operationId);
         break;
+      }
 
       case 'operation.failed':
-        accumulator.pushChunk(`\n\n**Error:** ${event.message}`);
+        // If a draft operation was active, show the error in the preview
+        // overlay instead of only in chat.
+        if (useEditorStore.getState().activeDraftOperationId === event.operationId) {
+          window.dispatchEvent(new CustomEvent('ai:draftError', {
+            detail: { message: event.message },
+          }));
+        } else {
+          accumulator.pushChunk(`\n\n**Error:** ${event.message}`);
+        }
+        useEditorStore.getState().clearDraftStreamText();
         finalizeOperation(event.operationId);
         break;
 
       case 'operation.aborted':
+        useEditorStore.getState().clearDraftStreamText();
         finalizeOperation(event.operationId);
         break;
 
       case 'operation.clarification_required':
         finalizeOperation(event.operationId, false);
         void syncPendingClarification(binding.sessionKey);
+        break;
+
+      case 'patch.deferred':
+        // Two-stage confirmation: store patch on the assistant message
+        useChatStore.getState().updateMessageInSession(
+          binding.sessionKey,
+          binding.messageId,
+          (msg) => {
+            const patches = msg.pendingEditorPatches ?? [];
+            patches.push({
+              id: crypto.randomUUID(),
+              patch: event.patch as unknown as Record<string, unknown>,
+              summary: event.summary ?? '',
+              applied: false,
+            });
+            msg.pendingEditorPatches = patches;
+          },
+        );
         break;
 
       default:
@@ -246,8 +322,8 @@ export const ChatDock = React.memo(function ChatDock() {
     }
   }, [handleCopilotEvent]);
 
-  const registerOperationBinding = useCallback((operationId: string, messageId: string, targetSessionKey: string) => {
-    operationBindingsRef.current.set(operationId, { messageId, sessionKey: targetSessionKey });
+  const registerOperationBinding = useCallback((operationId: string, messageId: string, targetSessionKey: string, intent?: string) => {
+    operationBindingsRef.current.set(operationId, { messageId, sessionKey: targetSessionKey, ...(intent !== undefined && { intent }) });
     sessionOperationRef.current.set(targetSessionKey, operationId);
     getOrCreateAccumulator(operationId, messageId, targetSessionKey);
     flushPendingCopilotEvents(operationId);
@@ -379,6 +455,83 @@ export const ChatDock = React.memo(function ChatDock() {
     [buildChatContext, finalizeOperation, getOrCreateAccumulator, registerOperationBinding, rebindOperation, sessionKey]
   );
 
+  /** 以明确 intent 发送（写作快捷操作） */
+  const handleIntentSend = useCallback(
+    async (text: string, intent: import('../../../../copilot-runtime/types').CopilotIntent) => {
+      if (sendingRef.current) return;
+      sendingRef.current = true;
+
+      // For editor mutations, immediately show the preview overlay in
+      // "waiting" state (empty streaming text + blinking cursor) so the
+      // user gets instant feedback before the first LLM delta arrives.
+      const EDITOR_MUTATION_INTENTS = new Set([
+        'rewrite-selection', 'expand-selection', 'compress-selection', 'continue-writing',
+      ]);
+      if (EDITOR_MUTATION_INTENTS.has(intent)) {
+        useEditorStore.getState().appendDraftStreamText('');
+      }
+
+      const userMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        timestamp: Date.now(),
+        status: 'sending',
+      };
+
+      useChatStore.getState().ensureSession(sessionKey);
+      useChatStore.getState().addMessage(userMessage);
+      persistMessage({ ...userMessage, status: 'completed' }, sessionKey);
+
+      const chatContext = {
+        ...buildChatContext(),
+        conversationKey: sessionKey,
+      };
+
+      try {
+        const envelope = buildChatCopilotEnvelope(sessionKey, text, chatContext, { intent });
+        const assistantMessage: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          status: 'streaming',
+          streamBuffer: '',
+        };
+
+        useChatStore.getState().addMessage(assistantMessage);
+        useChatStore.getState().setChatStreaming(true);
+        registerOperationBinding(envelope.operation.id, assistantMessage.id, sessionKey, intent);
+
+        const result = await getAPI().copilot.execute(envelope);
+        rebindOperation(envelope.operation.id, result.operationId);
+        useChatStore.getState().updateMessage(userMessage.id, (msg) => {
+          msg.status = 'sent';
+        });
+      } catch (err) {
+        const errorMessage = (err as Error).message ?? 'Send failed';
+        useChatStore.getState().updateMessage(userMessage.id, (msg) => {
+          msg.status = 'error';
+        });
+        const assistantOperationId = sessionOperationRef.current.get(sessionKey);
+        if (assistantOperationId) {
+          const binding = operationBindingsRef.current.get(assistantOperationId);
+          const accumulator = binding
+            ? getOrCreateAccumulator(assistantOperationId, binding.messageId, binding.sessionKey)
+            : null;
+          if (accumulator) {
+            accumulator.pushChunk(`**Error:** ${errorMessage}`);
+            finalizeOperation(assistantOperationId);
+          }
+        }
+        useChatStore.getState().setChatStreaming(false);
+      } finally {
+        sendingRef.current = false;
+      }
+    },
+    [buildChatContext, finalizeOperation, getOrCreateAccumulator, registerOperationBinding, rebindOperation, sessionKey]
+  );
+
   /** 重试失败的用户消息 */
   const handleRetry = useCallback(
     (messageId: string) => {
@@ -389,6 +542,24 @@ export const ChatDock = React.memo(function ChatDock() {
     },
     [sessionKey, handleSend]
   );
+
+  // 监听 FloatingToolbar 的 AI intent 事件
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const intent = (e as CustomEvent<{ intent: import('../../../../copilot-runtime/types').CopilotIntent }>).detail?.intent;
+      if (intent) {
+        const label: Record<string, string> = {
+          'rewrite-selection': '改写选区',
+          'expand-selection': '扩展选区',
+          'compress-selection': '压缩选区',
+          'continue-writing': '续写',
+        };
+        void handleIntentSend(label[intent] ?? intent, intent);
+      }
+    };
+    window.addEventListener('ai:writingIntent', handler);
+    return () => window.removeEventListener('ai:writingIntent', handler);
+  }, [handleIntentSend]);
 
   const handleAbort = useCallback(() => {
     const operationId = sessionOperationRef.current.get(sessionKey);
@@ -452,6 +623,24 @@ export const ChatDock = React.memo(function ChatDock() {
       });
     }
   }, [clearOperationState, registerOperationBinding, rebindOperation, sessionKey]);
+
+  const handleApplyPatch = useCallback((messageId: string, patchId: string) => {
+    const session = useChatStore.getState().sessions[sessionKey];
+    const message = session?.messages.find((m) => m.id === messageId);
+    const pendingPatch = message?.pendingEditorPatches?.find((p) => p.id === patchId);
+    if (!pendingPatch || pendingPatch.applied) return;
+
+    // Dispatch the patch to the editor via the standard event mechanism
+    window.dispatchEvent(new CustomEvent('ai:applyEditorPatch', {
+      detail: { command: 'apply-editor-patch', patch: pendingPatch.patch },
+    }));
+
+    // Mark as applied
+    useChatStore.getState().updateMessageInSession(sessionKey, messageId, (msg) => {
+      const target = msg.pendingEditorPatches?.find((p) => p.id === patchId);
+      if (target) target.applied = true;
+    });
+  }, [sessionKey]);
 
   const toggleFullscreen = useCallback(() => {
     const newMode: ChatDockMode = chatDockMode === 'fullscreen' ? 'expanded' : 'fullscreen';
@@ -599,6 +788,7 @@ export const ChatDock = React.memo(function ChatDock() {
             onLoadMore={loadMoreHistory}
             onRetry={handleRetry}
             onClarificationSelect={handleClarificationSelect}
+            onApplyPatch={handleApplyPatch}
             bottomInset={historyBottomInset}
           />
         ) : (
@@ -620,7 +810,7 @@ export const ChatDock = React.memo(function ChatDock() {
       </div>
 
       {/* 输入框 */}
-      <div className="chat-dock-input-overlay" style={{ position: 'absolute', left: 16, right: 16, bottom: 18, zIndex: 3, pointerEvents: 'none' }}>
+      <div ref={inputFrameRef} className="chat-dock-input-overlay" style={{ position: 'absolute', left: 16, right: 16, bottom: 18, zIndex: 3, pointerEvents: 'none' }}>
         <div className="chat-dock-input-frame" style={{
           boxShadow: chatStreaming
             ? '0 20px 40px rgba(59, 130, 246, 0.12), 0 8px 18px rgba(15, 23, 42, 0.08)'
@@ -635,6 +825,7 @@ export const ChatDock = React.memo(function ChatDock() {
           <ChatInput
             source={source}
             onSend={handleSend}
+            onIntentSend={handleIntentSend}
             onAbort={handleAbort}
             streaming={chatStreaming}
             statusText={chatStreaming ? toolStatusText : undefined}

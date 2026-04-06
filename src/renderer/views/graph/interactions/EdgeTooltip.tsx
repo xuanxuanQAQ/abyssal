@@ -28,8 +28,14 @@ function getTooltipText(layer: string, weight: number, conceptName?: string): st
       return `概念一致: ${conceptName ?? '未知'} (置信度: ${weight.toFixed(2)})`;
     case 'conceptConflict':
       return `概念冲突: ${conceptName ?? '未知'} (置信度: ${weight.toFixed(2)})`;
+    case 'conceptExtend':
+      return `概念延展: ${conceptName ?? '未知'} (置信度: ${weight.toFixed(2)})`;
     case 'semanticNeighbor':
       return `语义相似度: ${weight.toFixed(2)}`;
+    case 'conceptMapping':
+      return `论文-概念映射: ${conceptName ?? '未知'}`;
+    case 'notes':
+      return '笔记关联';
     default:
       return `${layer} (${weight.toFixed(2)})`;
   }

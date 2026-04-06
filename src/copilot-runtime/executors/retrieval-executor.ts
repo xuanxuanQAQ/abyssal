@@ -49,6 +49,11 @@ export class RetrievalExecutor {
     try {
       const results = await this.deps.ragSearch(step.query, 10);
 
+      // Check abort after the (potentially long) RAG search completes
+      if (signal?.aborted) {
+        return { evidence: [], query: step.query };
+      }
+
       const evidence: EvidenceChunk[] = results.map((r) => ({
         chunkId: r.chunkId,
         paperId: r.paperId,

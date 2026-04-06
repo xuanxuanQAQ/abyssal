@@ -25,6 +25,7 @@ interface ChatHistoryProps {
   onLoadMore: () => void;
   onRetry?: (messageId: string) => void;
   onClarificationSelect?: (messageId: string, optionId: string) => void;
+  onApplyPatch?: (messageId: string, patchId: string) => void;
   bottomInset?: number;
 }
 
@@ -35,6 +36,7 @@ export const ChatHistory = React.memo(function ChatHistory({
   onLoadMore,
   onRetry,
   onClarificationSelect,
+  onApplyPatch,
   bottomInset = 112,
 }: ChatHistoryProps) {
   const { t } = useTranslation();
@@ -133,6 +135,7 @@ export const ChatHistory = React.memo(function ChatHistory({
                     message={msg}
                     onRetry={onRetry}
                     onClarificationSelect={onClarificationSelect}
+                    onApplyPatch={onApplyPatch}
                     showAssistantLabel={msg.id === firstAssistantId}
                   />
                 </div>
@@ -147,6 +150,7 @@ export const ChatHistory = React.memo(function ChatHistory({
                 message={msg}
                 onRetry={onRetry}
                 onClarificationSelect={onClarificationSelect}
+                onApplyPatch={onApplyPatch}
                 showAssistantLabel={msg.id === firstAssistantId}
               />
             ))}

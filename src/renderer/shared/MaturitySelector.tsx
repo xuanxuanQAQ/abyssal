@@ -7,6 +7,7 @@
 
 import React, { useCallback } from 'react';
 import * as ToggleGroup from '@radix-ui/react-toggle-group';
+import { useAppDialog } from './useAppDialog';
 import type { Maturity } from '../../shared-types/enums';
 
 interface MaturitySelectorProps {
@@ -28,14 +29,19 @@ function isDowngrade(from: Maturity, to: Maturity): boolean {
 }
 
 export function MaturitySelector({ value, onChange, disabled }: MaturitySelectorProps) {
+  const { confirm, dialog } = useAppDialog();
+
   const handleValueChange = useCallback(
-    (next: string) => {
+    async (next: string) => {
       if (!next || next === value) return;
       const nextMaturity = next as Maturity;
       if (isDowngrade(value, nextMaturity)) {
-        const confirmed = window.confirm(
-          '确认降级成熟度\n\n降级成熟度将影响后续分析的 prompt 指令和检索策略，是否继续？'
-        );
+        const confirmed = await confirm({
+          title: '确认降级成熟度',
+          description: '降级成熟度将影响后续分析的 prompt 指令和检索策略，是否继续？',
+          confirmLabel: '继续降级',
+          confirmTone: 'danger',
+        });
         if (confirmed) {
           onChange(nextMaturity);
         }
@@ -43,45 +49,48 @@ export function MaturitySelector({ value, onChange, disabled }: MaturitySelector
         onChange(nextMaturity);
       }
     },
-    [value, onChange],
+    [confirm, value, onChange],
   );
 
   return (
-    <ToggleGroup.Root
-      type="single"
-      value={value}
-      onValueChange={handleValueChange}
-      style={{
-        display: 'inline-flex',
-        borderRadius: 'var(--radius-md, 6px)',
-        border: '1px solid var(--border-subtle)',
-        overflow: 'hidden',
-      }}
-    >
-      {MATURITY_ORDER.map((m) => {
-        const cfg = MATURITY_LABELS[m]!;
-        const isActive = m === value;
-        return (
-          <ToggleGroup.Item
-            key={m}
-            value={m}
-            disabled={disabled}
-            style={{
-              padding: '4px 12px',
-              fontSize: 12,
-              fontWeight: isActive ? 600 : 400,
-              border: 'none',
-              borderRight: m !== 'established' ? '1px solid var(--border-subtle)' : 'none',
-              backgroundColor: isActive ? `${cfg.color}18` : 'transparent',
-              color: isActive ? cfg.color : 'var(--text-secondary)',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              opacity: disabled ? 0.5 : 1,
-            }}
-          >
-            {cfg.label}
-          </ToggleGroup.Item>
-        );
-      })}
-    </ToggleGroup.Root>
+    <>
+      <ToggleGroup.Root
+        type="single"
+        value={value}
+        onValueChange={handleValueChange}
+        style={{
+          display: 'inline-flex',
+          borderRadius: 'var(--radius-md, 6px)',
+          border: '1px solid var(--border-subtle)',
+          overflow: 'hidden',
+        }}
+      >
+        {MATURITY_ORDER.map((m) => {
+          const cfg = MATURITY_LABELS[m]!;
+          const isActive = m === value;
+          return (
+            <ToggleGroup.Item
+              key={m}
+              value={m}
+              disabled={disabled}
+              style={{
+                padding: '4px 12px',
+                fontSize: 12,
+                fontWeight: isActive ? 600 : 400,
+                border: 'none',
+                borderRight: m !== 'established' ? '1px solid var(--border-subtle)' : 'none',
+                backgroundColor: isActive ? `${cfg.color}18` : 'transparent',
+                color: isActive ? cfg.color : 'var(--text-secondary)',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.5 : 1,
+              }}
+            >
+              {cfg.label}
+            </ToggleGroup.Item>
+          );
+        })}
+      </ToggleGroup.Root>
+      {dialog}
+    </>
   );
 }

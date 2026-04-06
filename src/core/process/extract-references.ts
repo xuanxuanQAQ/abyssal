@@ -28,6 +28,40 @@ const PAREN_NUM_RE = /^\((\d+)\)\s/;
 const DOI_RE = /\b(10\.\d{4,9}\/\S+)/;
 const YEAR_RE = /\b((?:19|20)\d{2})\b/;
 
+function normalizeFullWidthDigits(text: string): string {
+  return text.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0));
+}
+
+function normalizeDocumentLine(text: string): string {
+  return normalizeFullWidthDigits(text)
+    .replace(/[\u3000\u00A0]/g, ' ')
+    .replace(/[．﹒·•‧∙⋅。]/g, '.')
+    .replace(/(\d)[ư](\d)/g, '$1.$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectStackedChineseReferencesHeading(lines: string[], index: number): boolean {
+  if (index + 3 >= lines.length) return false;
+  const joined = lines.slice(index, index + 4)
+    .map((line) => normalizeDocumentLine(line).replace(/\s+/g, ''))
+    .join('');
+  return joined === '参考文献';
+}
+
+function findReferenceHeading(lines: string[], start: number, end: number): { startLine: number; heading: string; headingLineCount: number } | null {
+  for (let i = end; i >= start; i--) {
+    const trimmed = normalizeDocumentLine(lines[i] ?? '');
+    if (REFERENCES_HEAD_RE.test(trimmed)) {
+      return { startLine: i + 1, heading: trimmed, headingLineCount: 1 };
+    }
+    if (detectStackedChineseReferencesHeading(lines, i)) {
+      return { startLine: i + 4, heading: '参考文献', headingLineCount: 4 };
+    }
+  }
+  return null;
+}
+
 // ─── 清理 DOI 尾部标点 ───
 
 function cleanDoi(doi: string): string {
@@ -146,27 +180,30 @@ export function extractReferences(fullText: string, logger?: Logger | null): Ext
   // §3.2: 区域定位（两轮从末尾向前扫描，Fix #9: 覆盖短论文）
   let refStartLine: number | null = null;
   let matchedHeading: string | null = null;
+  let headingLineCount = 0;
 
   // 第一轮：从末尾到 70%
-  for (let i = lines.length - 1; i >= scanFrom70; i--) {
-    const trimmed = lines[i]!.trim();
-    if (REFERENCES_HEAD_RE.test(trimmed)) {
-      refStartLine = i + 1;
-      matchedHeading = trimmed;
-      break;
-    }
+  const tailHeading = findReferenceHeading(lines, scanFrom70, lines.length - 1);
+  if (tailHeading) {
+    refStartLine = tailHeading.startLine;
+    matchedHeading = tailHeading.heading;
+    headingLineCount = tailHeading.headingLineCount;
   }
   // 第二轮：从 70% 到 40%（覆盖短论文）
   if (refStartLine === null) {
-    for (let i = scanFrom70 - 1; i >= scanFrom40; i--) {
-      if (i >= 0) {
-        const trimmed = lines[i]!.trim();
-        if (REFERENCES_HEAD_RE.test(trimmed)) {
-          refStartLine = i + 1;
-          matchedHeading = trimmed;
-          break;
-        }
-      }
+    const midHeading = findReferenceHeading(lines, scanFrom40, scanFrom70 - 1);
+    if (midHeading) {
+      refStartLine = midHeading.startLine;
+      matchedHeading = midHeading.heading;
+      headingLineCount = midHeading.headingLineCount;
+    }
+  }
+  if (refStartLine === null) {
+    const headHeading = findReferenceHeading(lines, 0, scanFrom40 - 1);
+    if (headHeading) {
+      refStartLine = headHeading.startLine;
+      matchedHeading = headHeading.heading;
+      headingLineCount = headHeading.headingLineCount;
     }
   }
 
@@ -185,13 +222,13 @@ export function extractReferences(fullText: string, logger?: Logger | null): Ext
   }
 
   logger?.debug('[extractReferences] heading found', {
-    heading: matchedHeading, lineNo: refStartLine - 1,
+    heading: matchedHeading, lineNo: refStartLine - headingLineCount,
   });
 
   // 确定区域终止位置
   let refEndLine = lines.length;
   for (let i = refStartLine; i < lines.length; i++) {
-    if (APPENDIX_RE.test(lines[i]!.trim())) {
+    if (APPENDIX_RE.test(normalizeDocumentLine(lines[i]!))) {
       refEndLine = i;
       break;
     }

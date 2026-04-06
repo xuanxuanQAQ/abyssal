@@ -147,11 +147,11 @@ export async function gracefulShutdown(
     });
   }
 
-  // Step 5b: Close RAG read-only DB connection
+  // Step 5b: Close managed RAG runtime
   try {
-    ctx.ragDbService?.close();
+    await ctx.ragRuntime?.close();
   } catch {
-    // Ignore — read-only connection close is non-critical
+    // Ignore — RAG runtime shutdown is non-critical
   }
 
   // Step 6: Release process lock

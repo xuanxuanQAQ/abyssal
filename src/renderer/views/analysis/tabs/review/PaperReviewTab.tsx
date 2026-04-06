@@ -17,6 +17,7 @@ import { PaperSelector } from './PaperSelector';
 import { AnalysisReport } from './AnalysisReport';
 import { MappingReviewList } from './MappingReviewList';
 import { AdjudicationTimeline } from './AdjudicationTimeline';
+import { useAppDialog } from '../../../../shared/useAppDialog';
 import type { Paper } from '../../../../../shared-types/models';
 import type { Relevance } from '../../../../../shared-types/enums';
 
@@ -57,6 +58,7 @@ export function PaperReviewTab() {
   const { data: paper } = usePaper(activePaperId);
   const { data: mappings } = useMappingsForPaper(activePaperId);
   const resetAnalysis = useResetAnalysis();
+  const { confirm, dialog } = useAppDialog();
 
   // Fetch concept timeline entries for adjudication timestamps
   const [timelineEntries, setTimelineEntries] = useState<Array<{ conceptId: string; timestamp: string; changeType: string }>>([]);
@@ -76,11 +78,17 @@ export function PaperReviewTab() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleDeleteAnalysis = useCallback(() => {
+  const handleDeleteAnalysis = useCallback(async () => {
     if (!activePaperId) return;
-    if (!window.confirm(t('analysis.review.confirmDelete', { defaultValue: 'Delete analysis report and all concept mappings for this paper? This cannot be undone.' }))) return;
+    const confirmed = await confirm({
+      title: t('analysis.review.deleteReport', { defaultValue: 'Delete Analysis' }),
+      description: t('analysis.review.confirmDelete', { defaultValue: 'Delete analysis report and all concept mappings for this paper? This cannot be undone.' }),
+      confirmLabel: t('common.delete'),
+      confirmTone: 'danger',
+    });
+    if (!confirmed) return;
     resetAnalysis.mutate(activePaperId);
-  }, [activePaperId, resetAnalysis, t]);
+  }, [activePaperId, confirm, resetAnalysis, t]);
 
   // Selector items
   const selectorItems = useMemo(
@@ -97,22 +105,29 @@ export function PaperReviewTab() {
 
   if (papersLoading) {
     return (
-      <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        {t('analysis.review.loading')}
-      </div>
+      <>
+        <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+          {t('analysis.review.loading')}
+        </div>
+        {dialog}
+      </>
     );
   }
 
   if (completedPapers.length === 0) {
     return (
-      <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        {t('analysis.review.noAnalyses')}
-      </div>
+      <>
+        <div className="analysis-scroll-stage workspace-empty-state" style={{ padding: 'var(--space-6)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+          {t('analysis.review.noAnalyses')}
+        </div>
+        {dialog}
+      </>
     );
   }
 
   return (
-    <div className="analysis-scroll-stage analysis-review-stage" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
+    <>
+      <div className="analysis-scroll-stage analysis-review-stage" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
       {/* ── Toolbar: selector + actions ── */}
       <div
         className="workspace-toolbar analysis-toolbar analysis-review-toolbar"
@@ -195,6 +210,8 @@ export function PaperReviewTab() {
           <AdjudicationTimeline mappings={mappings} timelineEntries={timelineEntries} />
         </div>
       )}
-    </div>
+      </div>
+      {dialog}
+    </>
   );
 }

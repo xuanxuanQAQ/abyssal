@@ -122,7 +122,11 @@ export function registerRagHandlers(ctx: AppContext): void {
   });
 
   typedHandler('rag:getWritingContext', logger, async (_e, requestArg) => {
-    const rag = ensureRag();
+    const requestPreview = typeof requestArg === 'string'
+      ? requestArg.slice(0, 500)
+      : JSON.stringify(requestArg ?? {}).slice(0, 500);
+    logger.debug('[rag:getWritingContext] request', { requestPreview });
+    const rag = ctx.ragModule; // nullable — RAG passages gracefully empty when unavailable
 
     const request: WritingContextRequest = typeof requestArg === 'string'
       ? { sectionId: requestArg }
@@ -215,25 +219,35 @@ export function registerRagHandlers(ctx: AppContext): void {
     }
 
     let chunks: RankedChunk[] = [];
-    try {
-      const retrieval = await rag.retrieve({
-        queryText,
-        taskType: 'article',
-        conceptIds,
-        paperIds,
-        sectionTypeFilter: null,
-        sourceFilter: null,
-        budgetMode: 'focused',
-        maxTokens: 4000,
-        modelContextWindow: 128000,
-        enableCorrectiveRag: false,
-        relatedMemoIds: [],
-        topK: 10,
-      });
-      chunks = retrieval.chunks;
-    } catch {
-      // Fallback to semantic search if retrieve path is unavailable.
-      chunks = await rag.searchSemantic(queryText, 10, { paperIds: paperIds.length > 0 ? paperIds : undefined } as any);
+    let ragStatus: 'ok' | 'unavailable' | 'error' = rag ? 'ok' : 'unavailable';
+    let ragStatusDetail: string | undefined;
+    if (rag) {
+      try {
+        const retrieval = await rag.retrieve({
+          queryText,
+          taskType: 'article',
+          conceptIds,
+          paperIds,
+          sectionTypeFilter: null,
+          sourceFilter: null,
+          budgetMode: 'focused',
+          maxTokens: 4000,
+          modelContextWindow: 128000,
+          enableCorrectiveRag: false,
+          relatedMemoIds: [],
+          topK: 10,
+        });
+        chunks = retrieval.chunks;
+      } catch (retrieveErr) {
+        // Fallback to semantic search if retrieve path is unavailable.
+        try {
+          chunks = await rag.searchSemantic(queryText, 10, { paperIds: paperIds.length > 0 ? paperIds : undefined } as any);
+        } catch (searchErr) {
+          ragStatus = 'error';
+          ragStatusDetail = (searchErr as Error).message ?? String(searchErr);
+          logger.warn('[rag:getWritingContext] RAG retrieval failed', { error: ragStatusDetail });
+        }
+      }
     }
 
     const relatedSyntheses = readSynthesisDrafts(ctx.workspaceRoot, conceptIds);
@@ -251,6 +265,8 @@ export function registerRagHandlers(ctx: AppContext): void {
       privateKBMatches,
       precedingSummary,
       followingSectionTitles,
+      ragStatus,
+      ...(ragStatusDetail ? { ragStatusDetail } : {}),
     };
   });
 }

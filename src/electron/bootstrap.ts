@@ -33,8 +33,7 @@ import { loadGlobalConfig } from '../core/infra/global-config';
 import { isWorkspace, scaffoldWorkspace, getWorkspacePaths, WorkspaceManager } from '../core/workspace';
 import { createDbProxy, type DbProxyInstance } from '../db-process/db-proxy';
 import { createBibliographyService } from '../core/bibliography';
-import { createRagService, type RagService } from '../core/rag';
-import { createDatabaseService, type DatabaseService } from '../core/database';
+import type { RagServiceLike } from '../core/rag';
 import type { AbyssalConfig, GlobalConfig } from '../core/types/config';
 import { ConfigProvider } from '../core/infra/config-provider';
 import { createLlmClient, type LlmClient } from '../adapter/llm-client/llm-client';
@@ -66,6 +65,7 @@ import { ResearchSession } from '../core/session';
 import { createCapabilityRegistry, type CapabilityServices } from '../adapter/capabilities';
 import { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
 import { testApiKeyDirect, testConfiguredApiKey } from '../core/infra/api-key-diagnostics';
+import { createRagProcessProxy, type ManagedRagService } from './rag-proxy';
 
 // ─── ParsedArgs ───
 
@@ -413,26 +413,27 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   // RagService requires synchronous DB access (direct SQL via better-sqlite3).
   // dbProxy is async (IPC to child process), so we open a separate read-only
   // connection. WAL mode supports concurrent readers safely.
-  let ragService: RagService | null = null;
-  let ragDbService: DatabaseService | null = null;
+  let ragService: RagServiceLike | null = null;
+  let ragRuntime: ManagedRagService | null = null;
+  const createManagedRagService = async (currentConfig: AbyssalConfig): Promise<ManagedRagService> => {
+    const ragProcessPath = path.resolve(__dirname, '..', 'rag-process', 'main.js');
+    const proxy = createRagProcessProxy({ ragProcessPath });
+    await proxy.start({
+      workspaceRoot: ctx.args.workspace,
+      config: currentConfig,
+      logLevel: ctx.args.logLevel,
+    });
+    return proxy;
+  };
   if (embedFn.isAvailable) {
     try {
-      const wsPaths = getWorkspacePaths(ctx.args.workspace);
-      ragDbService = createDatabaseService({
-        dbPath: wsPaths.db,
-        config,
-        logger,
-        readOnly: true,
-      });
-      ragService = createRagService(embedFn, ragDbService, config, logger);
-      logger.info('RagService initialized (read-only direct DB connection)');
+      ragRuntime = await createManagedRagService(config);
+      ragService = ragRuntime;
+      logger.info('RagService initialized (node subprocess)');
     } catch (err) {
       logger.warn('RagService initialization failed', { error: (err as Error).message });
-      // Clean up partial DB connection
-      if (ragDbService) {
-        try { ragDbService.close(); } catch { /* ignore */ }
-        ragDbService = null;
-      }
+      try { await ragRuntime?.close(); } catch { /* ignore */ }
+      ragRuntime = null;
     }
   } else {
     logger.warn('RagService skipped — no embedding API key configured. Vector indexing will be unavailable.', {
@@ -461,7 +462,55 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   // Inject adapter-layer modules
   ctx.appContext.llmClient = llmClient;
   ctx.appContext.contextBudgetManager = contextBudgetManager;
-  ctx.appContext.ragDbService = ragDbService;
+  ctx.appContext.ragRuntime = ragRuntime;
+
+  // ── RAG hot-reload: lazily init/rebuild ragModule when embedding config changes ──
+  let ragReloadPending: Promise<void> | null = null;
+  configProvider.onChange((event) => {
+    if (!event.changedSections.includes('rag') && !event.changedSections.includes('apiKeys')) return;
+
+    const runtime = ctx.appContext!.ragRuntime;
+    const wasAvailable = runtime !== null;
+    const nowAvailable = embedFn.isAvailable; // ReactiveEmbedFunction already rebuilt by this point
+
+    // Serialize concurrent hot-reload calls to prevent race conditions
+    const doReload = async () => {
+      if (ragReloadPending) {
+        await ragReloadPending.catch(() => {});
+      }
+
+      if (nowAvailable && !wasAvailable) {
+        try {
+          const newRuntime = await createManagedRagService(configProvider.config);
+          ctx.appContext!.ragRuntime = newRuntime;
+          ctx.appContext!.ragModule = newRuntime;
+          logger.info('RagService hot-initialized after embedding config change');
+        } catch (err) {
+          logger.warn('RagService hot-init failed', { error: (err as Error).message });
+        }
+      } else if (!nowAvailable && wasAvailable) {
+        try { await runtime?.close(); } catch { /* ignore */ }
+        ctx.appContext!.ragModule = null;
+        ctx.appContext!.ragRuntime = null;
+        logger.info('RagService torn down — embedding no longer available');
+      } else if (nowAvailable && runtime) {
+        try {
+          if (!runtime.updateConfig) return;
+          await runtime.updateConfig(configProvider.config);
+          logger.info('RagService hot-updated after embedding config change');
+        } catch (err) {
+          logger.warn('RagService hot-update failed', { error: (err as Error).message });
+          try { await runtime.close(); } catch { /* ignore */ }
+          ctx.appContext!.ragModule = null;
+          ctx.appContext!.ragRuntime = null;
+        }
+      }
+    };
+
+    ragReloadPending = doReload().finally(() => { ragReloadPending = null; });
+    // If both were available, ReactiveEmbedFunction already swapped its inner client;
+    // ragService holds a reference to embedFn so it picks up the new backend automatically.
+  });
 
   // Wire cost tracking to llm_audit_log table
   if (llmClient) {
@@ -518,6 +567,42 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
 
   // ── Layer 5: WorkflowRunner + AdvisoryAgent ──
   const workflowRunner = new WorkflowRunner(logger, pushManager);
+  const getActiveRagService = (): RagServiceLike | null => ctx.appContext?.ragModule ?? null;
+  const getAnalyzeRagService = () => {
+    const currentRagService = getActiveRagService();
+    if (!currentRagService) {
+      return null;
+    }
+
+    return {
+      retrieve: async (query: string, options?: { paperId?: string; topK?: number }) => {
+        const result = await currentRagService.retrieve({
+          queryText: query,
+          taskType: 'analyze',
+          conceptIds: [],
+          paperIds: options?.paperId ? [options.paperId as any] : [],
+          sectionTypeFilter: null,
+          sourceFilter: null,
+          budgetMode: 'focused',
+          maxTokens: 50_000,
+          modelContextWindow: 200_000,
+          enableCorrectiveRag: true,
+          relatedMemoIds: [],
+          skipReranker: false,
+          skipQueryExpansion: false,
+        });
+        return {
+          passages: result.chunks.map((c) => ({
+            text: c.text,
+            paperId: c.paperId as string,
+            score: c.score,
+            chunkId: c.chunkId as string,
+          })),
+          qualityReport: result.qualityReport,
+        };
+      },
+    };
+  };
 
   // Register all workflows
   workflowRunner.registerWorkflow('discover', createDiscoverWorkflow({
@@ -574,6 +659,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
     dbProxy: dbProxy as any,
     processService: processModule,
     ragService: ragService as any,
+    getRagService: () => getActiveRagService() as any,
     bibliographyService: bibliographyModule as any,
     logger,
     workspacePath: ctx.args.workspace,
@@ -621,43 +707,19 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
         autoSuggestConcepts: config.analysis.autoSuggestConcepts,
         autoSuggestThreshold: config.concepts.autoSuggestThreshold,
       },
-      ragService: ragService ? {
-        retrieve: async (query: string, options?: { paperId?: string; topK?: number }) => {
-          const result = await ragService!.retrieve({
-            queryText: query,
-            taskType: 'analyze',
-            conceptIds: [],
-            paperIds: options?.paperId ? [options.paperId as any] : [],
-            sectionTypeFilter: null,
-            sourceFilter: null,
-            budgetMode: 'focused',
-            maxTokens: 50_000,
-            modelContextWindow: 200_000,
-            enableCorrectiveRag: true,
-            relatedMemoIds: [],
-            skipReranker: false,
-            skipQueryExpansion: false,
-          });
-          return {
-            passages: result.chunks.map((c) => ({
-              text: c.text,
-              paperId: c.paperId as string,
-              score: c.score,
-              chunkId: c.chunkId as string,
-            })),
-            qualityReport: result.qualityReport,
-          };
-        },
-      } : null,
+      ragService: getAnalyzeRagService(),
+      getRagService: getAnalyzeRagService,
     }));
     workflowRunner.registerWorkflow('synthesize', createSynthesizeWorkflow({
       dbProxy: dbProxy as any, llmClient, contextBudgetManager, logger,
       ragService: ragService as any,
+      getRagService: () => getActiveRagService() as any,
       workspacePath: ctx.args.workspace,
     }));
     workflowRunner.registerWorkflow('article', createArticleWorkflow({
       dbProxy: dbProxy as any, llmClient, contextBudgetManager, logger,
       ragService: ragService as any,
+      getRagService: () => getActiveRagService() as any,
       workspacePath: ctx.args.workspace,
     }));
   }
@@ -1058,7 +1120,7 @@ async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
   // Create a shell AppContext — dbProxy is null, handlers will
   // check ctx.dbProxy and throw gracefully via wrapHandler's try/catch.
   const pushManager = new PushManager();
-  ctx.appContext = {
+  const appContext: AppContext = {
     configProvider: ctx.configProvider,
     get config() { return this.configProvider.config; },
     logger,
@@ -1080,7 +1142,7 @@ async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
     pushManager,
     staleDrafts: new Set(),
     cookieJar: null,
-    ragDbService: null,
+    ragRuntime: null,
     dlaProxy: null,
     dlaScheduler: null,
     eventBus: null,
@@ -1095,11 +1157,12 @@ async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
       return { paperCount: 0, conceptCount: 0, frameworkState: 'zero_concepts' as FrameworkState, activeWorkflows: 0, uptimeMs: 0 };
     },
   };
+  ctx.appContext = appContext;
 
   // Register IPC handlers + create window
-  registerAllHandlers(ctx.appContext);
+  registerAllHandlers(appContext);
   const mainWindow = createMainWindow({ isDev: ctx.args.dev, logger });
-  ctx.appContext.mainWindow = mainWindow;
+  appContext.mainWindow = mainWindow;
   pushManager.setWindow(mainWindow);
 
   logger.info('Lobby mode ready — wizard will auto-show');

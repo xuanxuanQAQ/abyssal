@@ -45,7 +45,22 @@ export class WorkflowExecutor {
     }
 
     try {
-      const result = await this.deps.startWorkflow(step.workflow, step.config ?? {});
+      // Race the workflow against the abort signal so user cancellation
+      // takes effect even if startWorkflow doesn't accept a signal.
+      const workflowPromise = this.deps.startWorkflow(step.workflow, step.config ?? {});
+      const result = signal
+        ? await Promise.race([
+            workflowPromise,
+            new Promise<never>((_, reject) => {
+              if (signal.aborted) reject(new Error('Aborted'));
+              const onAbort = () => reject(new Error('Aborted'));
+              signal.addEventListener('abort', onAbort, { once: true });
+              // Clean up the abort listener once the workflow settles
+              // to prevent the rejection handler from firing after resolution.
+              workflowPromise.finally(() => signal.removeEventListener('abort', onAbort));
+            }),
+          ])
+        : await workflowPromise;
 
       return {
         taskId: result.taskId,
@@ -54,6 +69,9 @@ export class WorkflowExecutor {
         ...(result.error ? { error: result.error } : {}),
       };
     } catch (err) {
+      if (signal?.aborted) {
+        return { taskId: '', success: false, error: 'Aborted' };
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       return {
         taskId: '',

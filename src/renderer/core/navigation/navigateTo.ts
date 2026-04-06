@@ -53,6 +53,7 @@ export function applyNavigation(
       selectedConceptId: string | null;
       selectedSectionId: string | null;
       focusedGraphNodeId: string | null;
+      focusedGraphNodeType: 'paper' | 'concept' | 'memo' | 'note' | null;
       selectedNoteId: string | null;
       selectedMemoId: string | null;
     }>
@@ -86,6 +87,7 @@ export function applyNavigation(
       break;
     case 'graph':
       partial.focusedGraphNodeId = target.focusNodeId;
+      partial.focusedGraphNodeType = target.focusNodeType ?? null;
       break;
     case 'note':
       partial.selectedNoteId = target.noteId;

@@ -34,6 +34,7 @@ import { imageExtension } from './extensions/imageExtension';
 import { footnoteExtension } from './extensions/footnoteExtension';
 import { crossRefExtension } from './extensions/crossRefExtension';
 import { equationNumberingPlugin } from './extensions/equationNumberingPlugin';
+import { ghostSelectionPlugin } from './extensions/ghostSelectionPlugin';
 
 // ── Types ──
 
@@ -109,6 +110,7 @@ function createExtensions(
     footnoteExtension,
     crossRefExtension,
     equationNumberingPlugin,
+    ghostSelectionPlugin,
   ];
 }
 

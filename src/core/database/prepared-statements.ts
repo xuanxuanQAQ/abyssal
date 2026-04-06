@@ -150,7 +150,7 @@ export function createStatements(
 
     // ─── 向量（sqlite-vec 不可用时返回空操作语句） ───
     insertChunkVec: hasVec
-      ? db.prepare('INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)')
+      ? db.prepare('INSERT INTO chunks_vec (rowid, embedding) VALUES (CAST(? AS INTEGER), ?)')
       : db.prepare('SELECT 1 WHERE 0'), // no-op 占位
 
     knnSearch: hasVec

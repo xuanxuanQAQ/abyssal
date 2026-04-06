@@ -59,7 +59,7 @@ async function saveWorkspaceSections(
   try {
     const toml = require('smol-toml');
     raw = toml.parse(await fsp.readFile(configPath, 'utf-8')) as Record<string, unknown>;
-  } catch {}
+  } catch { /* config file may not exist yet */ }
 
   for (const [section, patch] of Object.entries(patches)) {
     const existing = (raw[section] ?? {}) as Record<string, unknown>;

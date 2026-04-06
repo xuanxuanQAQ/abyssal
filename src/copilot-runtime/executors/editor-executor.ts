@@ -51,6 +51,7 @@ export class EditorExecutor {
     operation: CopilotOperation,
     patch: EditorPatch,
     emitter: OperationEventEmitter,
+    signal?: AbortSignal,
   ): Promise<EditorExecutorResult> {
     // Step 1: Propose
     emitter.emit({
@@ -58,6 +59,10 @@ export class EditorExecutor {
       operationId: operation.id,
       patch,
     });
+
+    if (signal?.aborted) {
+      return { applied: false, patch, reconciliation: { ok: false, reason: 'editor_changed' } };
+    }
 
     // Step 2: Reconcile
     const reconciliation = await this.deps.reconcile(patch);
@@ -89,7 +94,7 @@ export class EditorExecutor {
           try {
             await this.deps.persistDocument(
               preconditions.articleId,
-              preconditions.sectionId,
+              preconditions.sectionId ?? undefined,
             );
             emitter.emit({
               type: 'persistence.succeeded',

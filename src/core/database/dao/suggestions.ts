@@ -11,6 +11,26 @@ import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 import { addConcept } from './concepts';
 
+function appendConceptSuffix(baseId: string, suffix: number): string {
+  const suffixText = `_${suffix}`;
+  const truncatedBase = baseId.slice(0, Math.max(1, 64 - suffixText.length));
+  return `${truncatedBase}${suffixText}`;
+}
+
+function resolveUniqueConceptId(db: Database.Database, baseId: ConceptId): ConceptId {
+  let candidate = baseId;
+  let suffix = 2;
+  const maxSuffix = 1000;
+  while (db.prepare('SELECT 1 FROM concepts WHERE id = ?').get(candidate)) {
+    if (suffix > maxSuffix) {
+      throw new Error(`Cannot resolve unique concept ID for base "${baseId}" after ${maxSuffix} attempts`);
+    }
+    candidate = asConceptId(appendConceptSuffix(baseId, suffix));
+    suffix += 1;
+  }
+  return candidate;
+}
+
 // ─── §7.1 addSuggestedConcept ───
 
 export function addSuggestedConcept(
@@ -22,10 +42,13 @@ export function addSuggestedConcept(
     closestExistingConceptId?: ConceptId | null;
     closestExistingConceptSimilarity?: string | null;
     reason: string;
+    suggestedDefinition?: string | null;
+    suggestedKeywords?: string[] | null;
   },
 ): SuggestionId {
   const timestamp = now();
   const termNormalized = input.term.trim().toLowerCase();
+  const mergedSuggestedKeywords = normalizeSuggestedKeywords(input.suggestedKeywords ?? null);
 
   // 检查是否已存在 pending 记录
   const existing = db
@@ -44,11 +67,14 @@ export function addSuggestedConcept(
     const alreadyHasPaper = existingPaperIds.includes(input.sourcePaperId);
 
     if (alreadyHasPaper) {
+      const existingKeywords = normalizeSuggestedKeywords(existing['suggested_keywords']);
       // 仅更新 frequency
       db.prepare(`
         UPDATE suggested_concepts
         SET frequency = frequency + ?,
             reason = CASE WHEN length(?) > length(reason) THEN ? ELSE reason END,
+            suggested_definition = COALESCE(suggested_definition, ?),
+            suggested_keywords = ?,
             closest_existing_concept_id = COALESCE(?, closest_existing_concept_id),
             closest_existing_concept_similarity = COALESCE(?, closest_existing_concept_similarity),
             updated_at = ?
@@ -56,12 +82,15 @@ export function addSuggestedConcept(
       `).run(
         input.frequencyInPaper,
         input.reason, input.reason,
+        input.suggestedDefinition ?? null,
+        JSON.stringify(mergeSuggestedKeywords(existingKeywords, mergedSuggestedKeywords)),
         input.closestExistingConceptId ?? null,
         input.closestExistingConceptSimilarity ?? null,
         timestamp,
         existingId,
       );
     } else {
+      const existingKeywords = normalizeSuggestedKeywords(existing['suggested_keywords']);
       // 追加 paper + 递增计数
       db.prepare(`
         UPDATE suggested_concepts
@@ -69,6 +98,8 @@ export function addSuggestedConcept(
             source_paper_ids = json_insert(source_paper_ids, '$[#]', ?),
             source_paper_count = source_paper_count + 1,
             reason = CASE WHEN length(?) > length(reason) THEN ? ELSE reason END,
+            suggested_definition = COALESCE(suggested_definition, ?),
+            suggested_keywords = ?,
             closest_existing_concept_id = COALESCE(?, closest_existing_concept_id),
             closest_existing_concept_similarity = COALESCE(?, closest_existing_concept_similarity),
             updated_at = ?
@@ -77,6 +108,8 @@ export function addSuggestedConcept(
         input.frequencyInPaper,
         input.sourcePaperId,
         input.reason, input.reason,
+        input.suggestedDefinition ?? null,
+        JSON.stringify(mergeSuggestedKeywords(existingKeywords, mergedSuggestedKeywords)),
         input.closestExistingConceptId ?? null,
         input.closestExistingConceptSimilarity ?? null,
         timestamp,
@@ -92,8 +125,9 @@ export function addSuggestedConcept(
     INSERT INTO suggested_concepts (
       term, term_normalized, frequency, source_paper_ids, source_paper_count,
       closest_existing_concept_id, closest_existing_concept_similarity,
-      reason, status, adopted_concept_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'pending', NULL, ?, ?)
+      reason, suggested_definition, suggested_keywords,
+      status, adopted_concept_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)
     RETURNING id
   `).get(
     input.term,
@@ -103,6 +137,8 @@ export function addSuggestedConcept(
     input.closestExistingConceptId ?? null,
     input.closestExistingConceptSimilarity ?? null,
     input.reason,
+    input.suggestedDefinition ?? null,
+    JSON.stringify(mergedSuggestedKeywords),
     timestamp,
     timestamp,
   ) as { id: number };
@@ -143,14 +179,19 @@ export function adoptSuggestedConcept(
           .replace(/^_|_$/g, '')
           .slice(0, 64) || 'unnamed_concept',
       );
+    const conceptId = resolveUniqueConceptId(db, baseId);
+    const defaultKeywords = mergeSuggestedKeywords(
+      normalizeSuggestedKeywords(suggestion.suggestedKeywords),
+      [suggestion.term],
+    );
 
     const concept: ConceptDefinition = {
-      id: baseId,
+      id: conceptId,
       nameZh: conceptOverrides?.nameZh ?? suggestion.term,
       nameEn: conceptOverrides?.nameEn ?? suggestion.term,
       layer: conceptOverrides?.layer ?? 'core',
-      definition: conceptOverrides?.definition ?? suggestion.reason,
-      searchKeywords: conceptOverrides?.searchKeywords ?? [suggestion.term],
+      definition: conceptOverrides?.definition ?? suggestion.suggestedDefinition ?? suggestion.reason,
+      searchKeywords: conceptOverrides?.searchKeywords ?? defaultKeywords,
       maturity: conceptOverrides?.maturity ?? 'tentative',
       parentId: conceptOverrides?.parentId ?? null,
       history: [],
@@ -269,6 +310,29 @@ export function getSuggestedConceptByTerm(
   return fromRow<SuggestedConcept>(row);
 }
 
+function normalizeSuggestedKeywords(value: unknown): string[] {
+  const normalizedValue = typeof value === 'string'
+    ? (() => {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        return [];
+      }
+    })()
+    : value;
+
+  if (!Array.isArray(normalizedValue)) return [];
+  return normalizedValue
+    .filter((keyword): keyword is string => typeof keyword === 'string')
+    .map((keyword) => keyword.trim())
+    .filter(Boolean)
+    .slice(0, 10);
+}
+
+function mergeSuggestedKeywords(existing: string[], incoming: string[]): string[] {
+  return [...new Set([...existing, ...incoming])].slice(0, 10);
+}
+
 // ─── updateSuggestedConcept ───
 
 export function updateSuggestedConcept(
@@ -276,7 +340,17 @@ export function updateSuggestedConcept(
   id: SuggestionId,
   updates: Record<string, unknown>,
 ): number {
-  const allowed = ['frequency', 'source_paper_ids', 'source_paper_count', 'reason', 'updated_at'];
+  const allowed = [
+    'frequency',
+    'source_paper_ids',
+    'source_paper_count',
+    'reason',
+    'suggested_definition',
+    'suggested_keywords',
+    'closest_existing_concept_id',
+    'closest_existing_concept_similarity',
+    'updated_at',
+  ];
   const entries = Object.entries(updates).filter(([k]) => allowed.includes(k));
   if (entries.length === 0) return 0;
 

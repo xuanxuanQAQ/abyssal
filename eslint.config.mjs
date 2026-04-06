@@ -12,6 +12,7 @@ export default tseslint.config(
       'coverage/',
       'build/',
       '*.mjs',          // esbuild.main.mjs 等构建脚本
+      '**/*.cjs',       // CommonJS 脚本（tesseract-worker 等）
       'vite.*.config.*',
       'vitest.config.*',
     ],

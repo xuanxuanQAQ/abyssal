@@ -447,7 +447,10 @@ export function registerArticlesHandlers(ctx: AppContext): void {
       keywords: [],
       targetWordCount: null,
     });
-    ctx.pushManager?.enqueueDbChange(['articles'], 'insert');
+    ctx.pushManager?.enqueueDbChange(['articles', 'article_drafts'], 'insert');
+
+    // Fetch article to get the auto-created default draft ID
+    const created = await ctx.dbProxy.getArticle(asArticleId(id));
 
     const now = new Date().toISOString();
     return {
@@ -456,6 +459,7 @@ export function registerArticlesHandlers(ctx: AppContext): void {
       citationStyle: mapCslToFrontend(ctx.config.writing?.defaultCslStyleId ?? 'gb-t-7714'),
       exportFormat: 'markdown' as const,
       metadata: {},
+      defaultDraftId: created?.defaultDraftId ?? null,
       createdAt: now,
       updatedAt: now,
       sections: [],

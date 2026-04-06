@@ -34,6 +34,8 @@ function sourceEquals(a: ContextSource, b: ContextSource): boolean {
       return b.type === 'mapping' && a.mappingId === b.mappingId;
     case 'section':
       return b.type === 'section' && a.sectionId === b.sectionId;
+    case 'writing-selection':
+      return b.type === 'writing-selection' && a.sectionId === b.sectionId && a.from === b.from && a.to === b.to;
     case 'graphNode':
       return b.type === 'graphNode' && a.nodeId === b.nodeId;
     case 'memo':

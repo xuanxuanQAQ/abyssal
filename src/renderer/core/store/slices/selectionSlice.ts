@@ -182,9 +182,15 @@ export const createSelectionSlice: StateCreator<
   selectSection: (id, articleId, draftId) =>
     set((state) => {
       state.selectedSectionId = id;
-      // 清空 section 时同步清空 articleId；设置 section 时必须提供 articleId
-      state.selectedArticleId = id ? (articleId ?? state.selectedArticleId) : null;
-      state.selectedDraftId = id ? (draftId ?? state.selectedDraftId) : null;
+      // 设置 section 时保留/更新 articleId；清空 section 时仅在未显式传入
+      // articleId 时清空——写作视图切换 draft 需要保留文章级上下文。
+      if (id) {
+        state.selectedArticleId = articleId ?? state.selectedArticleId;
+        state.selectedDraftId = draftId ?? state.selectedDraftId;
+      } else {
+        state.selectedArticleId = articleId !== undefined ? (articleId ?? null) : null;
+        state.selectedDraftId = draftId !== undefined ? (draftId ?? null) : null;
+      }
     }),
 
   focusGraphNode: (id, nodeType) =>

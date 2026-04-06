@@ -1,17 +1,13 @@
-/**
- * FulltextStatusCell — 全文状态图标（§6.1）
- */
-
 import React from 'react';
-import * as Tooltip from '@radix-ui/react-tooltip';
 import type { FulltextStatus } from '../../../../../shared-types/enums';
+import { StatusIndicator, type StatusIndicatorGlyph, type StatusIndicatorTone } from './StatusIndicator';
 
-const STATUS_CONFIG: Record<FulltextStatus, { icon: string; color: string; tooltip: string }> = {
-  not_attempted: { icon: '○', color: 'var(--text-muted)', tooltip: '未尝试获取' },
-  pending: { icon: '⏳', color: 'var(--warning)', tooltip: '正在获取…' },
-  available: { icon: '✅', color: 'var(--success)', tooltip: '全文已获取' },
-  abstract_only: { icon: '📄', color: 'var(--info)', tooltip: '仅有摘要' },
-  failed: { icon: '⚠️', color: 'var(--danger)', tooltip: '获取失败' },
+const STATUS_CONFIG: Record<FulltextStatus, { tooltip: string; tone: StatusIndicatorTone; glyph?: StatusIndicatorGlyph }> = {
+  not_attempted: { tooltip: '未尝试获取', tone: 'neutral' },
+  pending: { tooltip: '正在获取…', tone: 'warning', glyph: 'spinner' },
+  available: { tooltip: '全文已获取', tone: 'success' },
+  abstract_only: { tooltip: '仅有摘要', tone: 'info', glyph: 'file' },
+  failed: { tooltip: '获取失败', tone: 'danger', glyph: 'alert' },
 };
 
 interface FulltextStatusCellProps {
@@ -21,32 +17,5 @@ interface FulltextStatusCellProps {
 export function FulltextStatusCell({ status }: FulltextStatusCellProps) {
   const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.not_attempted;
 
-  return (
-    <Tooltip.Provider delayDuration={300}>
-      <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <span style={{ fontSize: 14, textAlign: 'center', width: '100%', display: 'block', cursor: 'default' }}>
-            {config.icon}
-          </span>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content
-            sideOffset={4}
-            style={{
-              padding: '4px 8px',
-              backgroundColor: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-sm)',
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-primary)',
-              zIndex: 40,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-            }}
-          >
-            {config.tooltip}
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
-  );
+  return <StatusIndicator tooltip={config.tooltip} tone={config.tone} glyph={config.glyph} />;
 }

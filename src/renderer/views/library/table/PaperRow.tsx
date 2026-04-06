@@ -2,7 +2,7 @@
  * PaperRow — 单行渲染（§6, §4.4）
  *
  * React.memo 包裹，比较 row.id + isSelected + isExpanded + isFocused。
- * 渲染 10 列 Cell。展开时显示 abstract 区域。
+ * 渲染 11 列 Cell。展开时显示 abstract 区域。
  */
 
 import React, { memo, useRef, useEffect } from 'react';
@@ -13,6 +13,7 @@ import { AuthorsCell } from './cells/AuthorsCell';
 import { YearCell } from './cells/YearCell';
 import { PaperTypeCell } from './cells/PaperTypeCell';
 import { FulltextStatusCell } from './cells/FulltextStatusCell';
+import { ProcessStatusCell } from './cells/ProcessStatusCell';
 import { AnalysisStatusCell } from './cells/AnalysisStatusCell';
 import { DecisionNoteCell } from './cells/DecisionNoteCell';
 import { DateAddedCell } from './cells/DateAddedCell';
@@ -49,7 +50,7 @@ export const PaperRow = memo(
     const abstractRef = useRef<HTMLDivElement>(null);
 
     return (
-      <RowContextMenu paper={paper} isSelected={isSelected}>
+      <RowContextMenu paper={paper}>
         <div
           ref={dragRef}
           {...dragAttributes}
@@ -120,6 +121,12 @@ export const PaperRow = memo(
                   )}
                   {columnId === 'fulltextStatus' && (
                     <FulltextStatusCell status={paper.fulltextStatus} />
+                  )}
+                  {columnId === 'processStatus' && (
+                    <ProcessStatusCell
+                      hasFulltext={paper.fulltextStatus === 'available' || Boolean(paper.fulltextPath)}
+                      hasText={Boolean(paper.textPath)}
+                    />
                   )}
                   {columnId === 'analysisStatus' && (
                     <AnalysisStatusCell status={paper.analysisStatus} />

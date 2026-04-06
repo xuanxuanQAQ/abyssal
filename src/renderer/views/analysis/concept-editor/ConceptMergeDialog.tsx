@@ -229,7 +229,7 @@ export function ConceptMergeDialog({
         if (rm) {
           conflicts.push({
             paperId: sm.paperId,
-            paperTitle: sm.paperId, // Will be resolved to title if available
+            paperTitle: '',
             sourceMapping: sm,
             targetMapping: rm,
           });
@@ -247,8 +247,8 @@ export function ConceptMergeDialog({
           for (const p of papers) {
             if (p) titleMap.set(p.id, p.title);
           }
-          for (const c of conflicts) {
-            c.paperTitle = titleMap.get(c.paperId) ?? c.paperId;
+          for (const [index, c] of conflicts.entries()) {
+            c.paperTitle = titleMap.get(c.paperId) ?? `论文 ${index + 1}`;
           }
         } catch {
           // Paper title resolution is best-effort.

@@ -123,8 +123,12 @@ export function useCreateArticle() {
 
   return useMutation({
     mutationFn: (title: string) => getAPI().db.articles.create(title),
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['articles', 'outlines'] });
+      // Also invalidate drafts for the new article — its default draft was auto-created
+      if (created.id) {
+        queryClient.invalidateQueries({ queryKey: ['drafts', created.id] });
+      }
     },
     onError: (err) => handleError(err),
   });

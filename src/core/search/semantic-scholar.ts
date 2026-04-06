@@ -161,6 +161,39 @@ async function s2Request<T>(
   }
 }
 
+function getResponseDataArray<T>(response: unknown, endpoint: string): T[] {
+  if (!response || typeof response !== 'object') {
+    throw new ApiError({
+      message: `Semantic Scholar ${endpoint} returned unexpected payload shape`,
+      context: {
+        endpoint,
+        responseType: response === null ? 'null' : typeof response,
+      },
+    });
+  }
+
+  const record = response as Record<string, unknown>;
+  const data = record['data'];
+  if (!Array.isArray(data)) {
+    throw new ApiError({
+      message: `Semantic Scholar ${endpoint} returned unexpected payload shape`,
+      context: {
+        endpoint,
+        keys: Object.keys(record).slice(0, 10),
+        dataType: data === null ? 'null' : typeof data,
+      },
+    });
+  }
+
+  return data as T[];
+}
+
+function getResponseNext(response: unknown): number | undefined {
+  if (!response || typeof response !== 'object') return undefined;
+  const next = (response as Record<string, unknown>)['next'];
+  return typeof next === 'number' ? next : undefined;
+}
+
 // ─── §2.2 searchSemanticScholar ───
 
 export interface SSSearchOptions {
@@ -209,13 +242,15 @@ export async function searchSemanticScholar(
     const response = await s2Request<S2SearchResponse>(
       http, limiter, url, apiKey, logger,
     );
+    const papers = getResponseDataArray<S2Paper>(response, 'paper/search');
 
-    for (const paper of response.data) {
+    for (const paper of papers) {
       results.push(mapS2Paper(paper));
     }
 
-    if (response.next === undefined || response.next === null) break;
-    offset = response.next;
+    const next = getResponseNext(response);
+    if (next === undefined) break;
+    offset = next;
   }
 
   const final = results.slice(0, limit);
@@ -290,16 +325,18 @@ export async function getCitations(
       data: S2CitationEntry[];
       next?: number | undefined;
     }>(http, limiter, url, apiKey, logger);
+    const entries = getResponseDataArray<S2CitationEntry>(response, `paper/${endpoint}`);
 
-    for (const entry of response.data) {
+    for (const entry of entries) {
       const paper = direction === 'references' ? entry.citedPaper : entry.citingPaper;
       if (paper?.title) {
         results.push(mapS2Paper(paper));
       }
     }
 
-    if (response.next === undefined || response.next === null) break;
-    offset = response.next;
+    const next = getResponseNext(response);
+    if (next === undefined) break;
+    offset = next;
   }
 
   return results.slice(0, limit);
@@ -337,20 +374,21 @@ export async function searchByAuthor(
   const authorResults = await s2Request<S2AuthorSearchResponse>(
     http, limiter, searchUrl, apiKey, logger,
   );
+  const authors = getResponseDataArray<S2AuthorSearchResponse['data'][number]>(authorResults, 'author/search');
 
-  if (authorResults.data.length === 0) return [];
+  if (authors.length === 0) return [];
 
   // 选择最佳匹配
-  let bestAuthor = authorResults.data[0]!;
+  let bestAuthor = authors[0]!;
   if (affiliationHint) {
     const hintLower = affiliationHint.toLowerCase();
-    const withAffiliation = authorResults.data.find((a) =>
+    const withAffiliation = authors.find((a) =>
       a.affiliations?.some((aff) => aff.toLowerCase().includes(hintLower)),
     );
     if (withAffiliation) bestAuthor = withAffiliation;
   } else {
     // 取 paperCount 最高的
-    for (const author of authorResults.data) {
+    for (const author of authors) {
       if ((author.paperCount ?? 0) > (bestAuthor.paperCount ?? 0)) {
         bestAuthor = author;
       }
@@ -367,13 +405,15 @@ export async function searchByAuthor(
     const response = await s2Request<S2AuthorPapersResponse>(
       http, limiter, url, apiKey, logger,
     );
+    const papers = getResponseDataArray<S2Paper>(response, 'author/papers');
 
-    for (const paper of response.data) {
+    for (const paper of papers) {
       if (paper.title) results.push(mapS2Paper(paper));
     }
 
-    if (response.next === undefined || response.next === null) break;
-    offset = response.next;
+    const next = getResponseNext(response);
+    if (next === undefined) break;
+    offset = next;
   }
 
   return results.slice(0, limit);

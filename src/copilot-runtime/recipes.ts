@@ -56,7 +56,7 @@ export const rewriteSelectionRecipe: OperationRecipe = {
         to: sel.to,
       },
       steps: [
-        { kind: 'llm_generate', mode: 'draft' },
+        { kind: 'llm_generate', mode: 'draft', allowedToolFamilies: ['writing_edit'] },
         { kind: 'apply_patch', patchTarget: {
           type: 'editor-selection-replace',
           editorId: 'main',
@@ -101,7 +101,7 @@ export const expandSelectionRecipe: OperationRecipe = {
         to: sel.to,
       },
       steps: [
-        { kind: 'llm_generate', mode: 'draft' },
+        { kind: 'llm_generate', mode: 'draft', allowedToolFamilies: ['writing_edit'] },
         { kind: 'apply_patch', patchTarget: {
           type: 'editor-selection-replace',
           editorId: 'main',
@@ -146,7 +146,7 @@ export const compressSelectionRecipe: OperationRecipe = {
         to: sel.to,
       },
       steps: [
-        { kind: 'llm_generate', mode: 'draft' },
+        { kind: 'llm_generate', mode: 'draft', allowedToolFamilies: ['writing_edit'] },
         { kind: 'apply_patch', patchTarget: {
           type: 'editor-selection-replace',
           editorId: 'main',
@@ -190,7 +190,7 @@ export const continueWritingRecipe: OperationRecipe = {
         pos: sel.to,
       },
       steps: [
-        { kind: 'llm_generate', mode: 'draft' },
+        { kind: 'llm_generate', mode: 'draft', allowedToolFamilies: ['writing_edit'] },
         { kind: 'apply_patch', patchTarget: {
           type: 'editor-insert-after',
           editorId: 'main',

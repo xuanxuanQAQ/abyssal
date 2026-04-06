@@ -14,6 +14,7 @@ import { MessageSquare, Trash2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { getAPI } from '../../../core/ipc/bridge';
 import { useChatSession } from './hooks/useChatSession';
+import { useAppDialog } from '../../../shared/useAppDialog';
 import type { ChatSessionSummary } from '../../../../shared-types/models';
 import toast from 'react-hot-toast';
 
@@ -27,6 +28,7 @@ export const ChatSessionHistory = React.memo(function ChatSessionHistory({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { switchSession, sessionKey, createNewSession } = useChatSession();
+  const { confirm, dialog } = useAppDialog();
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -61,7 +63,13 @@ export const ChatSessionHistory = React.memo(function ChatSessionHistory({
   const handleDeleteSession = async (key: string, e: React.MouseEvent) => {
     e.stopPropagation();
 
-    if (!confirm(t('context.chat.confirmDeleteSession'))) {
+    const confirmed = await confirm({
+      title: t('context.chat.menu.delete'),
+      description: t('context.chat.confirmDeleteSession'),
+      confirmLabel: t('common.delete'),
+      confirmTone: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -101,20 +109,21 @@ export const ChatSessionHistory = React.memo(function ChatSessionHistory({
   };
 
   return (
-    <div
-      className="chat-session-history"
-      style={{
-        position: 'relative',
-        maxHeight: '400px',
-        overflow: 'hidden',
-        backgroundColor: 'var(--lens-surface)',
-        borderBottom: '1px solid var(--border-subtle)',
-        borderTop: '1px solid var(--border-subtle)',
-        zIndex: 2,
-        transition: 'max-height 200ms ease',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-      }}
-    >
+    <>
+      <div
+        className="chat-session-history"
+        style={{
+          position: 'relative',
+          maxHeight: '400px',
+          overflow: 'hidden',
+          backgroundColor: 'var(--lens-surface)',
+          borderBottom: '1px solid var(--border-subtle)',
+          borderTop: '1px solid var(--border-subtle)',
+          zIndex: 2,
+          transition: 'max-height 200ms ease',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+        }}
+      >
       {isLoading ? (
         <div
           style={{
@@ -224,6 +233,8 @@ export const ChatSessionHistory = React.memo(function ChatSessionHistory({
           ))}
         </div>
       )}
-    </div>
+      </div>
+      {dialog}
+    </>
   );
 });

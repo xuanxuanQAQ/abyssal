@@ -156,7 +156,7 @@ export function HeatmapTab() {
 
     selectMapping(
       heatmapCell.mappingId,
-      sortedPaperIds[heatmapCell.paperIndex] ?? null ?? undefined,
+      sortedPaperIds[heatmapCell.paperIndex],
       concepts[heatmapCell.conceptIndex]?.id,
     );
   }, [concepts, getCellAt, selectMapping, sortedPaperIds]);

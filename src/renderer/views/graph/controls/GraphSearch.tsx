@@ -3,16 +3,17 @@ import { useTranslation } from 'react-i18next';
 import { Search } from 'lucide-react';
 import type Graph from 'graphology';
 import { useAppStore } from '../../../core/store';
+import { resolveNodeType, resolveNodeLabel } from '../resolveNode';
 
 export interface GraphSearchProps {
   graph: Graph | null;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string, nodeType: 'paper' | 'concept' | 'memo' | 'note') => void;
 }
 
 interface NodeEntry {
   id: string;
   label: string;
-  type: 'paper' | 'concept';
+  type: 'paper' | 'concept' | 'memo' | 'note';
 }
 
 export function GraphSearch({ graph, onSelectNode }: GraphSearchProps) {
@@ -51,12 +52,12 @@ export function GraphSearch({ graph, onSelectNode }: GraphSearchProps) {
 
     graph.forEachNode((nodeId, attributes) => {
       if (matches.length >= 8) return;
-      const label = (attributes.label as string) ?? nodeId;
+      const label = resolveNodeLabel(attributes as Record<string, unknown>, matches.length + 1);
       if (label.toLowerCase().includes(lowerQuery)) {
         matches.push({
           id: nodeId,
           label,
-          type: (attributes.type as 'paper' | 'concept') ?? 'paper',
+          type: resolveNodeType(attributes as Record<string, unknown>),
         });
       }
     });
@@ -70,8 +71,8 @@ export function GraphSearch({ graph, onSelectNode }: GraphSearchProps) {
   }, []);
 
   const handleSelect = useCallback(
-    (nodeId: string) => {
-      onSelectNode(nodeId);
+    (nodeId: string, nodeType: 'paper' | 'concept' | 'memo' | 'note') => {
+      onSelectNode(nodeId, nodeType);
       setShowResults(false);
       setQuery('');
     },
@@ -152,7 +153,7 @@ export function GraphSearch({ graph, onSelectNode }: GraphSearchProps) {
           {results.map((node) => (
             <div
               key={node.id}
-              onClick={() => handleSelect(node.id)}
+              onClick={() => handleSelect(node.id, node.type)}
               style={{
                 display: 'flex',
                 alignItems: 'center',

@@ -28,6 +28,127 @@ import { hydratePaperMetadata } from '../../../core/hydrate';
 import { PaperNotFoundError } from '../../../core/types/errors';
 import { createConcurrencyGuard } from '../concurrency-guard';
 import { paperField } from '../utils';
+import { resolveCurrentRagService } from './rag-service-resolver';
+
+const PROCESS_FAILURE_CODES = new Set([
+  'process_service_unavailable',
+  'text_extraction_failed',
+  'extracted_text_too_short',
+  'extracted_text_low_quality',
+  'section_detection_degraded',
+  'chunking_degraded',
+  'no_chunks_produced',
+  'vector_indexing_failed',
+  'rag_service_unavailable',
+  'reference_extraction_failed',
+  'no_references_extracted',
+]);
+
+const PROCESS_FAILURE_PRIORITY = [
+  'process_service_unavailable',
+  'text_extraction_failed',
+  'extracted_text_too_short',
+  'extracted_text_low_quality',
+  'section_detection_degraded',
+  'chunking_degraded',
+  'no_chunks_produced',
+  'vector_indexing_failed',
+  'rag_service_unavailable',
+  'reference_extraction_failed',
+  'no_references_extracted',
+] as const;
+
+interface TextQualityDiagnostics {
+  isTooShort: boolean;
+  isLowQuality: boolean;
+  charCount: number;
+  nonEmptyLineCount: number;
+  avgNonEmptyLineLength: number;
+  informativeCharRatio: number;
+  uniqueLineRatio: number;
+}
+
+function primaryFailureCode(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  return reason.split(':', 1)[0]?.trim() ?? null;
+}
+
+export function isRetryableProcessFailure(reason: string | null | undefined): boolean {
+  const code = primaryFailureCode(reason);
+  return code != null && PROCESS_FAILURE_CODES.has(code);
+}
+
+export function isProcessFailureReason(reason: string | null | undefined): boolean {
+  return isRetryableProcessFailure(reason);
+}
+
+function stageForProcessFailure(reason: string | null | undefined): string {
+  switch (primaryFailureCode(reason)) {
+    case 'process_service_unavailable':
+    case 'text_extraction_failed':
+    case 'extracted_text_too_short':
+    case 'extracted_text_low_quality':
+      return 'text-extraction';
+    case 'section_detection_degraded':
+      return 'sectioning';
+    case 'chunking_degraded':
+    case 'no_chunks_produced':
+      return 'chunking';
+    case 'vector_indexing_failed':
+    case 'rag_service_unavailable':
+      return 'indexing';
+    case 'reference_extraction_failed':
+    case 'no_references_extracted':
+      return 'references';
+    default:
+      return 'process';
+  }
+}
+
+export function shouldQueuePaperForProcessing(paper: Record<string, unknown>): boolean {
+  const hasFulltext = !!paperField<string | null>(paper, 'fulltextPath', null);
+  const hasText = !!paperField<string | null>(paper, 'textPath', null);
+  const failureReason = paperField<string | null>(paper, 'failureReason', null);
+  if (!hasFulltext) return false;
+  if (!hasText) return true;
+  return isProcessFailureReason(failureReason);
+}
+
+function selectPrimaryProcessFailureReason(issues: string[]): string | null {
+  for (const code of PROCESS_FAILURE_PRIORITY) {
+    if (issues.includes(code)) return code;
+  }
+  return issues[0] ?? null;
+}
+
+export function assessExtractedTextQuality(fullText: string): TextQualityDiagnostics {
+  const nonWhitespace = fullText.replace(/\s+/g, '');
+  const nonEmptyLines = fullText.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+  const informativeCharPattern = /[\p{L}\p{N}]/gu;
+  const informativeChars = (nonWhitespace.match(informativeCharPattern) ?? []).length;
+  const uniqueLines = new Set(nonEmptyLines).size;
+  const avgNonEmptyLineLength = nonEmptyLines.length > 0
+    ? nonEmptyLines.reduce((sum, line) => sum + line.length, 0) / nonEmptyLines.length
+    : 0;
+  const informativeCharRatio = nonWhitespace.length > 0 ? informativeChars / nonWhitespace.length : 0;
+  const uniqueLineRatio = nonEmptyLines.length > 0 ? uniqueLines / nonEmptyLines.length : 1;
+  const isTooShort = nonWhitespace.length < 100;
+  const isLowQuality = !isTooShort && (
+    (nonWhitespace.length >= 1000 && informativeCharRatio < 0.45)
+    || (nonEmptyLines.length >= 20 && uniqueLineRatio < 0.2)
+    || (nonEmptyLines.length >= 5 && avgNonEmptyLineLength > 1200)
+  );
+
+  return {
+    isTooShort,
+    isLowQuality,
+    charCount: nonWhitespace.length,
+    nonEmptyLineCount: nonEmptyLines.length,
+    avgNonEmptyLineLength: Number(avgNonEmptyLineLength.toFixed(2)),
+    informativeCharRatio: Number(informativeCharRatio.toFixed(3)),
+    uniqueLineRatio: Number(uniqueLineRatio.toFixed(3)),
+  };
+}
 
 // ─── Helpers ───
 
@@ -62,6 +183,7 @@ export interface ProcessServices {
   ragService: {
     embedAndIndexChunks: (chunks: unknown[]) => Promise<unknown>;
   } | null;
+  getRagService?: (() => ProcessServices['ragService']) | undefined;
   bibliographyService: {
     enrichBibliography: (paper: unknown) => Promise<unknown>;
   } | null;
@@ -110,14 +232,28 @@ export function createProcessWorkflow(services: ProcessServices) {
         fulltextStatus: ['available'],
         limit: 1000,
       });
+      let missingTextCount = 0;
+      let failedWithTextCount = 0;
       paperIds = result.items
         .filter((p) => {
-          const hasFulltext = !!paperField<string | null>(p, 'fulltextPath', null);
           const hasText = !!paperField<string | null>(p, 'textPath', null);
-          return hasFulltext && !hasText;
+          const failureReason = paperField<string | null>(p, 'failureReason', null);
+          const shouldQueue = shouldQueuePaperForProcessing(p);
+          if (shouldQueue) {
+            if (!hasText) {
+              missingTextCount++;
+            } else if (isProcessFailureReason(failureReason)) {
+              failedWithTextCount++;
+            }
+          }
+          return shouldQueue;
         })
         .map((p) => p['id'] as string);
-      logger.info('[ProcessWorkflow] Found unprocessed papers', { count: paperIds.length });
+      logger.info('[ProcessWorkflow] Selected papers for processing', {
+        count: paperIds.length,
+        missingTextCount,
+        failedWithTextCount,
+      });
     }
 
     if (paperIds.length === 0) {
@@ -214,36 +350,32 @@ async function processSinglePaper(
   logger.info(`[process] Starting post-processing for ${paperId}`, { pdfPath: resolvedPath });
 
   const result = await processExtractAndHydrate(paperId, resolvedPath, paper, ctx, runner ? { runner } : undefined);
-
-  // Determine whether this paper's processing actually succeeded.
-  // Text extraction is the critical path — if we have no text, it's a failure.
-  const isCriticalFailure = !result.textPath;
+  const failed = !result.textPath || !!result.failureReason;
 
   await writeExclusive(async () => {
     await dbProxy.updatePaper(paperId, {
       ...result.hydratePatch,
       textPath: result.textPath,
-      failureReason: isCriticalFailure
-        ? (result.vectorFailReason ?? 'text_extraction_failed')
-        : result.vectorIndexed ? null : result.vectorFailReason,
+      failureReason: result.failureReason,
     });
   });
 
-  if (isCriticalFailure) {
+  if (failed) {
     logger.warn(`[process] Paper ${paperId} processing failed`, {
-      vectorFailReason: result.vectorFailReason,
+      textPath: result.textPath,
+      vectorIndexed: result.vectorIndexed,
+      failureReason: result.failureReason,
     });
     return {
       failed: true,
-      failedStage: 'text-extraction',
-      failReason: result.vectorFailReason ?? 'text_extraction_failed',
+      failedStage: stageForProcessFailure(result.failureReason),
+      failReason: result.failureReason ?? 'text_extraction_failed',
     };
   }
 
   logger.info(`[process] Paper ${paperId} processing complete ✓`, {
     textPath: result.textPath,
     vectorIndexed: result.vectorIndexed,
-    vectorFailReason: result.vectorFailReason,
   });
   return { failed: false };
 }
@@ -253,7 +385,7 @@ async function processSinglePaper(
 interface ProcessResult {
   textPath: string | null;
   vectorIndexed: boolean;
-  vectorFailReason: string | null;
+  failureReason: string | null;
   hydratePatch: Partial<PaperMetadata>;
 }
 
@@ -275,13 +407,22 @@ export async function processExtractAndHydrate(
   const { processService, logger, workspacePath } = ctx;
   let textPath: string | null = null;
   let vectorIndexed = false;
-  let vectorFailReason: string | null = null;
   let hydratePatch: Partial<PaperMetadata> = {};
   const tracker = opts?.runner ? new SubstepTracker(['extract', 'hydrate', 'dla', 'chunk', 'index'], opts.runner) : null;
 
   const pipelineStartTime = Date.now();
   let chunkCount = 0;
   let refCount = 0;
+  const processIssues: string[] = [];
+
+  const recordIssue = (issue: string, level: 'info' | 'warn' = 'warn', context?: Record<string, unknown>) => {
+    if (!processIssues.includes(issue)) {
+      processIssues.push(issue);
+    }
+    if (context) {
+      logger[level](`[process] Diagnostic issue for ${paperId}: ${issue}`, context);
+    }
+  };
 
   if (processService) {
     logger.info(`[process] Steps 3-8: Starting text processing for ${paperId}`);
@@ -294,6 +435,7 @@ export async function processExtractAndHydrate(
     const extractStartTime = Date.now();
     const extraction = await processService.extractText(pdfPath);
     const fullText = extraction.fullText ?? '';
+    const textQuality = assessExtractedTextQuality(fullText);
 
     logger.info(`[process] Step 3: Text extraction complete for ${paperId}`, {
       pageCount: extraction.pageCount,
@@ -302,10 +444,21 @@ export async function processExtractAndHydrate(
       estimatedTokens: extraction.estimatedTokenCount,
       ocrConfidence: extraction.ocrConfidence,
       scannedPages: extraction.scannedPageIndices.length,
+      textQuality,
       durationMs: Date.now() - extractStartTime,
     });
 
-    const textTooShort = fullText.length < 100;
+    const textTooShort = textQuality.isTooShort;
+
+    if (textQuality.isLowQuality) {
+      recordIssue('extracted_text_low_quality', 'warn', {
+        charCount: textQuality.charCount,
+        nonEmptyLineCount: textQuality.nonEmptyLineCount,
+        avgNonEmptyLineLength: textQuality.avgNonEmptyLineLength,
+        informativeCharRatio: textQuality.informativeCharRatio,
+        uniqueLineRatio: textQuality.uniqueLineRatio,
+      });
+    }
 
     // ══ Step 3a: Persist OCR line-level bbox for scanned pages ══
     if (ctx.ocrLinesPersist && extraction.ocrPageLines && extraction.ocrPageLines.length > 0) {
@@ -332,8 +485,11 @@ export async function processExtractAndHydrate(
     }
 
     if (textTooShort) {
+      recordIssue('extracted_text_too_short', 'warn', {
+        charCount: textQuality.charCount,
+        nonEmptyLineCount: textQuality.nonEmptyLineCount,
+      });
       logger.warn(`Paper ${paperId}: extracted text too short (${fullText.length} chars), skipping chunking/indexing`);
-      vectorFailReason = `extracted_text_too_short (${fullText.length} chars)`;
     }
 
     // Write text file atomically (§5.2.3)
@@ -400,6 +556,7 @@ export async function processExtractAndHydrate(
       logger.info(`[process] Step 3c: Hydration complete for ${paperId}`, {
         fieldsUpdated: hydrateResult.result.fieldsUpdated.length,
         fieldsMissing: hydrateResult.result.fieldsMissing,
+        hydratePatchKeys: Object.keys(hydratePatch),
         durationMs: Date.now() - hydrateStartTime,
       });
     } catch (err) {
@@ -505,6 +662,20 @@ export async function processExtractAndHydrate(
         });
       }
 
+      const sectionLabels = Array.from(sectionsResult.sectionMap.keys());
+      const recognizedSectionCount = sectionLabels.filter((label) => label !== 'unknown').length;
+      if (fullText.length >= 4000 && recognizedSectionCount === 0) {
+        recordIssue('section_detection_degraded', 'warn', {
+          sectionCount: sectionsResult.sectionMap.size,
+          boundaryCount: sectionsResult.boundaries.length,
+          boundarySample: sectionsResult.boundaries.slice(0, 8).map((boundary) => ({
+            title: boundary.title,
+            label: boundary.label,
+            depth: boundary.depth ?? 1,
+          })),
+        });
+      }
+
       // ══ Step 5: Structure-aware chunking (§2.6.2) ══
       let chunks;
       if (dlaStructure) {
@@ -520,25 +691,47 @@ export async function processExtractAndHydrate(
       }
       chunkCount = chunks.length;
 
+      const chunkTokenCounts = chunks.map((chunk) => (chunk as { tokenCount?: number }).tokenCount ?? 0);
+      const maxChunkTokens = chunkTokenCounts.length > 0 ? Math.max(...chunkTokenCounts) : 0;
+      const minChunkTokens = chunkTokenCounts.length > 0 ? Math.min(...chunkTokenCounts) : 0;
+
       logger.info(`[process] Step 5: Chunking complete for ${paperId}`, {
         chunkCount,
         avgChunkChars: chunkCount > 0 ? Math.round(fullText.length / chunkCount) : 0,
+        minChunkTokens,
+        maxChunkTokens,
         dlaPath: dlaStructure != null,
       });
+
+      if (fullText.length >= 12000 && chunkCount < 3) {
+        recordIssue('chunking_degraded', 'warn', {
+          fullTextLength: fullText.length,
+          chunkCount,
+          minChunkTokens,
+          maxChunkTokens,
+          sectionLabels,
+        });
+      }
 
       tracker?.advance('index', 'indexing');
 
       // ══ Step 6-7: Embedding + vector index (§2.7) ══
-      if (!ctx.ragService) {
-        vectorFailReason = 'rag_service_unavailable';
+      const ragService = resolveCurrentRagService(ctx);
+      if (!ragService) {
+        recordIssue('rag_service_unavailable', 'warn', {
+          chunkCount,
+        });
         logger.warn(`[process] Step 6-7: ragService unavailable for ${paperId}`);
       } else if (chunks.length === 0) {
-        vectorFailReason = 'no_chunks_produced';
+        recordIssue('no_chunks_produced', 'warn', {
+          fullTextLength: fullText.length,
+          sectionLabels,
+        });
         logger.warn(`[process] Step 6-7: No chunks produced for ${paperId}, skipping indexing`);
       } else {
         const indexStartTime = Date.now();
         try {
-          await ctx.ragService.embedAndIndexChunks(chunks);
+          await ragService.embedAndIndexChunks(chunks);
           vectorIndexed = true;
           logger.info(`[process] Step 6-7: Vector indexing complete for ${paperId}`, {
             chunkCount, durationMs: Date.now() - indexStartTime,
@@ -549,7 +742,7 @@ export async function processExtractAndHydrate(
             chunkCount,
             durationMs: Date.now() - indexStartTime,
           });
-          vectorFailReason = 'vector_indexing_failed';
+          recordIssue('vector_indexing_failed');
         }
       }
 
@@ -563,6 +756,19 @@ export async function processExtractAndHydrate(
         logger.info(`[process] Step 8: Reference extraction complete for ${paperId}`, {
           refCount, dlaPath: dlaStructure != null,
         });
+        if (references.length === 0 && fullText.length >= 6000) {
+          if (/(?:references|bibliography|参考文献)/i.test(fullText)) {
+            recordIssue('no_references_extracted', 'warn', {
+              fullTextLength: fullText.length,
+              dlaPath: dlaStructure != null,
+            });
+          }
+          logger.warn(`[process] Step 8: No references extracted for ${paperId}`, {
+            fullTextLength: fullText.length,
+            hasReferenceHeadingHint: /(?:references|bibliography|参考文献)/i.test(fullText),
+            dlaPath: dlaStructure != null,
+          });
+        }
         if (references.length > 0 && ctx.hydratePersist) {
           try {
             ctx.hydratePersist.upsertReferences(paperId, references);
@@ -571,12 +777,13 @@ export async function processExtractAndHydrate(
           }
         }
       } catch (err) {
+        recordIssue('reference_extraction_failed');
         logger.warn(`[process] Step 8: Reference extraction failed for ${paperId}`, { error: (err as Error).message });
       }
     }
   } else {
     logger.warn(`Paper ${paperId}: processService unavailable, skipping text extraction (steps 3-8)`);
-    vectorFailReason = 'process_service_unavailable';
+    recordIssue('process_service_unavailable');
   }
 
   // ══ Step 9: Bibliography enrichment (§2.9) ══
@@ -590,15 +797,26 @@ export async function processExtractAndHydrate(
     }
   }
 
+  const persistedTextPath = textTooShortOrMissing(textPath, processIssues) ? null : textPath;
+  const failureReason = selectPrimaryProcessFailureReason(
+    persistedTextPath ? processIssues : ['text_extraction_failed', ...processIssues],
+  );
+
   logger.info(`[process] processExtractAndHydrate complete for ${paperId}`, {
     vectorIndexed,
-    vectorFailReason,
+    failureReason,
+    processIssues,
     hydrateFields: Object.keys(hydratePatch).length,
+    persistedTextPath,
     textChars: textPath ? (await fs.promises.stat(textPath).catch(() => null))?.size ?? 0 : 0,
     chunkCount,
     refCount,
     durationMs: Date.now() - pipelineStartTime,
   });
 
-  return { textPath, vectorIndexed, vectorFailReason, hydratePatch };
+  return { textPath: persistedTextPath, vectorIndexed, failureReason, hydratePatch };
+}
+
+function textTooShortOrMissing(textPath: string | null, processIssues: string[]): boolean {
+  return !textPath || processIssues.includes('extracted_text_too_short');
 }
