@@ -30,6 +30,7 @@ export function useAutoScroll(
   });
   const prevCountRef = useRef(messageCount);
   const rafRef = useRef<number | null>(null);
+  const userScrollingRef = useRef(false);
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;
@@ -74,9 +75,31 @@ export function useAutoScroll(
       } else {
         scrollToBottom();
       }
+    } else if (messageCount < prevCountRef.current) {
+      // Session reset (message count decreased) — clear scroll state
+      userScrollingRef.current = false;
+      setState({ isUserScrolledUp: false, unreadCount: 0 });
     }
     prevCountRef.current = messageCount;
   }, [messageCount, state.isUserScrolledUp, scrollToBottom]);
+
+  // wheel 事件检测用户滚动意图（在 scroll 位置改变之前触发，可靠中断 RAF）
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (!isStreaming) return;
+      // 向上滚动：立即标记用户主动滚动，中断 RAF
+      if (e.deltaY < 0) {
+        userScrollingRef.current = true;
+        setState((prev) => ({ ...prev, isUserScrolledUp: true }));
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: true });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isStreaming, containerRef]);
 
   // 流式输出期间 RAF 自动滚动
   useEffect(() => {
@@ -85,10 +108,16 @@ export function useAutoScroll(
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      userScrollingRef.current = false;
       return;
     }
 
     const tick = () => {
+      // wheel 事件已触发，停止强制滚动
+      if (userScrollingRef.current) {
+        rafRef.current = null;
+        return;
+      }
       const el = containerRef.current;
       if (el) {
         el.scrollTop = el.scrollHeight;

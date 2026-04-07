@@ -130,6 +130,7 @@ function reducer(state: MergeState, action: MergeAction): MergeState {
 // ── Helpers ──
 
 const MATURITY_I18N_KEYS: Record<Maturity, string> = {
+  tag: 'analysis.merge.maturityLabels.tag',
   tentative: 'analysis.merge.maturityLabels.tentative',
   working: 'analysis.merge.maturityLabels.working',
   established: 'analysis.merge.maturityLabels.established',
@@ -174,18 +175,17 @@ export function ConceptMergeDialog({
       if (c.id === sourceConceptId) return false;
       if (!q) return true;
       return (
-        c.name.toLowerCase().includes(q) ||
         c.nameZh.toLowerCase().includes(q) ||
         c.nameEn.toLowerCase().includes(q) ||
-        c.keywords.some((k) => k.toLowerCase().includes(q))
+        c.searchKeywords.some((k) => k.toLowerCase().includes(q))
       );
     });
   }, [concepts, sourceConceptId, state.searchQuery]);
 
   // Compute mapping counts lazily (we show them in comparison cards).
   // We don't fetch mappings eagerly — show concept-level data instead.
-  const sourceKeywords = sourceConcept?.keywords ?? [];
-  const retainKeywords = retainConcept?.keywords ?? [];
+  const sourceKeywords = sourceConcept?.searchKeywords ?? [];
+  const retainKeywords = retainConcept?.searchKeywords ?? [];
 
   const reset = useCallback(() => dispatch({ type: 'RESET' }), []);
 
@@ -377,7 +377,7 @@ export function ConceptMergeDialog({
           {state.step === 1 && (
             <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                {t('analysis.merge.source')}: <strong>{sourceConcept.name}</strong>
+                {t('analysis.merge.source')}: <strong>{sourceConcept.nameEn}</strong>
               </p>
 
               {/* Search input */}
@@ -414,10 +414,10 @@ export function ConceptMergeDialog({
                     onClick={() => dispatch({ type: 'SET_RETAIN_ID', id: c.id })}
                   >
                     <div style={{ fontWeight: 500, fontSize: 'var(--text-sm, 13px)' }}>
-                      {c.name}
+                      {c.nameEn}
                     </div>
                     <div style={conceptOptionMetaStyle}>
-                      {t(MATURITY_I18N_KEYS[c.maturity])} · {t('analysis.merge.keywordCount', { count: c.keywords.length })}
+                      {t(MATURITY_I18N_KEYS[c.maturity])} · {t('analysis.merge.keywordCount', { count: c.searchKeywords.length })}
                     </div>
                   </button>
                 ))}
@@ -599,11 +599,11 @@ export function ConceptMergeDialog({
               <div style={summaryContainerStyle}>
                 <div style={summaryRowStyle}>
                   <span style={summaryLabelStyle}>{t('analysis.merge.sourceWillDelete')}</span>
-                  <span style={summaryValueDangerStyle}>{sourceConcept.name}</span>
+                  <span style={summaryValueDangerStyle}>{sourceConcept.nameEn}</span>
                 </div>
                 <div style={summaryRowStyle}>
                   <span style={summaryLabelStyle}>{t('analysis.merge.target')}</span>
-                  <span style={summaryValueStyle}>{retainConcept?.name ?? '—'}</span>
+                  <span style={summaryValueStyle}>{retainConcept?.nameEn ?? '—'}</span>
                 </div>
                 <div style={summaryRowStyle}>
                   <span style={summaryLabelStyle}>{t('analysis.merge.conflictMappings')}</span>
@@ -677,18 +677,18 @@ function ComparisonCard({
   return (
     <div style={{ ...comparisonCardStyle, borderColor }}>
       <div style={comparisonCardLabelStyle}>{label}</div>
-      <div style={comparisonCardNameStyle}>{concept.name}</div>
+      <div style={comparisonCardNameStyle}>{concept.nameEn}</div>
       <div style={comparisonCardRowStyle}>
         <span style={comparisonCardFieldStyle}>{t('analysis.concepts.definition')}</span>
         <span style={comparisonCardValueStyle}>
-          {concept.description.slice(0, 60)}
-          {concept.description.length > 60 ? '...' : ''}
+          {concept.definition.slice(0, 60)}
+          {concept.definition.length > 60 ? '...' : ''}
         </span>
       </div>
       <div style={comparisonCardRowStyle}>
         <span style={comparisonCardFieldStyle}>{t('analysis.concepts.keywords')}</span>
         <span style={comparisonCardValueStyle}>
-          {concept.keywords.length > 0 ? concept.keywords.join(', ') : '—'}
+          {concept.searchKeywords.length > 0 ? concept.searchKeywords.join(', ') : '—'}
         </span>
       </div>
       <div style={comparisonCardRowStyle}>

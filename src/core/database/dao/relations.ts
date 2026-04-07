@@ -588,7 +588,7 @@ export function getRelationGraph(
       const placeholders = paperIds.map(() => '?').join(', ');
       const mappingRows = db
         .prepare(
-          `SELECT DISTINCT pcm.paper_id, pcm.concept_id, c.name_zh, c.name_en, c.layer, c.parent_id
+          `SELECT DISTINCT pcm.paper_id, pcm.concept_id, c.name_zh, c.name_en, c.layer, c.parent_id, c.maturity
            FROM paper_concept_map pcm
            JOIN concepts c ON c.id = pcm.concept_id
            WHERE pcm.paper_id IN (${placeholders})
@@ -603,6 +603,7 @@ export function getRelationGraph(
         name_en: string | null;
         layer: string | null;
         parent_id: string | null;
+        maturity: string | null;
       }>;
 
       const conceptNodeIds = new Set<string>(focusedConceptIds);
@@ -615,6 +616,7 @@ export function getRelationGraph(
             label: row.name_zh ?? row.name_en ?? row.concept_id,
             level: parseConceptLevel(row.layer),
             parentId: row.parent_id ?? undefined,
+            metadata: { maturity: row.maturity ?? 'working' },
           });
           conceptNodeIds.add(row.concept_id);
         }
@@ -637,7 +639,7 @@ export function getRelationGraph(
         const placeholders = missingConceptIds.map(() => '?').join(', ');
         const conceptRows = db
           .prepare(
-            `SELECT id, name_zh, name_en, layer, parent_id
+            `SELECT id, name_zh, name_en, layer, parent_id, maturity
              FROM concepts
              WHERE id IN (${placeholders})`,
           )
@@ -647,6 +649,7 @@ export function getRelationGraph(
           name_en: string | null;
           layer: string | null;
           parent_id: string | null;
+          maturity: string | null;
         }>;
 
         for (const row of conceptRows) {
@@ -656,6 +659,7 @@ export function getRelationGraph(
             label: row.name_zh ?? row.name_en ?? row.id,
             level: parseConceptLevel(row.layer),
             parentId: row.parent_id ?? undefined,
+            metadata: { maturity: row.maturity ?? 'working' },
           });
         }
       }

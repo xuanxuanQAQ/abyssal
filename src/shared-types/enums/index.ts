@@ -27,6 +27,7 @@ export type PaperType =
   | 'chapter'
   | 'preprint'
   | 'review'
+  | 'webpage'
   | 'unknown';
 
 /** MainStage 视图类型 */
@@ -112,11 +113,17 @@ export type RecommendationType =
   | 'fill_evidence_gap'
   | 'general';
 
-/** 概念成熟度 */
-export type Maturity = 'tentative' | 'working' | 'established';
+/** 概念成熟度（四级渐进承诺模型） */
+export type Maturity = 'tag' | 'tentative' | 'working' | 'established';
 
-/** 概念定义变更类型 */
-export type ConceptChangeType = 'additive' | 'breaking';
+/** 概念注入策略（对话管线） */
+export type ConceptInjectionStrategy = 'none' | 'reference' | 'anchored' | 'exploratory';
+
+/** 概念定义变更影响类型 */
+export type DefinitionChangeImpact = 'additive' | 'breaking';
+
+/** @deprecated Use DefinitionChangeImpact instead */
+export type ConceptChangeType = DefinitionChangeImpact;
 
 /** 概念历史变更事件类型 */
 export type ConceptHistoryEventType =

@@ -90,8 +90,10 @@ const INVOKE_CHANNELS = [
   'rag:search', 'rag:searchWithReport', 'rag:getWritingContext',
   // pipeline
   'pipeline:start', 'pipeline:cancel',
+  // web
+  'web:import',
   // fs
-  'fs:openPDF', 'fs:savePDFAnnotations', 'fs:exportArticle', 'fs:importFiles',
+  'fs:openPDF', 'fs:openWebArticle', 'fs:savePDFAnnotations', 'fs:exportArticle', 'fs:importFiles',
   'fs:createSnapshot', 'fs:restoreSnapshot', 'fs:listSnapshots', 'fs:cleanupSnapshots',
   'fs:selectImageFile',
   // advisory
@@ -106,8 +108,11 @@ const INVOKE_CHANNELS = [
   // app:window
   'app:window:minimize', 'app:window:toggleMaximize', 'app:window:close',
   'app:window:popOut', 'app:window:list',
-  // concept keywords & article citation helpers
-  'db:concepts:updateKeywords', 'db:articles:getAllCitedPaperIds',
+  // concept keywords, health, impact & article citation helpers
+  'db:concepts:updateKeywords', 'db:concepts:previewImpact', 'db:concepts:getHealth',
+  'db:concepts:getKeywordCandidates', 'db:concepts:acceptKeyword', 'db:concepts:rejectKeyword',
+  'db:analysisBase:get', 'db:analysisBase:has',
+  'db:articles:getAllCitedPaperIds',
   // dla (Document Layout Analysis)
   'dla:analyze', 'dla:getBlocks', 'dla:getDocumentBlocks', 'dla:analyzeDocument',
   'dla:getOcrLines', 'dla:getDocumentOcrLines',

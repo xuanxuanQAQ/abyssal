@@ -215,8 +215,10 @@ export class RagService implements RagServiceLike {
   async searchSemantic(
     queryText: string,
     topK: number = 10,
-    filters: MetadataFilters = {},
+    filters: MetadataFilters | null | undefined = {},
   ): Promise<RankedChunk[]> {
+    // Defensive: IPC boundary can turn undefined into null, bypassing the default
+    if (!filters) filters = {};
     const t0 = Date.now();
     this.logger.debug('[RagService] searchSemantic', {
       queryPreview: queryText.slice(0, 60),

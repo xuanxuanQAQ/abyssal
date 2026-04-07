@@ -79,7 +79,7 @@ describe('registerConceptSuggestionsHandlers', () => {
       nameZh: '图神经网络',
       nameEn: 'Graph Neural Networks',
       definition: 'A neural architecture on graphs.',
-      keywords: ['gnn', 'message passing'],
+      searchKeywords: ['gnn', 'message passing'],
       parentId: 'concept_root',
     });
 
@@ -94,11 +94,10 @@ describe('registerConceptSuggestionsHandlers', () => {
     expect(enqueueDbChange).toHaveBeenCalledWith(['concepts', 'suggested_concepts'], 'insert');
     expect(result).toEqual(expect.objectContaining({
       id: 'concept_child',
-      name: 'Graph Neural Networks',
       nameZh: '图神经网络',
       nameEn: 'Graph Neural Networks',
-      description: 'A neural architecture on graphs.',
-      keywords: ['gnn', 'message passing'],
+      definition: 'A neural architecture on graphs.',
+      searchKeywords: ['gnn', 'message passing'],
       level: 1,
       parentId: 'concept_root',
       history: [],

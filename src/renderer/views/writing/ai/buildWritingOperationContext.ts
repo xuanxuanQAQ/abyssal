@@ -64,6 +64,15 @@ export function buildWritingOperationContext(params: WritingContextParams): Cont
   // EditorSelectionContext so that downstream intent routing and recipe
   // matching can recognise the writing surface.  Caret targets simply have
   // empty selectedText and from === to.
+  //
+  // beforeText/afterText from PersistedWritingTarget are only ~80 chars
+  // (designed for anchor relocation). For AI operations (especially
+  // continue-writing) we extract longer surrounding text from the full
+  // document JSON so the LLM has enough context to write coherently.
+  const { deepBefore, deepAfter } = documentJson
+    ? extractDeepSurroundingText(documentJson, writingTarget?.from ?? 0, writingTarget?.to ?? 0)
+    : { deepBefore: '', deepAfter: '' };
+
   const editorSelection: EditorSelectionContext | null =
     writingTarget
       ? {
@@ -74,8 +83,8 @@ export function buildWritingOperationContext(params: WritingContextParams): Cont
           from: writingTarget.from,
           to: writingTarget.to,
           ...(writingTarget.anchorParagraphId ? { anchorParagraphId: writingTarget.anchorParagraphId } : {}),
-          ...(writingTarget.beforeText ? { beforeText: writingTarget.beforeText } : {}),
-          ...(writingTarget.afterText ? { afterText: writingTarget.afterText } : {}),
+          beforeText: deepBefore || writingTarget.beforeText,
+          afterText: deepAfter || writingTarget.afterText,
         }
       : null;
 
@@ -109,4 +118,56 @@ export function buildWritingOperationContext(params: WritingContextParams): Cont
     },
     frozenAt: Date.now(),
   };
+}
+
+// ── Helpers ──
+
+/** Max characters of surrounding text to extract for AI context. */
+const DEEP_BEFORE_LIMIT = 2000;
+const DEEP_AFTER_LIMIT = 500;
+
+/**
+ * Walk ProseMirror JSONContent to extract plain text, then slice around
+ * the cursor position (from/to) to produce longer before/after context
+ * than the 80-char PersistedWritingTarget anchor text.
+ */
+function extractDeepSurroundingText(
+  doc: JSONContent,
+  from: number,
+  to: number,
+): { deepBefore: string; deepAfter: string } {
+  const fullText = jsonContentToPlainText(doc);
+  // ProseMirror positions include structural offsets (node boundaries).
+  // Plain text extraction drops those, so `from` may overshoot.
+  // Clamp to actual text length; a rough position is still far better
+  // than the 80-char fallback.
+  const pos = Math.min(from, fullText.length);
+  const endPos = Math.min(to, fullText.length);
+
+  const deepBefore = fullText.slice(Math.max(0, pos - DEEP_BEFORE_LIMIT), pos);
+  const deepAfter = fullText.slice(endPos, endPos + DEEP_AFTER_LIMIT);
+
+  return { deepBefore, deepAfter };
+}
+
+/** Recursively extract plain text from ProseMirror JSONContent. */
+function jsonContentToPlainText(node: JSONContent): string {
+  if (node.type === 'text' && typeof node.text === 'string') {
+    return node.text;
+  }
+  if (!node.content || !Array.isArray(node.content)) {
+    // Block-level nodes without children (empty paragraphs, HRs, etc.)
+    // still contribute a newline so paragraph breaks are preserved.
+    const isBlock = node.type === 'paragraph' || node.type === 'heading'
+      || node.type === 'blockquote' || node.type === 'horizontalRule'
+      || node.type === 'bulletList' || node.type === 'orderedList'
+      || node.type === 'listItem' || node.type === 'codeBlock';
+    return isBlock ? '\n' : '';
+  }
+  const isBlockContainer = node.type === 'doc' || node.type === 'paragraph'
+    || node.type === 'heading' || node.type === 'blockquote'
+    || node.type === 'listItem';
+  return node.content
+    .map((child) => jsonContentToPlainText(child))
+    .join(isBlockContainer ? '\n' : '');
 }

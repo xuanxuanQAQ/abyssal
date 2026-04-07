@@ -28,8 +28,8 @@ describe('shutdown resources smoke', () => {
         walCheckpoint: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
       },
-      ragDbService: {
-        close: vi.fn(),
+      ragRuntime: {
+        close: vi.fn(async () => {}),
       },
       lockHandle: {
         release: vi.fn(),
@@ -51,7 +51,7 @@ describe('shutdown resources smoke', () => {
     expect(ctx.dlaProxy.shutdown).toHaveBeenCalledTimes(1);
     expect(ctx.dbProxy.walCheckpoint).toHaveBeenCalledTimes(1);
     expect(ctx.dbProxy.close).toHaveBeenCalledTimes(1);
-    expect(ctx.ragDbService.close).toHaveBeenCalledTimes(1);
+    expect(ctx.ragRuntime.close).toHaveBeenCalledTimes(1);
     expect(ctx.lockHandle.release).toHaveBeenCalledTimes(1);
     expect(ctx.logger.info).toHaveBeenCalledWith('Application shut down gracefully');
 

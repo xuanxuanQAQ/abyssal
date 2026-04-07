@@ -17,6 +17,7 @@ interface MaturityBadgeProps {
 const SIZE_MAP = { sm: 14, md: 18, lg: 24 } as const;
 
 const MATURITY_CONFIG: Record<Maturity, { color: string; label: string; dashArray?: string }> = {
+  tag: { color: '#9CA3AF', label: 'tag', dashArray: '2,3' },
   tentative: { color: '#3B82F6', label: 'ten', dashArray: '4,4' },
   working: { color: '#F59E0B', label: 'wkn' },
   established: { color: '#10B981', label: 'est' },
@@ -38,7 +39,7 @@ export function MaturityBadge({ maturity, size = 'md', className }: MaturityBadg
           cx={px / 2}
           cy={px / 2}
           r={r}
-          fill={maturity === 'established' ? cfg.color : maturity === 'working' ? `${cfg.color}40` : 'none'}
+          fill={maturity === 'established' ? cfg.color : maturity === 'working' ? `${cfg.color}40` : maturity === 'tag' ? `${cfg.color}20` : 'none'}
           stroke={cfg.color}
           strokeWidth={maturity === 'established' ? 2 : 1}
           strokeDasharray={cfg.dashArray}

@@ -424,6 +424,7 @@ export const DEFAULT_ACQUIRE: AcquireConfig = {
 };
 
 const DEFAULT_DISCOVERY: DiscoveryConfig = {
+  searchBackend: 'openalex',
   traversalDepth: 2,
   concurrency: 5,
   maxResultsPerQuery: 100,
@@ -474,11 +475,14 @@ export const DEFAULT_API_KEYS: ApiKeysConfig = {
   geminiApiKey: null,
   deepseekApiKey: null,
   semanticScholarApiKey: null,
+  openalexApiKey: null,
   openalexEmail: null,
   unpaywallEmail: null,
   cohereApiKey: null,
   jinaApiKey: null,
   siliconflowApiKey: null,
+  doubaoApiKey: null,
+  kimiApiKey: null,
   webSearchApiKey: null,
 };
 

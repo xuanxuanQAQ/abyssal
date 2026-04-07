@@ -44,6 +44,7 @@ export class SearchService {
   private readonly axLimiter: RateLimiter;
 
   private readonly ssApiKey: string | null;
+  private readonly oaApiKey: string | null;
   private readonly oaEmail: string | null;
 
   constructor(config: AbyssalConfig, logger: Logger) {
@@ -56,6 +57,7 @@ export class SearchService {
     });
 
     this.ssApiKey = config.apiKeys.semanticScholarApiKey ?? null;
+    this.oaApiKey = config.apiKeys.openalexApiKey ?? null;
     this.oaEmail = config.apiKeys.openalexEmail ?? null;
 
     this.ssLimiter = this.ssApiKey
@@ -121,7 +123,7 @@ export class SearchService {
   ): Promise<PaperMetadata[]> {
     return oa.searchOpenAlex(
       this.http, this.oaLimiter, this.oaEmail, this.logger,
-      concepts, options,
+      concepts, options, this.oaApiKey,
     );
   }
 

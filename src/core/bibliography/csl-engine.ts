@@ -22,6 +22,7 @@ const CSL_TYPE_MAP: Record<PaperType, string> = {
   chapter: 'chapter',
   preprint: 'article',
   review: 'review',
+  webpage: 'webpage',
   unknown: 'article',
 };
 

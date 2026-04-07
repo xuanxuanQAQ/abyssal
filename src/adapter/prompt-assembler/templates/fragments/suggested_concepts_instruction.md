@@ -1,11 +1,13 @@
-## Suggested New Concepts
+## Concept Suggestions (Optional Reference)
 
-If the paper introduces or heavily uses theoretical constructs, frameworks, or recurring terms that are NOT in the provided concept framework, report them in `suggested_new_concepts`.
+As you analyze the paper, you may notice theoretical constructs, frameworks, or recurring terms that are not represented in the concept vocabulary provided. If so, you are welcome to surface them in `suggested_new_concepts` — but treat this as a secondary observation, not a primary task.
 
-For each suggestion:
+Discover what the paper says on its own terms first. If something genuinely novel emerges, describe it:
 - `term`: The term as used in the paper (lowercase_with_underscores)
 - `frequency_in_paper`: How many times this term appears prominently
-- `closest_existing`: The most similar concept ID from the framework, or `null`
-- `reason`: Why this term deserves consideration as a new concept
+- `closest_existing`: The most similar concept ID from the vocabulary, or `null`
+- `reason`: Why this term might be worth the researcher's consideration
 - `suggested_definition`: A concise working definition based on how the paper uses it
 - `suggested_keywords`: 3-5 search keywords for discovering related papers
+
+Findings that fall outside the existing vocabulary are just as valuable as those that connect to it. Report what you see, not what you think the framework expects.

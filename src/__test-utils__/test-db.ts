@@ -76,6 +76,7 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
       proxyMode: 'blocked-only',
     },
     discovery: {
+      searchBackend: 'openalex',
       traversalDepth: 2,
       concurrency: 5,
       maxResultsPerQuery: 100,
@@ -121,11 +122,14 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
       geminiApiKey: null,
       deepseekApiKey: null,
       semanticScholarApiKey: null,
+      openalexApiKey: null,
       openalexEmail: null,
       unpaywallEmail: null,
       cohereApiKey: null,
       jinaApiKey: null,
       siliconflowApiKey: null,
+      doubaoApiKey: null,
+      kimiApiKey: null,
       webSearchApiKey: null,
     },
     concepts: {

@@ -6,6 +6,10 @@
  */
 
 import type { Capability } from '../types';
+import type { WorkflowType } from '../../../shared-types/enums';
+
+const WORKFLOW_SYNTHESIZE: WorkflowType = 'synthesize';
+const WORKFLOW_ARTICLE: WorkflowType = 'article';
 
 export function createWritingCapability(): Capability {
   return {
@@ -34,7 +38,7 @@ export function createWritingCapability(): Capability {
             ? (params['concurrency'] as number)
             : 2;
 
-          const task = ctx.services.orchestrator.start('synthesize', {
+          const task = ctx.services.orchestrator.start(WORKFLOW_SYNTHESIZE, {
             conceptIds,
             concurrency,
           });
@@ -42,7 +46,7 @@ export function createWritingCapability(): Capability {
           ctx.eventBus.emit({
             type: 'pipeline:started',
             taskId: task.id,
-            workflow: 'synthesize',
+            workflow: WORKFLOW_SYNTHESIZE,
             conceptIds,
           });
 
@@ -71,14 +75,14 @@ export function createWritingCapability(): Capability {
             return { success: false, summary: 'articleId is required' };
           }
 
-          const task = ctx.services.orchestrator.start('article', {
+          const task = ctx.services.orchestrator.start(WORKFLOW_ARTICLE, {
             articleId,
           });
 
           ctx.eventBus.emit({
             type: 'pipeline:started',
             taskId: task.id,
-            workflow: 'article',
+            workflow: WORKFLOW_ARTICLE,
           });
 
           return {

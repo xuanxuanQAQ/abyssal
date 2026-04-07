@@ -193,8 +193,8 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
 
     // Concept version fingerprint: detect if concepts changed during batch
     const conceptSnapshotHash = computeConceptHash(conceptsForSubset);
-    const maturityCounts = { tentative: 0, working: 0, established: 0 };
-    for (const c of conceptsForSubset) maturityCounts[c.maturity]++;
+    const maturityCounts: Record<string, number> = { tag: 0, tentative: 0, working: 0, established: 0 };
+    for (const c of conceptsForSubset) maturityCounts[c.maturity] = (maturityCounts[c.maturity] ?? 0) + 1;
     logger.info(`[analyze] Concept framework snapshot`, {
       totalConcepts: conceptsForSubset.length,
       ...maturityCounts,
@@ -564,12 +564,26 @@ async function analyzeSinglePaper(
 
   try {
 
-  const textPath = path.join(workspacePath, 'texts', `${paperId}.txt`);
+  // 读取全文：优先 texts/{id}.txt，回退到 DB 记录的 textPath / fulltextPath
+  const conventionalTextPath = path.join(workspacePath, 'texts', `${paperId}.txt`);
   let fullText = '';
-  try {
-    fullText = await fsp.readFile(textPath, 'utf-8');
-  } catch {
-    logger.warn(`Paper ${paperId}: fulltext file not found at ${textPath}`);
+  const textCandidates = [
+    conventionalTextPath,
+    paper['textPath'] as string | null,
+    paper['text_path'] as string | null,
+    paper['fulltextPath'] as string | null,
+    paper['fulltext_path'] as string | null,
+  ].filter(Boolean) as string[];
+
+  for (const candidate of textCandidates) {
+    const resolved = path.isAbsolute(candidate) ? candidate : path.join(workspacePath, candidate);
+    try {
+      fullText = await fsp.readFile(resolved, 'utf-8');
+      if (fullText.length > 0) break;
+    } catch { /* try next */ }
+  }
+  if (!fullText) {
+    logger.warn(`Paper ${paperId}: no text content found`, { tried: textCandidates });
   }
 
   const paperTitle = (paper['title'] as string) ?? '';

@@ -10,14 +10,30 @@ import type {
 export type { ConceptMaturity };
 
 export const CONCEPT_MATURITIES = [
+  'tag',
   'tentative',
   'working',
   'established',
 ] as const;
 
-/** @deprecated 使用 ConceptHistoryEventType 代替 */
-export type ConceptChangeType = ConceptHistoryEventType;
 export type { ConceptHistoryEventType };
+
+// ═══ 概念层级 ═══
+// 预定义层级（可扩展，未知值会触发校验警告）
+
+export const CONCEPT_LAYERS = [
+  'core',
+  'domain',
+  'methodological',
+  'theoretical',
+  'applied',
+] as const;
+
+export type ConceptLayer = (typeof CONCEPT_LAYERS)[number];
+
+export function isKnownLayer(layer: string): layer is ConceptLayer {
+  return (CONCEPT_LAYERS as readonly string[]).includes(layer);
+}
 
 export const CONCEPT_CHANGE_TYPES = [
   'created',

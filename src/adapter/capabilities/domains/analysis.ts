@@ -6,6 +6,9 @@
  */
 
 import type { Capability } from '../types';
+import type { WorkflowType } from '../../../shared-types/enums';
+
+const WORKFLOW_ANALYZE: WorkflowType = 'analyze';
 
 export function createAnalysisCapability(): Capability {
   return {
@@ -16,10 +19,10 @@ export function createAnalysisCapability(): Capability {
     operations: [
       {
         name: 'get_paper',
-        description: 'Get detailed metadata for a paper including title, authors, abstract, analysis status, and fulltext status.',
+        description: 'Get detailed metadata for a paper including title, authors, abstract, analysis status, and fulltext status. Use query_papers first to find paper IDs.',
         routeFamilies: ['research_qa'],
         params: [
-          { name: 'paperId', type: 'string', description: 'Paper ID', required: true },
+          { name: 'paperId', type: 'string', description: 'Paper ID (12-char hex hash, e.g. "a1b2c3d4e5f6"). Get IDs from query_papers or get_stats results.', required: true },
         ],
         permissionLevel: 0,
         execute: async (params, ctx) => {
@@ -30,7 +33,7 @@ export function createAnalysisCapability(): Capability {
       },
       {
         name: 'query_papers',
-        description: 'Search and filter papers in the library by text, relevance, status, or tags.',
+        description: 'Search and filter papers in the library by text, relevance, status, or tags. Returns paper IDs, titles, authors, year, and status fields.',
         routeFamilies: ['research_qa', 'retrieval_search'],
         params: [
           { name: 'searchText', type: 'string', description: 'Full-text search query' },
@@ -39,8 +42,20 @@ export function createAnalysisCapability(): Capability {
         ],
         permissionLevel: 0,
         execute: async (params, ctx) => {
-          const result = await ctx.services.dbProxy.queryPapers(params);
-          return { success: true, data: result, summary: 'Query completed' };
+          const filter = {
+            searchText: (params['searchText'] as string) ?? undefined,
+            limit: Math.min((params['limit'] as number) ?? 20, 50),
+            offset: (params['offset'] as number) ?? undefined,
+          };
+          const result = await ctx.services.dbProxy.queryPapers(filter) as {
+            items: Array<Record<string, unknown>>;
+            total: number;
+          };
+          return {
+            success: true,
+            data: result,
+            summary: `Found ${result.total} paper(s)${filter.searchText ? ` matching "${filter.searchText}"` : ''}`,
+          };
         },
       },
       {
@@ -82,7 +97,7 @@ export function createAnalysisCapability(): Capability {
             return { success: false, summary: 'Orchestrator not available' };
           }
           const paperIds = params['paperIds'] as string[];
-          const task = ctx.services.orchestrator.start('analyze', {
+          const task = ctx.services.orchestrator.start(WORKFLOW_ANALYZE, {
             paperIds,
             concurrency: (params['concurrency'] as number) ?? 2,
           });
@@ -90,7 +105,7 @@ export function createAnalysisCapability(): Capability {
           ctx.eventBus.emit({
             type: 'pipeline:started',
             taskId: task.id,
-            workflow: 'analyze',
+            workflow: WORKFLOW_ANALYZE,
             paperIds,
           });
 

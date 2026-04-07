@@ -44,10 +44,16 @@ function appendHistory(
 }
 
 const MATURITY_ORDER: Record<ConceptMaturity, number> = {
-  tentative: 0,
-  working: 1,
-  established: 2,
+  tag: 0,
+  tentative: 1,
+  working: 2,
+  established: 3,
 };
+
+/** tag 级别的概念不参与任何下游系统 */
+export function isActiveMaturity(maturity: ConceptMaturity): boolean {
+  return maturity !== 'tag';
+}
 
 /**
  * DAG 循环检测：从 targetParentId 沿 parent_id 链向上遍历，
@@ -275,6 +281,17 @@ export function updateConcept(
     params.push(id);
     db.prepare(`UPDATE concepts SET ${setClauses.join(', ')} WHERE id = ?`).run(...params);
 
+    // tag 级别概念不参与下游系统，跳过 GC
+    const effectiveMaturity = fields.maturity ?? current.maturity;
+    if (!isActiveMaturity(effectiveMaturity)) {
+      return {
+        affectedMappings: 0,
+        requiresRelationRecompute: false,
+        requiresSynthesizeRefresh: false,
+        affectedPaperIds: [],
+      };
+    }
+
     // 如果 definition 变更，执行 gcConceptChange
     if (fields.definition !== undefined && fields.definition !== current.definition) {
       return gcConceptChange(db, id, 'definition_refined', isBreaking, lookbackDays);
@@ -324,16 +341,14 @@ export function deprecateConcept(
     ).run(id);
 
     // §8.2: 清理 research_memos 中废弃概念引用
-    // 从 concept_ids JSON 数组中移除废弃概念 ID
+    // COALESCE 处理 json_group_array 在空集时返回 [null] 的问题
     db.prepare(`
       UPDATE research_memos
-      SET concept_ids = (
-        SELECT json_group_array(val)
-        FROM (
-          SELECT je.value AS val
-          FROM json_each(concept_ids) je
-          WHERE je.value != ?
-        )
+      SET concept_ids = COALESCE(
+        (SELECT json_group_array(val) FROM (
+          SELECT je.value AS val FROM json_each(concept_ids) je WHERE je.value != ?
+        ) WHERE val IS NOT NULL),
+        '[]'
       ),
       updated_at = ?
       WHERE id IN (
@@ -345,13 +360,11 @@ export function deprecateConcept(
     // §8.3: 清理 research_notes 中废弃概念引用
     db.prepare(`
       UPDATE research_notes
-      SET linked_concept_ids = (
-        SELECT json_group_array(val)
-        FROM (
-          SELECT je.value AS val
-          FROM json_each(linked_concept_ids) je
-          WHERE je.value != ?
-        )
+      SET linked_concept_ids = COALESCE(
+        (SELECT json_group_array(val) FROM (
+          SELECT je.value AS val FROM json_each(linked_concept_ids) je WHERE je.value != ?
+        ) WHERE val IS NOT NULL),
+        '[]'
       ),
       updated_at = ?
       WHERE id IN (
@@ -362,6 +375,14 @@ export function deprecateConcept(
 
     // §8.4: 清理 memo_concept_map 规范化表
     db.prepare('DELETE FROM memo_concept_map WHERE concept_id = ?').run(id);
+
+    // §8.5: 清理标注中的概念引用——conceptTag 降级为 highlight，保留用户高亮
+    db.prepare(`
+      UPDATE annotations
+      SET concept_id = NULL,
+          type = CASE WHEN type = 'conceptTag' THEN 'highlight' ELSE type END
+      WHERE concept_id = ?
+    `).run(id);
 
     return gcConceptChange(db, id, 'deprecated', false);
   });
@@ -514,17 +535,22 @@ export function mergeConcepts(
 
     // 步骤 3：处理冲突映射
     if (conflicts.length > 0) {
+      const conflictPaperIds = conflicts.map((c) => c.paperId);
+      const placeholders = conflictPaperIds.map(() => '?').join(',');
+
       if (conflictResolution === 'keep') {
+        // 保留 keep 概念的映射，删除 merge 概念的冲突映射
         db.prepare(
-          'DELETE FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (SELECT paper_id FROM paper_concept_map WHERE concept_id = ?)',
-        ).run(mergeConceptId, keepConceptId);
+          `DELETE FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (${placeholders})`,
+        ).run(mergeConceptId, ...conflictPaperIds);
       } else if (conflictResolution === 'merge') {
+        // 优先 merge 概念的映射：删除 keep 概念的冲突映射，再迁移 merge 概念的冲突映射
         db.prepare(
-          'DELETE FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (SELECT paper_id FROM paper_concept_map WHERE concept_id = ?)',
-        ).run(keepConceptId, keepConceptId);
+          `DELETE FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (${placeholders})`,
+        ).run(keepConceptId, ...conflictPaperIds);
         db.prepare(
-          'UPDATE paper_concept_map SET concept_id = ?, updated_at = ? WHERE concept_id = ?',
-        ).run(keepConceptId, timestamp, mergeConceptId);
+          `UPDATE paper_concept_map SET concept_id = ?, updated_at = ? WHERE concept_id = ? AND paper_id IN (${placeholders})`,
+        ).run(keepConceptId, timestamp, mergeConceptId, ...conflictPaperIds);
       } else {
         // max_confidence: 更新 keep 版本取最高置信度，删除 merge 版本
         for (const c of conflicts) {
@@ -534,8 +560,8 @@ export function mergeConcepts(
           ).run(maxConf, timestamp, c.paperId, keepConceptId);
         }
         db.prepare(
-          `DELETE FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (${conflicts.map(() => '?').join(',')})`,
-        ).run(mergeConceptId, ...conflicts.map((c) => c.paperId));
+          `DELETE FROM paper_concept_map WHERE concept_id = ? AND paper_id IN (${placeholders})`,
+        ).run(mergeConceptId, ...conflictPaperIds);
       }
     }
 
@@ -549,13 +575,15 @@ export function mergeConcepts(
 
     // 步骤 5：更新碎片笔记和结构化笔记的概念引用
     // 使用子查询 DISTINCT 去重，防止 memo 同时关联 keep 和 merge 时产生重复
+    // COALESCE guards against json_group_array returning [null] on empty result sets
     db.prepare(`
       UPDATE research_memos
-      SET concept_ids = (
-        SELECT json_group_array(val) FROM (
+      SET concept_ids = COALESCE(
+        (SELECT json_group_array(val) FROM (
           SELECT DISTINCT CASE WHEN je.value = ? THEN ? ELSE je.value END AS val
           FROM json_each(concept_ids) je
-        )
+        ) WHERE val IS NOT NULL),
+        '[]'
       ),
       updated_at = ?
       WHERE id IN (
@@ -566,11 +594,12 @@ export function mergeConcepts(
 
     db.prepare(`
       UPDATE research_notes
-      SET linked_concept_ids = (
-        SELECT json_group_array(val) FROM (
+      SET linked_concept_ids = COALESCE(
+        (SELECT json_group_array(val) FROM (
           SELECT DISTINCT CASE WHEN je.value = ? THEN ? ELSE je.value END AS val
           FROM json_each(linked_concept_ids) je
-        )
+        ) WHERE val IS NOT NULL),
+        '[]'
       ),
       updated_at = ?
       WHERE id IN (
@@ -772,88 +801,88 @@ export function gcConceptChange(
   isBreaking: boolean = false,
   lookbackDays: number = 30,
 ): GcConceptChangeResult {
-  const timestamp = now();
-  let affectedMappings = 0;
-  let requiresRelationRecompute = false;
-  let requiresSynthesizeRefresh = false;
-  const affectedPaperIds: PaperId[] = [];
+  // writeTransaction 是可重入的——内部调用（来自 updateConcept/deprecateConcept 的
+  // 已有事务）会安全嵌套，公共 API 直接调用时提供原子性保证。
+  return writeTransaction(db, () => {
+    const timestamp = now();
+    let affectedMappings = 0;
+    let requiresRelationRecompute = false;
+    let requiresSynthesizeRefresh = false;
+    const affectedPaperIds: PaperId[] = [];
 
-  const existingRows = db.prepare(
-    'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
-  ).all(conceptId) as { paper_id: string }[];
-  affectedPaperIds.push(...existingRows.map((r) => r.paper_id as PaperId));
+    const existingRows = db.prepare(
+      'SELECT DISTINCT paper_id FROM paper_concept_map WHERE concept_id = ?',
+    ).all(conceptId) as { paper_id: string }[];
+    affectedPaperIds.push(...existingRows.map((r) => r.paper_id as PaperId));
 
-  // ═══ 阶段 1：映射标记 ═══
-  if (changeType === 'definition_refined' && !isBreaking) {
-    // 补充性修改 — 仅标记近期映射
-    const result = db.prepare(`
-      UPDATE paper_concept_map
-      SET reviewed = 0, updated_at = ?
-      WHERE concept_id = ?
-        AND created_at > datetime(?, '-${lookbackDays} days')
-    `).run(timestamp, conceptId, timestamp);
-    affectedMappings = result.changes;
-  } else if (changeType === 'definition_refined' && isBreaking) {
-    // 替换性修改 — 全部映射标记未审阅
-    const result = db.prepare(`
-      UPDATE paper_concept_map
-      SET reviewed = 0, updated_at = ?
-      WHERE concept_id = ?
-    `).run(timestamp, conceptId);
-    affectedMappings = result.changes;
-    requiresSynthesizeRefresh = true;
-    requiresRelationRecompute = true;
-  } else if (changeType === 'deprecated') {
-    // 概念废弃 — 标记映射未审阅
-    const result = db.prepare(`
-      UPDATE paper_concept_map
-      SET reviewed = 0, updated_at = ?
-      WHERE concept_id = ?
-    `).run(timestamp, conceptId);
-    affectedMappings = result.changes;
-  } else if (changeType === 'deleted') {
-    // 物理删除
-    affectedMappings = db.prepare(
-      'DELETE FROM paper_concept_map WHERE concept_id = ?',
-    ).run(conceptId).changes;
-    requiresRelationRecompute = true;
-  }
+    // ═══ 阶段 1：映射标记 ═══
+    if (changeType === 'definition_refined' && !isBreaking) {
+      const cutoff = new Date(Date.now() - lookbackDays * 86_400_000).toISOString();
+      const result = db.prepare(`
+        UPDATE paper_concept_map
+        SET reviewed = 0, updated_at = ?
+        WHERE concept_id = ?
+          AND created_at > ?
+      `).run(timestamp, conceptId, cutoff);
+      affectedMappings = result.changes;
+    } else if (changeType === 'definition_refined' && isBreaking) {
+      const result = db.prepare(`
+        UPDATE paper_concept_map
+        SET reviewed = 0, updated_at = ?
+        WHERE concept_id = ?
+      `).run(timestamp, conceptId);
+      affectedMappings = result.changes;
+      requiresSynthesizeRefresh = true;
+      requiresRelationRecompute = true;
+    } else if (changeType === 'deprecated') {
+      const result = db.prepare(`
+        UPDATE paper_concept_map
+        SET reviewed = 0, updated_at = ?
+        WHERE concept_id = ?
+      `).run(timestamp, conceptId);
+      affectedMappings = result.changes;
+    } else if (changeType === 'deleted') {
+      affectedMappings = db.prepare(
+        'DELETE FROM paper_concept_map WHERE concept_id = ?',
+      ).run(conceptId).changes;
+      requiresRelationRecompute = true;
+    }
 
-  // ═══ 阶段 2：派生关系清理 ═══
-  // 对所有 changeType 都清理概念相关的 paper_relations 边
-  const relResult = db.prepare(
-    "DELETE FROM paper_relations WHERE " +
-    "edge_type IN ('concept_agree', 'concept_conflict', 'concept_extend') AND " +
-    "json_extract(metadata, '$.conceptId') = ?",
-  ).run(conceptId);
-  const deletedRelations = relResult.changes;
-  if (deletedRelations > 0) {
-    requiresRelationRecompute = true;
-  }
+    // ═══ 阶段 2：派生关系渐进失效 ═══
+    if (changeType === 'deleted') {
+      const relResult = db.prepare(
+        "DELETE FROM paper_relations WHERE " +
+        "edge_type IN ('concept_agree', 'concept_conflict', 'concept_extend') AND " +
+        "json_extract(metadata, '$.conceptId') = ?",
+      ).run(conceptId);
+      if (relResult.changes > 0) requiresRelationRecompute = true;
+    } else {
+      const relResult = db.prepare(
+        "UPDATE paper_relations SET stale = 1, stale_since = ? WHERE " +
+        "edge_type IN ('concept_agree', 'concept_conflict', 'concept_extend') AND " +
+        "json_extract(metadata, '$.conceptId') = ?",
+      ).run(timestamp, conceptId);
+      if (relResult.changes > 0) requiresRelationRecompute = true;
+    }
 
-  // ═══ 阶段 3：综述标记 stale ═══
-  // 由返回值告知上层（AppContext.staleDrafts）需要标记
-  // 当 definition 变更或概念废弃时，相关综述需要重新生成
-  if (changeType === 'definition_refined' || changeType === 'deprecated') {
-    requiresSynthesizeRefresh = true;
-  }
+    // ═══ 阶段 3：综述标记 stale ═══
+    if (changeType === 'definition_refined' || changeType === 'deprecated') {
+      requiresSynthesizeRefresh = true;
+    }
 
-  // ═══ 阶段 4：收集受影响论文 ═══
-  // deleted 分支的额外清理
-  if (changeType === 'deleted') {
-    // annotations.concept_id → NULL 由 ON DELETE SET NULL 处理
-    db.prepare('DELETE FROM concepts WHERE id = ?').run(conceptId);
-  }
+    // ═══ 阶段 4：收集受影响论文 ═══
+    if (changeType === 'deleted') {
+      db.prepare('DELETE FROM concepts WHERE id = ?').run(conceptId);
+    }
 
-  // ═══ 阶段 5：触发通知（标记） ═══
-  // 返回结构化结果供上层 pushManager.enqueueDbChange 使用
-
-  return {
-    affectedMappings,
-    requiresRelationRecompute,
-    requiresSynthesizeRefresh,
-    affectedPaperIds,
-  };
+    // ═══ 阶段 5：触发通知 ═══
+    return {
+      affectedMappings,
+      requiresRelationRecompute,
+      requiresSynthesizeRefresh,
+      affectedPaperIds,
+    };
+  });
 }
 
 // ─── 查询辅助 ───
@@ -878,4 +907,172 @@ export function getAllConcepts(
     .prepare(`SELECT * FROM concepts ${condition} ORDER BY created_at`)
     .all() as Record<string, unknown>[];
   return rows.map((r) => fromRow<ConceptDefinition>(r));
+}
+
+/**
+ * 获取活跃概念（排除 tag 级别和已废弃）。
+ * 用于 RAG、映射、知识图谱等下游系统。
+ */
+export function getActiveConcepts(
+  db: Database.Database,
+): ConceptDefinition[] {
+  const rows = db
+    .prepare("SELECT * FROM concepts WHERE deprecated = 0 AND maturity != 'tag' ORDER BY created_at")
+    .all() as Record<string, unknown>[];
+  return rows.map((r) => fromRow<ConceptDefinition>(r));
+}
+
+// ─── 概念变更影响预览 ───
+
+export interface ChangeImpactReport {
+  affectedPaperCount: number;
+  affectedMappingCount: number;
+  affectedAnnotationCount: number;
+  affectedSectionCount: number;
+  affectedNoteCount: number;
+  affectedMemoCount: number;
+  requiresRemapping: boolean;
+  estimatedRemapTime: string;
+}
+
+export function previewConceptChangeImpact(
+  db: Database.Database,
+  conceptId: ConceptId,
+): ChangeImpactReport {
+  const mappingCount = (db.prepare(
+    'SELECT COUNT(*) as cnt FROM paper_concept_map WHERE concept_id = ?',
+  ).get(conceptId) as { cnt: number }).cnt;
+
+  const paperCount = (db.prepare(
+    'SELECT COUNT(DISTINCT paper_id) as cnt FROM paper_concept_map WHERE concept_id = ?',
+  ).get(conceptId) as { cnt: number }).cnt;
+
+  const annotationCount = (db.prepare(
+    'SELECT COUNT(*) as cnt FROM annotations WHERE concept_id = ?',
+  ).get(conceptId) as { cnt: number }).cnt;
+
+  const sectionCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM article_section_meta WHERE rowid IN (SELECT s.rowid FROM article_section_meta s, json_each(s.concept_ids) je WHERE je.value = ?)",
+  ).get(conceptId) as { cnt: number } | undefined)?.cnt ?? 0;
+
+  const noteCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM research_notes WHERE id IN (SELECT n.id FROM research_notes n, json_each(n.linked_concept_ids) je WHERE je.value = ?)",
+  ).get(conceptId) as { cnt: number }).cnt;
+
+  const memoCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM research_memos WHERE id IN (SELECT m.id FROM research_memos m, json_each(m.concept_ids) je WHERE je.value = ?)",
+  ).get(conceptId) as { cnt: number }).cnt;
+
+  const requiresRemapping = mappingCount > 0;
+  const estimatedSeconds = Math.ceil(paperCount * 1.5);
+  const estimatedRemapTime = estimatedSeconds < 60
+    ? `~${estimatedSeconds}s`
+    : `~${Math.ceil(estimatedSeconds / 60)}min`;
+
+  return {
+    affectedPaperCount: paperCount,
+    affectedMappingCount: mappingCount,
+    affectedAnnotationCount: annotationCount,
+    affectedSectionCount: sectionCount,
+    affectedNoteCount: noteCount,
+    affectedMemoCount: memoCount,
+    requiresRemapping,
+    estimatedRemapTime,
+  };
+}
+
+// ─── 概念健康度评分 ───
+
+export interface ConceptHealthDimensions {
+  definitionClarity: number;
+  mappingConsistency: number;
+  reviewCoverage: number;
+  keywordEffectiveness: number;
+  crossPaperConsensus: number;
+}
+
+export interface ConceptHealthResult {
+  conceptId: ConceptId;
+  overall: number;
+  dimensions: ConceptHealthDimensions;
+  suggestions: string[];
+}
+
+export function computeConceptHealth(
+  db: Database.Database,
+  conceptId: ConceptId,
+): ConceptHealthResult {
+  const concept = getConceptOrThrow(db, conceptId, false);
+  const suggestions: string[] = [];
+
+  // 维度 1: 定义清晰度 (0-100)
+  const defLen = concept.definition.length;
+  let definitionClarity = 0;
+  if (defLen >= 50) definitionClarity = Math.min(100, defLen / 3);
+  if (defLen < 20) suggestions.push('Definition is too short — add operational details');
+
+  // 维度 2: 映射一致性 — 映射关系类型的熵值（低熵=高一致性）
+  const relationRows = db.prepare(
+    'SELECT relation, COUNT(*) as cnt FROM paper_concept_map WHERE concept_id = ? GROUP BY relation',
+  ).all(conceptId) as Array<{ relation: string; cnt: number }>;
+  let mappingConsistency = 100;
+  if (relationRows.length > 0) {
+    const total = relationRows.reduce((s, r) => s + r.cnt, 0);
+    const entropy = relationRows.reduce((s, r) => {
+      const p = r.cnt / total;
+      return s - (p > 0 ? p * Math.log2(p) : 0);
+    }, 0);
+    const maxEntropy = Math.log2(Math.max(relationRows.length, 1));
+    mappingConsistency = maxEntropy > 0 ? Math.round((1 - entropy / maxEntropy) * 100) : 100;
+  }
+  if (mappingConsistency < 40) suggestions.push('Mapping relations are inconsistent — consider refining definition');
+
+  // 维度 3: 审阅覆盖率
+  const reviewStats = db.prepare(
+    'SELECT COUNT(*) as total, SUM(CASE WHEN reviewed = 1 THEN 1 ELSE 0 END) as reviewed FROM paper_concept_map WHERE concept_id = ?',
+  ).get(conceptId) as { total: number; reviewed: number };
+  const reviewCoverage = reviewStats.total > 0
+    ? Math.round((reviewStats.reviewed / reviewStats.total) * 100)
+    : 100;
+  if (reviewCoverage < 50 && reviewStats.total > 3) suggestions.push('Many mappings are unreviewed');
+
+  // 维度 4: 关键词有效性 — 关键词命中的论文数 / 总关联论文数
+  const keywordEffectiveness = concept.searchKeywords.length > 0
+    ? Math.min(100, concept.searchKeywords.length * 15)
+    : 0;
+  if (concept.searchKeywords.length < 2) suggestions.push('Add more search keywords for better RAG recall');
+
+  // 维度 5: 跨论文共识 — confidence 标准差（低=高共识）
+  const confRows = db.prepare(
+    'SELECT confidence FROM paper_concept_map WHERE concept_id = ? AND relation != ?',
+  ).all(conceptId, 'irrelevant') as Array<{ confidence: number }>;
+  let crossPaperConsensus = 100;
+  if (confRows.length >= 2) {
+    const mean = confRows.reduce((s, r) => s + r.confidence, 0) / confRows.length;
+    const variance = confRows.reduce((s, r) => s + (r.confidence - mean) ** 2, 0) / confRows.length;
+    const stdDev = Math.sqrt(variance);
+    crossPaperConsensus = Math.round(Math.max(0, (1 - stdDev * 3)) * 100);
+  }
+  if (crossPaperConsensus < 40) suggestions.push('Confidence scores vary widely — concept may be too broad');
+
+  const overall = Math.round(
+    (definitionClarity * 0.15 +
+     mappingConsistency * 0.25 +
+     reviewCoverage * 0.2 +
+     keywordEffectiveness * 0.15 +
+     crossPaperConsensus * 0.25),
+  );
+
+  return {
+    conceptId,
+    overall,
+    dimensions: {
+      definitionClarity,
+      mappingConsistency,
+      reviewCoverage,
+      keywordEffectiveness,
+      crossPaperConsensus,
+    },
+    suggestions,
+  };
 }

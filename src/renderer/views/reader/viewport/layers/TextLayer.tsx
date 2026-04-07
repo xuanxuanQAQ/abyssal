@@ -242,15 +242,17 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
     applyDLA(container, blocks, cssWidth, cssHeight);
   }, [isInRenderWindow, blocks, cssWidth, cssHeight]);
 
-  // ---- Effect 3: Selection management ----
-  // a) Toggle .selecting class (activates endOfContent cover + disables blocker pointer-events via CSS)
-  // b) Dynamic endOfContent repositioning (the key to preventing selection jumping)
+  // ---- Effect 3: Selection management + DLA drag highlight ----
+  // Merged from separate effects to avoid cross-DOM-mutation races.
+  // a) Toggle .selecting class
+  // b) Dynamic endOfContent repositioning
   // c) Click on capturable blocker → select block
+  // d) DLA highlight from dragBounds prop
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !isInRenderWindow) return;
 
-    // --- a) mousedown: only start text-selection mode if not clicking a blocker ---
+    // --- a) mousedown ---
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (target.hasAttribute('data-dla-blocker')) return;
@@ -263,7 +265,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       if (endDiv) container.appendChild(endDiv);
     };
 
-    // --- b) selectionchange: reposition endOfContent ---
+    // --- b) selectionchange ---
     const onSelectionChange = () => {
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) {
@@ -279,7 +281,6 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
 
       container.classList.add('selecting');
 
-      // Dynamic endOfContent repositioning (pdf.js core mechanism)
       const endDiv = container.querySelector('.endOfContent');
       if (endDiv) {
         let anchor: Node | null = sel.focusNode;
@@ -304,7 +305,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
       }
     };
 
-    // --- c) Click on capturable blocker → select block ---
+    // --- c) Click on capturable blocker ---
     const onClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (!target.hasAttribute('data-dla-blocker')) return;
@@ -342,10 +343,7 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
     };
   }, [isInRenderWindow, pageNumber]);
 
-  // ---- Effect 4: DLA highlight from dragBounds prop (pure geometry) ----
-  // When useSelectionMachine provides dragBounds for this page during DRAGGING,
-  // highlight capturable blockers that overlap the visual bounds.
-  // No Selection API dependency — uses normalized coords from DragEnvelope.
+  // ---- Effect 4: DLA drag highlight (kept separate — read-only DOM, no mutation race) ----
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !isInRenderWindow) return;
@@ -354,7 +352,6 @@ const TextLayer = React.memo(function TextLayer(props: TextLayerProps) {
     if (blockers.length === 0) return;
 
     if (!dragBounds || dragBounds.length === 0) {
-      // Clear all highlights when no bounds
       blockers.forEach((el) => el.classList.remove('dla-drag-highlight'));
       return;
     }

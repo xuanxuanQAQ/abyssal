@@ -124,7 +124,7 @@ function buildConceptGroups(
   for (const concept of framework.concepts) {
     conceptInfoById.set(concept.id, {
       id: concept.id,
-      name: concept.name,
+      name: concept.nameEn,
       parentId: concept.parentId,
       level: concept.level,
       maturity: concept.maturity,
@@ -181,7 +181,7 @@ function buildConceptGroups(
     appendSubtree(rootId, conceptIds);
     conceptGroups.push({
       id: root.id,
-      name: root.name,
+      name: root.nameEn,
       conceptIds,
     });
   }

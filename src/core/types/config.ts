@@ -65,7 +65,10 @@ export interface AcquireConfig {
   proxyMode: 'all' | 'blocked-only'; // 默认 'blocked-only'
 }
 
+export type AcademicSearchBackend = 'openalex' | 'semantic_scholar' | 'arxiv';
+
 export interface DiscoveryConfig {
+  searchBackend: AcademicSearchBackend; // 默认 "openalex"
   traversalDepth: number; // 默认 2
   concurrency: number; // 默认 5
   maxResultsPerQuery: number; // 默认 100
@@ -104,10 +107,21 @@ export interface LanguageConfig {
   uiLocale: string; // 默认 "en"，界面语言
 }
 
+export interface ReasoningConfig {
+  /** Provider-agnostic reasoning level: maps to thinkingBudget (Claude),
+   *  reasoning_effort (o3/o4), or thinking enabled (Gemini/DeepSeek-R1).
+   *  'off' = no reasoning. */
+  level: 'off' | 'low' | 'medium' | 'high';
+  /** Explicit token budget override (Claude extended thinking).
+   *  When set, takes precedence over level-based derivation. */
+  budgetTokens?: number;
+}
+
 export interface LlmOverride {
   provider: string;
   model: string;
   maxTokens?: number | undefined;
+  reasoning?: ReasoningConfig | undefined;
 }
 
 export interface LlmConfig {
@@ -122,11 +136,14 @@ export interface ApiKeysConfig {
   geminiApiKey: string | null;
   deepseekApiKey: string | null;
   semanticScholarApiKey: string | null;
+  openalexApiKey: string | null;
   openalexEmail: string | null;
   unpaywallEmail: string | null;
   cohereApiKey: string | null;
   jinaApiKey: string | null;
   siliconflowApiKey: string | null;
+  doubaoApiKey: string | null;
+  kimiApiKey: string | null;
   /** Web 搜索 API key（Tavily / SerpAPI / Bing） */
   webSearchApiKey: string | null;
 }
@@ -187,8 +204,8 @@ export interface NotesConfig {
 export interface WebSearchConfig {
   /** 是否启用 Web 搜索 */
   enabled: boolean; // 默认 false
-  /** 搜索后端：tavily | serpapi | bing */
-  backend: 'tavily' | 'serpapi' | 'bing'; // 默认 "tavily"
+  /** 搜索后端：tavily | serpapi | bing | bocha */
+  backend: 'tavily' | 'serpapi' | 'bing' | 'bocha'; // 默认 "tavily"
 }
 
 // ═══ 全局配置（存储在 AppData，跨工作区共享） ═══

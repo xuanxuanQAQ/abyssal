@@ -70,7 +70,7 @@ describe('registerConceptsHandlers', () => {
 
     const result = await listConcepts!({} as any);
     expect(result).toEqual([
-      expect.objectContaining({ id: 'concept-root', level: 0, description: 'Root definition', keywords: ['root'] }),
+      expect.objectContaining({ id: 'concept-root', level: 0, definition: 'Root definition', searchKeywords: ['root'] }),
       expect.objectContaining({ id: 'concept-child', level: 1 }),
       expect.objectContaining({ id: 'concept-grandchild', level: 2 }),
     ]);

@@ -148,7 +148,7 @@ describe('PDFDocumentManager', () => {
     (manager as unknown as { loadingTask: null }).loadingTask = null;
 
     firstDeferred.resolve(firstDoc);
-    await expect(firstLoad).resolves.toBe(firstDoc);
+    await expect(firstLoad).rejects.toThrow('Document load superseded');
 
     expect(firstDoc.destroy).toHaveBeenCalledTimes(1);
     expect(manager.getDocument()).toBe(secondDoc);

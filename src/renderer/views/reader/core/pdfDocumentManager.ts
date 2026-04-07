@@ -54,7 +54,9 @@ export class PDFDocumentManager {
     const doc = await loadingTask.promise;
     if (generation !== this.loadGeneration) {
       await doc.destroy();
-      return doc;
+      const err = new Error('Document load superseded by a newer request');
+      (err as unknown as Record<string, string>)['code'] = 'LOAD_SUPERSEDED';
+      throw err;
     }
 
     this.document = doc;

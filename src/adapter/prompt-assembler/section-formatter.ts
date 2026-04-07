@@ -123,7 +123,7 @@ export interface ConceptForFormat {
   nameZh: string;
   definition: string;
   searchKeywords: string[];
-  maturity: 'tentative' | 'working' | 'established';
+  maturity: 'tag' | 'tentative' | 'working' | 'established';
 }
 
 /**

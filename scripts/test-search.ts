@@ -26,6 +26,8 @@ const minimalConfig = {
     cohereApiKey: null,
     jinaApiKey: null,
     siliconflowApiKey: null,
+    doubaoApiKey: null,
+    kimiApiKey: null,
   },
 } as AbyssalConfig;
 

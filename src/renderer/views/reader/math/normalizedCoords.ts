@@ -36,6 +36,9 @@ export function pdfToNormalized(
 ): { x: number; y: number } {
   const wCrop = cropBox.maxX - cropBox.minX;
   const hCrop = cropBox.maxY - cropBox.minY;
+  if (wCrop <= 0 || hCrop <= 0) {
+    return { x: 0, y: 0 };
+  }
   return {
     x: (x - cropBox.minX) / wCrop,
     y: (y - cropBox.minY) / hCrop,
@@ -53,6 +56,9 @@ export function normalizedToPDF(
 ): { x: number; y: number } {
   const wCrop = cropBox.maxX - cropBox.minX;
   const hCrop = cropBox.maxY - cropBox.minY;
+  if (wCrop <= 0 || hCrop <= 0) {
+    return { x: cropBox.minX, y: cropBox.minY };
+  }
   return {
     x: x * wCrop + cropBox.minX,
     y: y * hCrop + cropBox.minY,
@@ -65,6 +71,9 @@ export function normalizedToPDF(
 export function rectPdfToNormalized(rect: Rect, cropBox: CropBox): Rect {
   const wCrop = cropBox.maxX - cropBox.minX;
   const hCrop = cropBox.maxY - cropBox.minY;
+  if (wCrop <= 0 || hCrop <= 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
   return {
     x: (rect.x - cropBox.minX) / wCrop,
     y: (rect.y - cropBox.minY) / hCrop,
@@ -79,6 +88,9 @@ export function rectPdfToNormalized(rect: Rect, cropBox: CropBox): Rect {
 export function rectNormalizedToPDF(rect: Rect, cropBox: CropBox): Rect {
   const wCrop = cropBox.maxX - cropBox.minX;
   const hCrop = cropBox.maxY - cropBox.minY;
+  if (wCrop <= 0 || hCrop <= 0) {
+    return { x: cropBox.minX, y: cropBox.minY, width: 0, height: 0 };
+  }
   return {
     x: rect.x * wCrop + cropBox.minX,
     y: rect.y * hCrop + cropBox.minY,

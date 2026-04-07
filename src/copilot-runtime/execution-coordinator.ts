@@ -79,9 +79,11 @@ class OperationAbortedError extends Error {
 
 export class ExecutionCoordinator {
   private deps: ExecutionCoordinatorDeps;
+  private log: (msg: string, data?: unknown) => void;
 
   constructor(deps: ExecutionCoordinatorDeps) {
     this.deps = deps;
+    this.log = deps.logger ?? (() => {});
   }
 
   /**
@@ -147,6 +149,20 @@ export class ExecutionCoordinator {
       intent: operation.intent,
     });
 
+    this.log('[Coordinator] Phase 0: normalize', {
+      operationId: operation.id,
+      intent: operation.intent,
+      surface: operation.surface,
+      prompt: operation.prompt.slice(0, 100),
+      hasSelection: !!operation.context?.selection,
+      selectionKind: operation.context?.selection?.kind ?? null,
+      activeView: operation.context?.activeView ?? null,
+      hasWriting: !!operation.context?.writing,
+      hasArticle: !!operation.context?.article,
+      articleId: operation.context?.article?.articleId ?? null,
+      reasoning: operation.metadata?.reasoning ?? false,
+    });
+
     traceStore.completePhase(operation.id, 'normalize');
 
     try {
@@ -155,6 +171,15 @@ export class ExecutionCoordinator {
 
       const classification = await this.deps.router.classify(operation);
 
+      this.log('[Coordinator] Phase 1: intent classification', {
+        operationId: operation.id,
+        originalIntent: operation.intent,
+        classifiedIntent: classification.intent,
+        confidence: classification.confidence,
+        ambiguous: classification.ambiguous,
+        outputTarget: classification.outputTarget,
+        alternatives: classification.alternatives?.map((a) => `${a.intent}(${a.confidence.toFixed(2)})`) ?? [],
+      });
 
       // Update operation with routed intent and target
       const routedOperation: CopilotOperation = {
@@ -164,10 +189,11 @@ export class ExecutionCoordinator {
       };
       currentOperation = routedOperation;
 
-      // Handle ambiguous intent → ask for clarification
-      if (classification.ambiguous && classification.alternatives) {
+      // Handle ambiguous intent → ask for clarification (with depth limit)
+      const clarificationDepth = (routedOperation.metadata?.clarificationDepth as number) ?? 0;
+      if (classification.ambiguous && classification.alternatives && clarificationDepth < 2) {
         return this.handleClarification(
-          routedOperation,
+          { ...routedOperation, metadata: { ...routedOperation.metadata, clarificationDepth: clarificationDepth + 1 } },
           '请选择您想要执行的操作',
           [
             {
@@ -193,6 +219,26 @@ export class ExecutionCoordinator {
       currentOperation = contextualOperation;
       sessionManager.trackOperation(contextualOperation);
 
+      this.log('[Coordinator] Phase 2: context built', {
+        operationId: operation.id,
+        activeView: context.activeView,
+        selectionKind: context.selection?.kind ?? null,
+        selectionText: context.selection?.kind === 'editor'
+          ? (context.selection.selectedText || '(empty/caret)').slice(0, 80)
+          : context.selection?.kind === 'reader'
+            ? context.selection.selectedText.slice(0, 80)
+            : null,
+        editorFrom: context.selection?.kind === 'editor' ? context.selection.from : null,
+        editorTo: context.selection?.kind === 'editor' ? context.selection.to : null,
+        articleId: context.article?.articleId ?? null,
+        sectionId: context.article?.sectionId ?? null,
+        hasWriting: !!context.writing,
+        evidenceCount: context.retrieval.evidence.length,
+        recentTurns: context.conversation.recentTurns.length,
+        focusPapers: context.focusEntities.paperIds.length,
+        focusConcepts: context.focusEntities.conceptIds.length,
+      });
+
       emitter.emit({
         type: 'context.resolved',
         operationId: operation.id,
@@ -206,6 +252,14 @@ export class ExecutionCoordinator {
 
       const resolution = this.deps.recipeRegistry.resolve(contextualOperation, context);
 
+      this.log('[Coordinator] Phase 3: recipe resolution', {
+        operationId: operation.id,
+        intent: contextualOperation.intent,
+        resolution: resolution.resolution,
+        selectedRecipe: resolution.selected?.id ?? null,
+        candidates: resolution.candidates,
+      });
+
       if (!resolution.selected) {
         // Multiple recipes tied → ask user to pick
         if (resolution.resolution === 'deferred_to_user' && resolution.candidates.length > 0) {
@@ -217,6 +271,12 @@ export class ExecutionCoordinator {
         }
 
         // No recipe matched → fallback to plain chat
+        this.log('[Coordinator] Phase 3: NO RECIPE MATCHED — falling back to chat', {
+          operationId: operation.id,
+          intent: contextualOperation.intent,
+          selectionKind: context.selection?.kind ?? null,
+        });
+
         traceStore.failPhase(operation.id, 'recipe', {
           code: 'NO_RECIPE',
           message: 'No recipe matched',
@@ -238,6 +298,18 @@ export class ExecutionCoordinator {
       // Evaluate confirmation policy
       const confirmation = this.deps.confirmationEvaluator.evaluate(contextualOperation);
       plan.confirmation = confirmation;
+
+      this.log('[Coordinator] Phase 4: plan built', {
+        operationId: operation.id,
+        recipeId: plan.recipeId,
+        target: plan.target,
+        steps: plan.steps.map((s) => ({
+          kind: s.kind,
+          ...('mode' in s ? { mode: (s as { mode?: string }).mode } : {}),
+          ...('allowedToolFamilies' in s ? { allowedToolFamilies: (s as { allowedToolFamilies?: string[] }).allowedToolFamilies } : {}),
+        })),
+        confirmation: plan.confirmation,
+      });
 
       emitter.emit({
         type: 'planning.finished',
@@ -414,8 +486,15 @@ export class ExecutionCoordinator {
     let retrievalResults: RetrievalExecutorResult | undefined;
     let operation = initialOperation;
 
-    for (const step of plan.steps) {
+    for (let stepIdx = 0; stepIdx < plan.steps.length; stepIdx++) {
+      const step = plan.steps[stepIdx]!;
       this.throwIfAborted(signal);
+
+      this.log(`[Coordinator] Phase 5: executing step ${stepIdx + 1}/${plan.steps.length}`, {
+        operationId: initialOperation.id,
+        stepKind: step.kind,
+        ...('mode' in step ? { mode: (step as { mode?: string }).mode } : {}),
+      });
 
       switch (step.kind) {
         case 'retrieve': {
@@ -461,6 +540,17 @@ export class ExecutionCoordinator {
           );
           this.throwIfAborted(signal);
           lastText = result.text;
+
+          this.log('[Coordinator] llm_generate completed', {
+            operationId: initialOperation.id,
+            mode: (step as { mode?: string }).mode,
+            textLength: result.text.length,
+            textPreview: result.text.slice(0, 120),
+            toolCallCount: result.toolCalls.length,
+            toolCalls: result.toolCalls.map((tc) => `${tc.name}(${tc.status})`),
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+          });
           break;
         }
 

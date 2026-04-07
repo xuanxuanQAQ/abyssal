@@ -178,7 +178,7 @@ export function buildCoverageSnapshot({
 
     const coverage: ConceptCoverage = {
       conceptId: concept.id,
-      conceptName: concept.name,
+      conceptName: concept.nameEn,
       parentId: concept.parentId,
       synthesized,
       analyzed,

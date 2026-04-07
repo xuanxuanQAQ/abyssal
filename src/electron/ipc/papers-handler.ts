@@ -62,6 +62,7 @@ async function paperToFrontend(p: PaperMetadata, workspaceRoot: string): Promise
     analysisReport: analysisStatus === 'completed'
       ? await readAnalysisReport(raw['analysisPath'] as string | null, p.id, workspaceRoot)
       : null,
+    sourceUrl: raw['sourceUrl'] ?? raw['source_url'] ?? null,
   };
 }
 

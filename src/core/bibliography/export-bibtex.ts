@@ -13,6 +13,7 @@ const TYPE_MAP: Record<PaperType, string> = {
   chapter: 'incollection',
   preprint: 'misc',
   review: 'article',
+  webpage: 'online',
   unknown: 'misc',
 };
 

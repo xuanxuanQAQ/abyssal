@@ -131,3 +131,75 @@ export function useConceptHistory(conceptId: string | null) {
     staleTime: Infinity,
   });
 }
+
+export function useMemosForConcept(conceptId: string | null) {
+  const viewActive = useViewActive();
+  return useQuery({
+    queryKey: ['memos', 'byConcept', conceptId],
+    queryFn: () => getAPI().db.memos.getByEntity('concept', conceptId!),
+    enabled: !!conceptId && viewActive,
+    staleTime: 60_000,
+  });
+}
+
+export function useNotesForConcept(conceptId: string | null) {
+  const viewActive = useViewActive();
+  return useQuery({
+    queryKey: ['notes', 'byConcept', conceptId],
+    queryFn: () => getAPI().db.notes.list({ conceptIds: [conceptId!] }),
+    enabled: !!conceptId && viewActive,
+    staleTime: 60_000,
+  });
+}
+
+export function useConceptImpactPreview(conceptId: string | null) {
+  const viewActive = useViewActive();
+  return useQuery({
+    queryKey: ['concepts', conceptId, 'impact'],
+    queryFn: () => (getAPI() as any).db.concepts.previewImpact(conceptId!),
+    enabled: !!conceptId && viewActive,
+    staleTime: 30_000,
+  });
+}
+
+export function useConceptHealth(conceptId: string | null) {
+  const viewActive = useViewActive();
+  return useQuery({
+    queryKey: ['concepts', conceptId, 'health'],
+    queryFn: () => (getAPI() as any).db.concepts.getHealth(conceptId!),
+    enabled: !!conceptId && viewActive,
+    staleTime: 60_000,
+  });
+}
+
+export function useKeywordCandidates(conceptId: string | null) {
+  const viewActive = useViewActive();
+  return useQuery({
+    queryKey: ['concepts', conceptId, 'keywordCandidates'],
+    queryFn: () => (getAPI() as any).db.concepts.getKeywordCandidates(conceptId!),
+    enabled: !!conceptId && viewActive,
+    staleTime: 30_000,
+  });
+}
+
+export function useAcceptKeyword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (candidateId: number) => (getAPI() as any).db.concepts.acceptKeyword(candidateId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['concepts'] });
+    },
+    onError: (err) => handleError(err),
+  });
+}
+
+export function useRejectKeyword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (candidateId: number) => (getAPI() as any).db.concepts.rejectKeyword(candidateId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['concepts'] });
+    },
+    onError: (err) => handleError(err),
+  });
+}

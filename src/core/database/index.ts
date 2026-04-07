@@ -45,6 +45,8 @@ import { Mutex } from '../infra/mutex';
 import * as papersDao from './dao/papers';
 import * as citationsDao from './dao/citations';
 import * as conceptsDao from './dao/concepts';
+import * as analysisBaseDao from './dao/analysis-base';
+import * as keywordCandidatesDao from './dao/keyword-candidates';
 import * as mappingsDao from './dao/mappings';
 import * as annotationsDao from './dao/annotations';
 import * as seedsDao from './dao/seeds';
@@ -305,6 +307,15 @@ export class DatabaseService implements IDbService {
     );
   }
 
+  completeSplit(
+    originalConceptId: ConceptId,
+    assignments: conceptsDao.SplitAssignment[],
+  ): conceptsDao.GcConceptChangeResult {
+    return this.withOp(() =>
+      conceptsDao.completeSplit(this.db, originalConceptId, assignments),
+    );
+  }
+
   gcConceptChange(
     conceptId: ConceptId,
     changeType: 'definition_refined' | 'deprecated' | 'deleted',
@@ -326,6 +337,18 @@ export class DatabaseService implements IDbService {
     return this.withOp(() => conceptsDao.getAllConcepts(this.db, includeDeprecated));
   }
 
+  getActiveConcepts(): ConceptDefinition[] {
+    return this.withOp(() => conceptsDao.getActiveConcepts(this.db));
+  }
+
+  previewConceptChangeImpact(conceptId: ConceptId): conceptsDao.ChangeImpactReport {
+    return this.withOp(() => conceptsDao.previewConceptChangeImpact(this.db, conceptId));
+  }
+
+  computeConceptHealth(conceptId: ConceptId): conceptsDao.ConceptHealthResult {
+    return this.withOp(() => conceptsDao.computeConceptHealth(this.db, conceptId));
+  }
+
   /**
    * Sync concepts from YAML definitions into the database.
    * Delegates to the concept-sync module using the raw DB handle.
@@ -335,6 +358,50 @@ export class DatabaseService implements IDbService {
   ): import('../config/hot-reload/concept-sync').SyncReport {
     const { syncConceptsFromYaml: doSync } = require('../config/hot-reload/concept-sync') as typeof import('../config/hot-reload/concept-sync');
     return this.withOp(() => doSync(yamlConcepts, this.db, this.logger));
+  }
+
+  // ════════════════════════════════════════
+  // 基底分析（级联提纯阶段一）
+  // ════════════════════════════════════════
+
+  upsertAnalysisBase(
+    paperId: PaperId,
+    data: { claims: string[]; methodTags: string[]; keyTerms: string[]; contributionSummary: string | null },
+  ): void {
+    this.withOp(() => analysisBaseDao.upsertAnalysisBase(this.db, paperId, data));
+  }
+
+  getAnalysisBase(paperId: PaperId): analysisBaseDao.PaperAnalysisBase | null {
+    return this.withOp(() => analysisBaseDao.getAnalysisBase(this.db, paperId));
+  }
+
+  hasAnalysisBase(paperId: PaperId): boolean {
+    return this.withOp(() => analysisBaseDao.hasAnalysisBase(this.db, paperId));
+  }
+
+  // ════════════════════════════════════════
+  // 关键词候选
+  // ════════════════════════════════════════
+
+  addOrMergeKeywordCandidate(
+    conceptId: ConceptId,
+    term: string,
+    paperId: string,
+    confidence: number,
+  ): void {
+    this.withOp(() => keywordCandidatesDao.addOrMergeCandidate(this.db, conceptId, term, paperId, confidence));
+  }
+
+  getKeywordCandidates(conceptId: ConceptId, status?: string): keywordCandidatesDao.KeywordCandidateRow[] {
+    return this.withOp(() => keywordCandidatesDao.getCandidatesForConcept(this.db, conceptId, status as any));
+  }
+
+  acceptKeywordCandidate(candidateId: number): string {
+    return this.withOp(() => keywordCandidatesDao.acceptCandidate(this.db, candidateId));
+  }
+
+  rejectKeywordCandidate(candidateId: number): void {
+    this.withOp(() => keywordCandidatesDao.rejectCandidate(this.db, candidateId));
   }
 
   // ════════════════════════════════════════

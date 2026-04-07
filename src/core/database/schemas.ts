@@ -37,7 +37,7 @@ export const ConceptRowSchema = z.object({
   layer: z.string(),
   definition: z.string(),
   searchKeywords: z.array(z.string()),
-  maturity: z.enum(['tentative', 'working', 'established']),
+  maturity: z.enum(['tag', 'tentative', 'working', 'established']),
   parentId: z.string().nullable(),
   history: z.array(z.object({
     timestamp: z.string(),

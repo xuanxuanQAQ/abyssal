@@ -78,20 +78,29 @@ export async function preloadRemainingPageMetadata(
   const metadata: PageMetadataMap = new Map();
   const pendingUpdates: Array<[number, PageMetadata]> = [];
   let nextPageNumber = 2;
+  let flushing = false;
 
   const flushPending = () => {
-    if (pendingUpdates.length === 0) return;
+    if (flushing || pendingUpdates.length === 0) return;
+    flushing = true;
     const entries = pendingUpdates.splice(0, pendingUpdates.length);
-    options.onBatch?.(entries);
+    try {
+      options.onBatch?.(entries);
+    } finally {
+      flushing = false;
+    }
   };
 
   const worker = async () => {
-    while (nextPageNumber <= numPages) {
+    while (true) {
       if (options.signal?.aborted) return;
+      // Atomically claim the next page number
       const pageNumber = nextPageNumber;
-      nextPageNumber += 1;
+      if (pageNumber > numPages) return;
+      nextPageNumber = pageNumber + 1;
 
       const pageMetadata = await readPageMetadata(pdfDocument, pageNumber);
+      if (options.signal?.aborted) return;
       metadata.set(pageNumber, pageMetadata);
       pendingUpdates.push([pageNumber, pageMetadata]);
 

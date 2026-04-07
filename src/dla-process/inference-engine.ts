@@ -79,7 +79,12 @@ export async function detectPage(
 
   // Run inference
   const startMs = Date.now();
-  const results = await session.run({ images: inputTensor });
+  let results: any;
+  try {
+    results = await session.run({ images: inputTensor });
+  } catch (err) {
+    throw new Error(`ONNX inference failed for page ${pageIndex}: ${(err as Error).message}`);
+  }
   const inferenceMs = Date.now() - startMs;
 
   // Get output tensor — shape [1, N, 6]

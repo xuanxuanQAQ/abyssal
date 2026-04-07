@@ -161,6 +161,7 @@ export async function searchOpenAlex(
   logger: Logger,
   concepts: string[],
   options: OASearchOptions = {},
+  apiKey?: string | null,
 ): Promise<PaperMetadata[]> {
   const limit = options.limit ?? 100;
   const results: PaperMetadata[] = [];
@@ -173,8 +174,8 @@ export async function searchOpenAlex(
 
   for (const concept of concepts) {
     if (/^C\d+$/.test(concept)) {
-      // OpenAlex concept ID → 精确过滤
-      filters.push(`concepts.id:${concept}`);
+      // OpenAlex concept ID → 精确过滤 (concepts 已废弃，改用 topics)
+      filters.push(`topics.id:${concept}`);
     } else {
       // 自由文本 → 收集到 search 参数
       textQueries.push(concept);
@@ -203,12 +204,13 @@ export async function searchOpenAlex(
 
   while (cursor !== null && results.length < limit) {
     const params = new URLSearchParams({
-      per_page: String(Math.min(200, limit - results.length)),
+      per_page: String(Math.min(100, limit - results.length)),
       cursor,
     });
     if (filterParam) params.set('filter', filterParam);
     if (searchParam) params.set('search', searchParam);
-    if (email) params.set('mailto', email);
+    if (apiKey) params.set('api_key', apiKey);
+    else if (email) params.set('mailto', email);
 
     const url = `${BASE_URL}?${params}`;
 

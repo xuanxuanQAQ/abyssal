@@ -29,10 +29,12 @@ export interface MaturityParams {
  * since tentative concepts need the most attention.
  */
 export function resolveMaturityParams(
-  maturities: Array<'tentative' | 'working' | 'established'>,
+  maturities: Array<'tag' | 'tentative' | 'working' | 'established'>,
 ): MaturityParams {
-  const hasTentative = maturities.includes('tentative');
-  const hasWorking = maturities.includes('working');
+  // tag 级概念不参与分析参数决策
+  const active = maturities.filter((m) => m !== 'tag');
+  const hasTentative = active.includes('tentative');
+  const hasWorking = active.includes('working');
 
   if (hasTentative) {
     return {
@@ -70,7 +72,7 @@ export function resolveMaturityParams(
  * since working concepts use standard behavior.
  */
 export function buildMaturityInstructions(
-  maturities: Array<'tentative' | 'working' | 'established'>,
+  maturities: Array<'tag' | 'tentative' | 'working' | 'established'>,
 ): string {
   const params = resolveMaturityParams(maturities);
   const lines: string[] = [];

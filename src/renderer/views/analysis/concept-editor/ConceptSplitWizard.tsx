@@ -202,8 +202,8 @@ export function ConceptSplitWizard({
   const namesAreUnique = !concepts.some(
     (c) =>
       c.id !== conceptId &&
-      (c.name.toLowerCase() === draft1NameTrimmed.toLowerCase() ||
-        c.name.toLowerCase() === draft2NameTrimmed.toLowerCase() ||
+      (c.nameEn.toLowerCase() === draft1NameTrimmed.toLowerCase() ||
+        c.nameEn.toLowerCase() === draft2NameTrimmed.toLowerCase() ||
         c.nameZh.toLowerCase() === draft1NameTrimmed.toLowerCase() ||
         c.nameZh.toLowerCase() === draft2NameTrimmed.toLowerCase()),
   );
@@ -382,14 +382,14 @@ Respond ONLY with a JSON object, no other text.`;
         nameZh: state.draft1.name,
         nameEn: '',
         definition: state.draft1.definition,
-        keywords: [],
+        searchKeywords: [],
         parentId: originalConcept.parentId,
       };
       const concept2Draft: ConceptDraft = {
         nameZh: state.draft2.name,
         nameEn: '',
         definition: state.draft2.definition,
-        keywords: [],
+        searchKeywords: [],
         parentId: originalConcept.parentId,
       };
 
@@ -461,7 +461,7 @@ Respond ONLY with a JSON object, no other text.`;
           {/* Header */}
           <Dialog.Title style={titleStyle}>
             <Scissors size={16} />
-            拆分概念: {originalConcept.name}
+            拆分概念: {originalConcept.nameEn}
           </Dialog.Title>
 
           {/* Step indicator */}
@@ -498,7 +498,7 @@ Respond ONLY with a JSON object, no other text.`;
           {state.step === 1 && (
             <div style={stepBodyStyle}>
               <p style={descriptionStyle}>
-                将 <strong>{originalConcept.name}</strong>{' '}
+                将 <strong>{originalConcept.nameEn}</strong>{' '}
                 拆分为两个新概念。请为每个新概念定义名称和定义。
               </p>
 
@@ -514,8 +514,8 @@ Respond ONLY with a JSON object, no other text.`;
                       dispatch({
                         type: 'COPY_FROM_ORIGINAL',
                         which: 1,
-                        name: originalConcept.name,
-                        definition: originalConcept.description,
+                        name: originalConcept.nameEn,
+                        definition: originalConcept.definition,
                       })
                     }
                   >
@@ -564,8 +564,8 @@ Respond ONLY with a JSON object, no other text.`;
                       dispatch({
                         type: 'COPY_FROM_ORIGINAL',
                         which: 2,
-                        name: originalConcept.name,
-                        definition: originalConcept.description,
+                        name: originalConcept.nameEn,
+                        definition: originalConcept.definition,
                       })
                     }
                   >
@@ -605,10 +605,10 @@ Respond ONLY with a JSON object, no other text.`;
               {/* Original concept reference */}
               <div style={originalRefStyle}>
                 <div style={originalRefLabelStyle}>原概念参考</div>
-                <div style={originalRefNameStyle}>{originalConcept.name}</div>
+                <div style={originalRefNameStyle}>{originalConcept.nameEn}</div>
                 <div style={originalRefDescStyle}>
-                  {originalConcept.description.slice(0, 120)}
-                  {originalConcept.description.length > 120 ? '...' : ''}
+                  {originalConcept.definition.slice(0, 120)}
+                  {originalConcept.definition.length > 120 ? '...' : ''}
                 </div>
               </div>
 
@@ -777,7 +777,7 @@ Respond ONLY with a JSON object, no other text.`;
               <div style={summaryContainerStyle}>
                 <div style={summaryRowStyle}>
                   <span style={summaryLabelStyle}>原概念（将删除）</span>
-                  <span style={summaryValueDangerStyle}>{originalConcept.name}</span>
+                  <span style={summaryValueDangerStyle}>{originalConcept.nameEn}</span>
                 </div>
                 <div style={summaryDividerStyle} />
                 <div style={summaryRowStyle}>

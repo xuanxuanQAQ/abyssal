@@ -63,7 +63,7 @@ export function AdjudicationTimeline({
   const conceptNames = useMemo(() => {
     const map = new Map<string, string>();
     for (const concept of framework?.concepts ?? []) {
-      map.set(concept.id, concept.name);
+      map.set(concept.id, concept.nameEn);
     }
     return map;
   }, [framework]);

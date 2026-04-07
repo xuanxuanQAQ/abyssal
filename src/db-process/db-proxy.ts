@@ -324,6 +324,17 @@ export class DbProxy {
   async close(): Promise<void> {
     this.closed = true;
     this.stopHealthCheck();
+
+    // Immediately reject all pending RPC calls so they fail fast instead of
+    // hanging until the 30s timeout.  The child is about to be killed, so
+    // these will never receive a response.
+    const closeErr = new Error('DbProxy is closing');
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(closeErr);
+    }
+    this.pending.clear();
+
     if (!this.child) return;
 
     try {

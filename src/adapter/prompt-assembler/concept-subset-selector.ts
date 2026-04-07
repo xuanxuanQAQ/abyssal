@@ -22,7 +22,7 @@ export interface ConceptForSubset {
   nameZh: string;
   definition: string;
   searchKeywords: string[];
-  maturity: 'tentative' | 'working' | 'established';
+  maturity: 'tag' | 'tentative' | 'working' | 'established';
   parentId: string | null;
 }
 
@@ -302,6 +302,9 @@ async function getCachedOrEmbed(
     // Cache hit only if: entry exists, definition unchanged, and not expired
     if (cached && cached.defHash === defHash && (now - cached.createdAt) < CONCEPT_CACHE_TTL_MS) {
       result[i] = cached.embedding;
+      // LRU touch: delete and re-insert to move to end of Map iteration order
+      conceptEmbeddingCache.delete(concept.id);
+      conceptEmbeddingCache.set(concept.id, cached);
     } else {
       if (cached) conceptEmbeddingCache.delete(concept.id); // Invalidate stale entry
       uncachedIndices.push(i);
@@ -392,52 +395,114 @@ function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
 // ─── §4.6: Concept subset prompt formatting ───
 
 /**
- * Format the concept subset into a prompt-ready block with maturity instructions.
+ * Injection mode controls how authoritatively concepts are presented to the LLM.
+ *
+ * - 'anchored': Full detail with maturity instructions (Analysis view).
+ * - 'reference': Lighter touch — concepts as "working vocabulary" (Writing view).
+ * - 'exploratory': Minimal — concept names as background context (exploration).
+ */
+export type ConceptInjectionMode = 'anchored' | 'reference' | 'exploratory';
+
+/**
+ * Format the concept subset into a prompt-ready block.
+ *
+ * @param mode Controls the authority level of concept presentation:
+ *   - 'anchored' (default): Full detail with maturity-specific instructions.
+ *   - 'reference': Concepts presented as working vocabulary, not requirements.
+ *   - 'exploratory': Minimal listing — just names and definitions as background.
  */
 export function formatConceptSubset(
   subsetResult: SubsetResult,
   totalConceptCount: number,
   tokenCounter: { count: (text: string) => number },
+  mode: ConceptInjectionMode = 'anchored',
 ): { text: string; tokens: number; conceptCount: number } {
   const lines: string[] = [];
 
-  if (subsetResult.fullInjection) {
-    lines.push(`# Concept Framework (all ${subsetResult.concepts.length} concepts)`);
-  } else {
+  if (mode === 'exploratory') {
+    // ── Exploratory: minimal background context ──
+    lines.push(`# Background Vocabulary (${subsetResult.concepts.length} concepts)`);
+    lines.push('');
     lines.push(
-      `# Concept Framework (${subsetResult.concepts.length} of ${totalConceptCount} concepts, selected by relevance)`,
+      '_The following concepts are part of the researcher\'s working vocabulary. ' +
+      'They are provided as background context only — do not feel constrained by them. ' +
+      'Discover and report what the material itself presents._',
     );
-  }
-  lines.push('');
+    lines.push('');
 
-  for (const concept of subsetResult.concepts) {
-    lines.push(`### ${concept.nameEn} (${concept.nameZh})`);
-    lines.push(`- **ID**: ${concept.id}`);
-    lines.push(`- **Definition**: ${concept.definition}`);
-    lines.push(`- **Keywords**: ${concept.searchKeywords.join(', ')}`);
-    lines.push(`- **Maturity**: ${concept.maturity.toUpperCase()}`);
-
-    if (concept.parentId) {
-      lines.push(`- **Parent**: ${concept.parentId}`);
+    for (const concept of subsetResult.concepts) {
+      lines.push(`- **${concept.nameEn}** (${concept.nameZh}): ${concept.definition}`);
     }
-
-    // Maturity-specific instructions (§4.6)
-    if (concept.maturity === 'tentative') {
-      lines.push('');
-      lines.push('**⚠️ Special Instruction for this concept:**');
-      lines.push('This concept is TENTATIVE. Please:');
-      lines.push('1. Critically evaluate whether the paper supports this conceptualization.');
-      lines.push('2. If a better framing exists, describe it AND add to `suggested_new_concepts`.');
-      lines.push('3. Note relationships to different but semantically related terms.');
-      lines.push('4. Low confidence (< 0.5) is expected and acceptable.');
-    } else if (concept.maturity === 'established') {
-      lines.push('');
+    lines.push('');
+  } else if (mode === 'reference') {
+    // ── Reference: working vocabulary, not requirements ──
+    if (subsetResult.fullInjection) {
+      lines.push(`# Working Vocabulary (all ${subsetResult.concepts.length} concepts)`);
+    } else {
       lines.push(
-        '_This concept is ESTABLISHED. Focus on evidence quality rather than questioning the concept._',
+        `# Working Vocabulary (${subsetResult.concepts.length} of ${totalConceptCount} concepts, selected by relevance)`,
       );
     }
-
     lines.push('');
+    lines.push(
+      '_These concepts represent the researcher\'s evolving vocabulary. ' +
+      'Use them as shared language where they naturally apply, but do not force ' +
+      'connections. Observations outside this vocabulary are equally welcome._',
+    );
+    lines.push('');
+
+    for (const concept of subsetResult.concepts) {
+      lines.push(`### ${concept.nameEn} (${concept.nameZh})`);
+      lines.push(`- **ID**: ${concept.id}`);
+      lines.push(`- **Definition**: ${concept.definition}`);
+      lines.push(`- **Keywords**: ${concept.searchKeywords.join(', ')}`);
+
+      if (concept.maturity === 'tentative') {
+        lines.push(`- _Status: tentative — treat as a hypothesis, not an established term._`);
+      }
+
+      lines.push('');
+    }
+  } else {
+    // ── Anchored (default): full detail with maturity instructions ──
+    if (subsetResult.fullInjection) {
+      lines.push(`# Concept Framework (all ${subsetResult.concepts.length} concepts)`);
+    } else {
+      lines.push(
+        `# Concept Framework (${subsetResult.concepts.length} of ${totalConceptCount} concepts, selected by relevance)`,
+      );
+    }
+    lines.push('');
+
+    for (const concept of subsetResult.concepts) {
+      lines.push(`### ${concept.nameEn} (${concept.nameZh})`);
+      lines.push(`- **ID**: ${concept.id}`);
+      lines.push(`- **Definition**: ${concept.definition}`);
+      lines.push(`- **Keywords**: ${concept.searchKeywords.join(', ')}`);
+      lines.push(`- **Maturity**: ${concept.maturity.toUpperCase()}`);
+
+      if (concept.parentId) {
+        lines.push(`- **Parent**: ${concept.parentId}`);
+      }
+
+      // Maturity-specific instructions (§4.6)
+      if (concept.maturity === 'tentative') {
+        lines.push('');
+        lines.push('**⚠️ Special Instruction for this concept:**');
+        lines.push('This concept is TENTATIVE. Please:');
+        lines.push('1. Critically evaluate whether the paper supports this conceptualization.');
+        lines.push('2. If a better framing exists, describe it AND add to `suggested_new_concepts`.');
+        lines.push('3. Note relationships to different but semantically related terms.');
+        lines.push('4. Low confidence (< 0.5) is expected and acceptable.');
+      } else if (concept.maturity === 'established') {
+        lines.push('');
+        lines.push(
+          '_This concept is ESTABLISHED. Focus on evidence quality rather than questioning the concept._',
+        );
+      }
+
+      lines.push('');
+    }
   }
 
   if (subsetResult.extraInstruction) {

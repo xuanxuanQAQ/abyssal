@@ -15,6 +15,7 @@ import { deriveExtractionMethod } from './extraction-method';
 // ─── mupdf.js 懒加载 ───
 
 let mupdfModule: typeof import('mupdf') | null = null;
+let mupdfInitPromise: Promise<typeof import('mupdf')> | null = null;
 
 const MUPDF_IGNORABLE_WARNINGS = [
   /^warning: line feed missing after stream begin marker/i,
@@ -34,28 +35,35 @@ function createMupdfModuleOptions(): { printErr: (message: string) => void } {
 
 async function getMupdf(): Promise<typeof import('mupdf')> {
   if (mupdfModule) return mupdfModule;
-  const previousOptions = (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module;
-  (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module = createMupdfModuleOptions();
-  try {
-    mupdfModule = await import('mupdf');
-  } catch {
+  if (mupdfInitPromise) return mupdfInitPromise;
+
+  mupdfInitPromise = (async () => {
+    const previousOptions = (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module;
+    (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module = createMupdfModuleOptions();
     try {
-      const fallbackSpecifier = 'mupdf/dist/mupdf.js';
-      mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
-    } catch (err) {
-      throw new ProcessError({
-        message: `Failed to load mupdf.js: ${(err as Error).message}`,
-        cause: err as Error,
-      });
+      mupdfModule = await import('mupdf');
+    } catch {
+      try {
+        const fallbackSpecifier = 'mupdf/dist/mupdf.js';
+        mupdfModule = await import(/* @vite-ignore */ fallbackSpecifier);
+      } catch (err) {
+        throw new ProcessError({
+          message: `Failed to load mupdf.js: ${(err as Error).message}`,
+          cause: err as Error,
+        });
+      }
+    } finally {
+      if (previousOptions === undefined) {
+        delete (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module;
+      } else {
+        (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module = previousOptions;
+      }
+      mupdfInitPromise = null;
     }
-  } finally {
-    if (previousOptions === undefined) {
-      delete (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module;
-    } else {
-      (globalThis as typeof globalThis & { $libmupdf_wasm_Module?: unknown }).$libmupdf_wasm_Module = previousOptions;
-    }
-  }
-  return mupdfModule!;
+    return mupdfModule!;
+  })();
+
+  return mupdfInitPromise;
 }
 
 // ─── 工具：数组众数 ───

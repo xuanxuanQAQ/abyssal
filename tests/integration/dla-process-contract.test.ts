@@ -17,6 +17,29 @@ vi.mock('../../src/dla-process/inference-engine', () => ({
   destroySession: (...args: unknown[]) => processHarness.destroySessionMock(...args),
 }));
 
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFileSync: (path: string, ...args: unknown[]) => {
+        // Return a dummy buffer for test PDF paths to avoid filesystem dependency
+        if (typeof path === 'string' && path.includes('package.json')) {
+          return Buffer.from('%PDF-1.4 dummy');
+        }
+        return actual.readFileSync(path, ...args as [any]);
+      },
+    },
+    readFileSync: (path: string, ...args: unknown[]) => {
+      if (typeof path === 'string' && path.includes('package.json')) {
+        return Buffer.from('%PDF-1.4 dummy');
+      }
+      return actual.readFileSync(path, ...args as [any]);
+    },
+  };
+});
+
 vi.mock('mupdf', () => {
   return {
     Document: {

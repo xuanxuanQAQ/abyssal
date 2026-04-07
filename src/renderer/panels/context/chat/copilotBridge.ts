@@ -133,6 +133,7 @@ export function buildChatCopilotEnvelope(
     surface?: CopilotSurface | undefined;
     intent?: CopilotIntent | undefined;
     skipIdempotency?: boolean | undefined;
+    reasoning?: boolean | undefined;
   },
 ): CopilotOperationEnvelope {
   const context = chatContextToSnapshot(chatCtx);
@@ -146,8 +147,11 @@ export function buildChatCopilotEnvelope(
       prompt,
       context,
       outputTarget: { type: 'chat-message' },
+      ...(options?.reasoning ? { metadata: { reasoning: true } } : {}),
     },
-    ...(options?.skipIdempotency ? { options: { skipIdempotency: true } } : {}),
+    ...(options?.skipIdempotency || options?.reasoning
+      ? { options: { ...(options?.skipIdempotency ? { skipIdempotency: true } : {}), ...(options?.reasoning ? { reasoning: true } : {}) } }
+      : {}),
   };
 }
 

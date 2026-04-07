@@ -26,10 +26,12 @@ export type CapabilityDomain =
 export type ToolRouteFamily =
   | 'research_qa'
   | 'retrieval_search'
+  | 'discovery_online'
   | 'config_diagnostic'
   | 'workspace_control'
   | 'ui_navigation'
   | 'writing_edit'
+  | 'note_management'
   | 'mixed_fallback';
 
 export type PermissionLevel = 0 | 1 | 2;
@@ -116,6 +118,8 @@ export interface CapabilityServices {
   };
   searchService?: {
     searchSemanticScholar: (query: string, options?: { limit?: number }) => Promise<unknown>;
+    searchOpenAlex: (concepts: string[], options?: { limit?: number }) => Promise<unknown>;
+    searchArxiv: (query: string, options?: { limit?: number }) => Promise<unknown>;
   } | null;
   ragService?: {
     searchSemantic: (query: string, topK?: number) => Promise<unknown>;

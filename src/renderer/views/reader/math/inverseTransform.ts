@@ -23,9 +23,9 @@ export function computeInverseTransform(transform: Transform6): Transform6 {
   const [a, b, c, d, e, f] = transform;
   const det = a * d - b * c;
 
-  if (det === 0) {
+  if (Math.abs(det) < 1e-6) {
     throw new Error(
-      "Cannot invert singular transform matrix (determinant is zero)",
+      `Cannot invert near-singular transform matrix (determinant: ${det})`,
     );
   }
 

@@ -32,20 +32,17 @@ function invalidateCacheForWorkflow(
       queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
       break;
     case 'acquire':
-      // entityId 可能未传递，统一刷新所有 paper detail 缓存
+    case 'process':
+      // paper 状态变化（fulltextPath / textPath 等）→ 刷新所有 paper 缓存
       queryClient.invalidateQueries({ queryKey: ['papers', 'detail'] });
       queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
       queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
       break;
     case 'analyze':
-      if (entityId) {
-        queryClient.invalidateQueries({
-          queryKey: ['papers', 'detail', entityId],
-        });
-        queryClient.invalidateQueries({
-          queryKey: ['mappings', 'paper', entityId],
-        });
-      }
+      // analyze 会更新 paper.analysisStatus → 刷新 paper 缓存
+      queryClient.invalidateQueries({ queryKey: ['papers', 'detail'] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'list'] });
+      queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });
       queryClient.invalidateQueries({ queryKey: ['mappings', 'heatmap'] });
       queryClient.invalidateQueries({ queryKey: ['relations', 'graph'] });
       queryClient.invalidateQueries({ queryKey: ['concepts', 'framework'] });

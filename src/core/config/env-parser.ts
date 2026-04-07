@@ -20,6 +20,8 @@ const API_KEY_ENV_MAP: Record<string, keyof ApiKeysConfig> = {
   OPENAI_API_KEY: 'openaiApiKey',
   GEMINI_API_KEY: 'geminiApiKey',
   DEEPSEEK_API_KEY: 'deepseekApiKey',
+  DOUBAO_API_KEY: 'doubaoApiKey',
+  KIMI_API_KEY: 'kimiApiKey',
 };
 
 // ─── 环境变量名 → 配置路径 ───
@@ -161,11 +163,14 @@ export function resolveApiKeys(
     geminiApiKey: existingKeys.geminiApiKey ?? null,
     deepseekApiKey: existingKeys.deepseekApiKey ?? null,
     semanticScholarApiKey: existingKeys.semanticScholarApiKey ?? null,
+    openalexApiKey: existingKeys.openalexApiKey ?? null,
     openalexEmail: existingKeys.openalexEmail ?? null,
     unpaywallEmail: existingKeys.unpaywallEmail ?? null,
     cohereApiKey: existingKeys.cohereApiKey ?? null,
     jinaApiKey: existingKeys.jinaApiKey ?? null,
     siliconflowApiKey: existingKeys.siliconflowApiKey ?? null,
+    doubaoApiKey: existingKeys.doubaoApiKey ?? null,
+    kimiApiKey: existingKeys.kimiApiKey ?? null,
     webSearchApiKey: existingKeys.webSearchApiKey ?? null,
   };
 
@@ -185,6 +190,8 @@ export function resolveApiKeys(
     ABYSSAL_COHERE_API_KEY: 'cohereApiKey',
     ABYSSAL_JINA_API_KEY: 'jinaApiKey',
     ABYSSAL_SILICONFLOW_API_KEY: 'siliconflowApiKey',
+    ABYSSAL_DOUBAO_API_KEY: 'doubaoApiKey',
+    ABYSSAL_KIMI_API_KEY: 'kimiApiKey',
     ABYSSAL_OPENALEX_EMAIL: 'openalexEmail',
     ABYSSAL_WEB_SEARCH_API_KEY: 'webSearchApiKey',
   };

@@ -123,10 +123,11 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
     }
 
     const api = getAPI();
-    triggeredDocRef.current = paperId;
     console.log(`[DLA-Hook] Triggering full document analysis for current document (${totalPages} pages)`);
-    api.dla.analyzeDocument(paperId, pdfPath, totalPages).catch((err) => {
-      console.warn('[DLA-Hook] analyzeDocument failed (non-critical):', err);
+    api.dla.analyzeDocument(paperId, pdfPath, totalPages).then(() => {
+      triggeredDocRef.current = paperId;
+    }).catch((err) => {
+      console.warn('[DLA-Hook] analyzeDocument failed (non-critical), will retry:', err);
     });
   }, [paperId, pdfPath, totalPages, enabled, blockMap]);
 

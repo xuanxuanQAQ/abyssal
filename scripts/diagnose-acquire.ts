@@ -613,6 +613,8 @@ function buildMinimalConfig() {
       cohereApiKey: null,
       jinaApiKey: null,
       siliconflowApiKey: null,
+      doubaoApiKey: null,
+      kimiApiKey: null,
       webSearchApiKey: null,
     },
     workspace: { baseDir: OUT_DIR },

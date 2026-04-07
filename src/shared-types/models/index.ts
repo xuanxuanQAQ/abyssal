@@ -16,7 +16,7 @@ import type {
   RecommendationType,
 
   Maturity,
-  ConceptChangeType,
+  DefinitionChangeImpact,
   ConceptHistoryEventType,
   AdvisoryNotificationType,
   ViewType,
@@ -53,25 +53,24 @@ export interface Paper {
   dateAdded: string; // ISO 8601
   /** §10.3 分析报告（Markdown 格式，由后端分析管线生成） */
   analysisReport: string | null;
+  /** 网页来源 URL（source='web' 时非空） */
+  sourceUrl?: string | null;
 }
 
 // ═══ Concept ═══
 
 export interface Concept {
   id: string;
-  name: string;
-  /** v2.0 中文名 */
   nameZh: string;
-  /** v2.0 英文名 */
   nameEn: string;
-  description: string;
+  /** 概念定义（与 ConceptDefinition.definition 对齐） */
+  definition: string;
   parentId: string | null;
   level: number;
-  /** v2.0 成熟度 */
   maturity: Maturity;
-  /** v2.0 关键词列表 */
-  keywords: string[];
-  /** v2.0 演化历史（JSON 数组） */
+  /** 搜索关键词（与 ConceptDefinition.searchKeywords 对齐） */
+  searchKeywords: string[];
+  /** 演化历史 */
   history: HistoryEntry[];
 }
 
@@ -408,6 +407,8 @@ export interface GraphEdge {
   weight: number;
   /** §1.2 concept_agree/conflict 关联的概念 ID */
   conceptId?: string | undefined;
+  /** Edge is stale (underlying data has changed since computation) */
+  stale?: boolean | undefined;
 }
 
 export interface GraphData {
@@ -544,6 +545,25 @@ export interface ChatClarificationState {
   selectedOptionId?: string | undefined;
 }
 
+/** 消息附带的上下文附件元数据（发送后仍可展示） */
+export interface MessageAttachment {
+  type: 'quote' | 'image' | 'writing-target';
+  /** 引用文本（type=quote） */
+  text?: string | undefined;
+  /** 来源页码（type=quote / image） */
+  page?: number | undefined;
+  /** 图片数量（type=image） */
+  imageCount?: number | undefined;
+  /** 图片类型列表，如 'diagram','table'（type=image） */
+  imageTypes?: string[] | undefined;
+  /** 写作锚点类型（type=writing-target） */
+  targetKind?: 'range' | 'caret' | undefined;
+  /** 写作选区文本（type=writing-target, kind=range） */
+  selectedText?: string | undefined;
+  /** 章节标题（type=writing-target） */
+  sectionTitle?: string | undefined;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -553,8 +573,14 @@ export interface ChatMessage {
   toolCalls?: ToolCallInfo[] | undefined;
   citations?: Citation[] | undefined;
   clarification?: ChatClarificationState | undefined;
+  /** 发送时附带的上下文（引用/图片/写作选区） */
+  attachments?: MessageAttachment[] | undefined;
+  /** 深度思考 / reasoning 内容（可折叠展示） */
+  thinking?: string | undefined;
   /** 流式接收中的临时文本缓冲（仅内存态，不持久化） */
   streamBuffer?: string | undefined;
+  /** 流式接收中的思考内容缓冲（仅内存态，不持久化） */
+  thinkingBuffer?: string | undefined;
   /** 待用户确认后应用到编辑器的 patch（两阶段确认，仅内存态） */
   pendingEditorPatches?: PendingEditorPatch[] | undefined;
 }
@@ -595,6 +621,7 @@ export interface ChatMessageRecord {
   timestamp: number;
   toolCalls?: string | undefined; // JSON
   citations?: string | undefined; // JSON
+  attachments?: string | undefined; // JSON — MessageAttachment[]
 }
 
 /** 会话摘要（§5.1.1 listSessions 返回） */
@@ -845,7 +872,7 @@ export interface ProjectSetupConfig {
   proxyEnabled?: boolean | undefined;
   proxyUrl?: string | undefined;
   webSearchEnabled?: boolean | undefined;
-  webSearchBackend?: 'tavily' | 'serpapi' | 'bing' | undefined;
+  webSearchBackend?: 'tavily' | 'serpapi' | 'bing' | 'bocha' | undefined;
   webSearchApiKey?: string | undefined;
   semanticScholarApiKey?: string | undefined;
 
@@ -861,7 +888,14 @@ export interface ProjectSetupConfig {
 export interface HistoryEntry {
   timestamp: string; // ISO 8601
   type: ConceptHistoryEventType;
-  details: Record<string, unknown>;
+  /** 变更前值摘要（created 类型为空字符串） */
+  oldValueSummary: string;
+  /** 变更原因 */
+  reason: string | null;
+  /** 是否为破坏性变更 */
+  isBreaking: boolean;
+  /** 附加元数据（如 merge/split 来源信息） */
+  metadata: Record<string, unknown> | null;
 }
 
 // ═══ v2.0 概念草案（创建时使用） ═══
@@ -870,14 +904,14 @@ export interface ConceptDraft {
   nameZh: string;
   nameEn: string;
   definition: string;
-  keywords: string[];
+  searchKeywords: string[];
   parentId: string | null;
 }
 
 // ═══ v2.0 概念操作返回 ═══
 
 export interface DefinitionUpdateResult {
-  changeType: ConceptChangeType;
+  changeType: DefinitionChangeImpact;
   affectedMappings: number;
 }
 
@@ -1033,7 +1067,7 @@ export interface SettingsData {
   llm: {
     defaultProvider: string;
     defaultModel: string;
-    workflowOverrides: Record<string, { provider: string; model: string; maxTokens?: number }>;
+    workflowOverrides: Record<string, { provider: string; model: string; maxTokens?: number; reasoning?: { level: 'off' | 'low' | 'medium' | 'high'; budgetTokens?: number } }>;
   };
   rag: {
     embeddingModel: string;
@@ -1071,6 +1105,7 @@ export interface SettingsData {
     proxyMode: 'all' | 'blocked-only';
   };
   discovery: {
+    searchBackend: 'openalex' | 'semantic_scholar' | 'arxiv';
     traversalDepth: number;
     maxResultsPerQuery: number;
     concurrency: number;
@@ -1101,15 +1136,18 @@ export interface SettingsData {
     geminiApiKey: string | null;
     deepseekApiKey: string | null;
     semanticScholarApiKey: string | null;
+    openalexApiKey: string | null;
     unpaywallEmail: string | null;
     cohereApiKey: string | null;
     jinaApiKey: string | null;
     siliconflowApiKey: string | null;
+    doubaoApiKey: string | null;
+    kimiApiKey: string | null;
     webSearchApiKey: string | null;
   };
   webSearch: {
     enabled: boolean;
-    backend: 'tavily' | 'serpapi' | 'bing';
+    backend: 'tavily' | 'serpapi' | 'bing' | 'bocha';
   };
   workspace: {
     baseDir: string;
@@ -1167,6 +1205,60 @@ export interface SuggestedConceptsStats {
   pendingCount: number;
   adoptedCount: number;
   dismissedCount: number;
+}
+
+// ═══ 论文基底分析（级联提纯阶段一产物） ═══
+
+export interface PaperAnalysisBase {
+  paperId: string;
+  claims: string[];
+  methodTags: string[];
+  keyTerms: string[];
+  contributionSummary: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ═══ 概念健康度评分 ═══
+
+export interface ConceptHealthScore {
+  conceptId: string;
+  overall: number;
+  dimensions: {
+    definitionClarity: number;
+    mappingConsistency: number;
+    reviewCoverage: number;
+    keywordEffectiveness: number;
+    crossPaperConsensus: number;
+  };
+  suggestions: string[];
+}
+
+// ═══ 概念变更影响预览 ═══
+
+export interface ChangeImpactReport {
+  affectedPaperCount: number;
+  affectedMappingCount: number;
+  affectedAnnotationCount: number;
+  affectedSectionCount: number;
+  affectedNoteCount: number;
+  affectedMemoCount: number;
+  requiresRemapping: boolean;
+  estimatedRemapTime: string;
+}
+
+// ═══ 关键词候选（Human-in-the-loop） ═══
+
+export interface KeywordCandidate {
+  id: string;
+  conceptId: string;
+  term: string;
+  sourceCount: number;
+  sourcePaperIds: string[];
+  confidence: number;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ═══ DLA (Document Layout Analysis) ═══

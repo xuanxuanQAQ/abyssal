@@ -193,20 +193,8 @@ export function buildSystemPrompt(
     lines.push('## Rules');
     const rules = buildBaseRules(ctx);
 
-    if (enabled.has('active_focus')) {
-      if (ctx.activePapers && ctx.activePapers.length > 1) {
-        rules.push('Answer from the papers context above; only call tools for papers NOT listed above or fulltext search');
-      } else if (ctx.activePaper) {
-        rules.push('Answer from the paper context above; only call tools for OTHER papers or fulltext search');
-      }
-      if (ctx.activeConcept) {
-        rules.push('Answer from the concept context above; only call tools for OTHER concepts');
-      }
-    }
-
     rules.push('Use `retrieve` for fulltext search, `get_paper`/`get_concept` for other entities');
     rules.push('Refer to papers by title, authors, or citations rather than internal IDs');
-    rules.push('When the user only sends a greeting, reply briefly and do not proactively list capabilities or project state.');
     if (interactionMode === 'assistant_profile') {
       rules.push('The user is explicitly asking who you are or what you can do. Introduce yourself as the Abyssal academic workstation AI research assistant, summarize your core capabilities, and keep any current project snapshot brief.');
     }
@@ -216,10 +204,6 @@ export function buildSystemPrompt(
       lines.push(`- ${r}`);
     }
 
-    // Paper download workflow — injected as a tool-use guideline, not repeated every turn.
-    // Moved from a standalone section to a compact instruction to save ~100 tokens.
-    lines.push('');
-    lines.push('When asked to find/download a paper: (1) `query_papers` to check library → (2) if not found, `search_papers` → (3) if found, `import_paper` with metadata + `acquire: true` → (4) report result. Always proceed to import, do not stop after searching.');
   }
 
   return lines.join('\n');

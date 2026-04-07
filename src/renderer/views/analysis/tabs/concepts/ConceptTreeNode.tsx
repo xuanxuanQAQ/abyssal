@@ -129,7 +129,7 @@ export const ConceptTreeNode = React.memo(function ConceptTreeNode({
             whiteSpace: 'nowrap',
           }}
         >
-          {concept.nameZh || concept.name}
+          {concept.nameZh || concept.nameEn}
         </span>
 
         {/* Mapping count + approval rate */}

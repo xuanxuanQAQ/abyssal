@@ -86,14 +86,14 @@ async function handleLifecycle(msg: DlaProcessMessage & { type: 'lifecycle' }): 
 let cachedDocPath: string | null = null;
 let cachedDoc: any = null;
 
-function getOrOpenDocument(mupdf: any, pdfPath: string): any {
+async function getOrOpenDocument(mupdf: any, pdfPath: string): Promise<any> {
   if (cachedDoc && cachedDocPath === pdfPath) {
     return cachedDoc;
   }
   closeCachedDocument();
 
   const fs = require('node:fs') as typeof import('node:fs');
-  const pdfBuffer = fs.readFileSync(pdfPath);
+  const pdfBuffer = await fs.promises.readFile(pdfPath);
   cachedDoc = mupdf.Document.openDocument(pdfBuffer, 'application/pdf');
   cachedDocPath = pdfPath;
   log('Opened PDF', { path: pdfPath });
@@ -129,7 +129,7 @@ async function handleDetect(msg: DlaDetectRequest): Promise<void> {
 
   let doc: any;
   try {
-    doc = getOrOpenDocument(mupdf, pdfPath);
+    doc = await getOrOpenDocument(mupdf, pdfPath);
   } catch (err) {
     sendError(id, `Failed to open PDF: ${(err as Error).message}`);
     return;

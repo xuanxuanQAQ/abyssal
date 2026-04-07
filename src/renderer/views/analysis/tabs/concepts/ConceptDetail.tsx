@@ -4,8 +4,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GitMerge, Scissors, FileText, StickyNote } from 'lucide-react';
-import { useConceptList, useConceptStats } from '../../../../core/ipc/hooks/useConcepts';
+import { GitMerge, Scissors, FileText, StickyNote, Activity, Sparkles, Check, X } from 'lucide-react';
+import { useConceptList, useConceptStats, useUpdateMaturity, useMemosForConcept, useNotesForConcept, useConceptImpactPreview, useConceptHealth, useKeywordCandidates, useAcceptKeyword, useRejectKeyword } from '../../../../core/ipc/hooks/useConcepts';
 import { useMappingsForConcept } from '../../../../core/ipc/hooks/useMappings';
 import { MaturitySelector } from '../../../../shared/MaturitySelector';
 import { DefinitionEditor } from './DefinitionEditor';
@@ -13,7 +13,6 @@ import { KeywordEditor } from './KeywordEditor';
 import { EvolutionTimeline } from './EvolutionTimeline';
 import { ConceptMergeDialog } from '../../concept-editor/ConceptMergeDialog';
 import { ConceptSplitWizard } from '../../concept-editor/ConceptSplitWizard';
-import { useUpdateMaturity } from '../../../../core/ipc/hooks/useConcepts';
 import { useAppStore } from '../../../../core/store';
 import { cancelPendingContextReveal, previewContextSource } from '../../../../panels/context/engine/revealContextSource';
 import { RELATION_LABELS_EN, RELATION_LABELS_ZH, RELATION_COLORS } from '../../shared/relationTheme';
@@ -30,6 +29,11 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
   const updateMaturity = useUpdateMaturity();
   const { data: stats } = useConceptStats(conceptId);
   const { data: mappings } = useMappingsForConcept(conceptId);
+  const { data: impact } = useConceptImpactPreview(conceptId);
+  const { data: health } = useConceptHealth(conceptId);
+  const { data: keywordCandidates } = useKeywordCandidates(conceptId);
+  const acceptKeyword = useAcceptKeyword();
+  const rejectKeyword = useRejectKeyword();
 
   const [mergeOpen, setMergeOpen] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
@@ -78,7 +82,7 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
           marginBottom: 4,
         }}
       >
-        {concept.nameZh || concept.name}
+        {concept.nameZh || concept.nameEn}
       </h2>
       {concept.nameEn && (
         <div
@@ -125,7 +129,7 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
         </label>
         <DefinitionEditor
           conceptId={conceptId}
-          initialValue={concept.description}
+          initialValue={concept.definition}
         />
       </div>
 
@@ -141,7 +145,7 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
         >
           {t('analysis.concepts.keywords')}
         </label>
-        <KeywordEditor conceptId={conceptId} keywords={concept.keywords} />
+        <KeywordEditor conceptId={conceptId} keywords={concept.searchKeywords} />
       </div>
 
       {/* Related paper stats - relation type distribution */}
@@ -165,21 +169,14 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
                 marginBottom: 4,
               }}
             >
-              {t('analysis.concepts.totalMappings', {
-                count: mappingCount,
-                defaultValue: `${mappingCount} mappings`,
-              })}
+              {t('analysis.concepts.totalMappings', { count: mappingCount })}
               {' · '}
-              {t('analysis.concepts.reviewed', {
-                count: reviewedCount,
-                defaultValue: `${reviewedCount} reviewed`,
-              })}
+              {t('analysis.concepts.reviewed', { count: reviewedCount })}
               {avgConfidence > 0 && (
                 <>
                   {' · '}
                   {t('analysis.concepts.avgConfidence', {
                     value: (avgConfidence * 100).toFixed(0),
-                    defaultValue: `avg confidence ${(avgConfidence * 100).toFixed(0)}%`,
                   })}
                 </>
               )}
@@ -214,9 +211,7 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
           </div>
         ) : (
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            {t('analysis.concepts.noMappings', {
-              defaultValue: 'No paper mappings yet',
-            })}
+            {t('analysis.concepts.noMappings')}
           </div>
         )}
       </div>
@@ -250,6 +245,109 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
         </label>
         <EvolutionTimeline history={concept.history} />
       </div>
+
+      {/* Health score */}
+      {health && (
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+            <Activity size={12} style={{ marginRight: 4, verticalAlign: -1 }} />
+            {t('analysis.concepts.healthScore', { defaultValue: 'Health Score' })}
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 13, fontWeight: 700, color: 'white',
+              backgroundColor: health.overall >= 70 ? 'var(--success, #38a169)' : health.overall >= 40 ? 'var(--warning, #d69e2e)' : 'var(--danger, #e53e3e)',
+            }}>
+              {health.overall}
+            </div>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {Object.entries(health.dimensions).map(([key, value]) => (
+                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                  <span style={{ width: 100, color: 'var(--text-muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{key}</span>
+                  <div style={{ flex: 1, height: 4, borderRadius: 2, backgroundColor: 'var(--bg-surface)' }}>
+                    <div style={{ width: `${value as number}%`, height: '100%', borderRadius: 2, backgroundColor: (value as number) >= 60 ? 'var(--accent-color)' : 'var(--warning, #d69e2e)' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {health.suggestions.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              {health.suggestions.map((s: string, i: number) => (
+                <div key={i}>
+                  <Sparkles size={10} style={{ marginRight: 3, verticalAlign: -1 }} />{s}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Keyword candidates (Human-in-the-loop) */}
+      {Array.isArray(keywordCandidates) && keywordCandidates.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+            {t('analysis.concepts.keywordCandidates', { defaultValue: 'Suggested Keywords' })}
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {(keywordCandidates as Array<{ id: number; term: string; sourceCount: number; confidence: number }>)
+              .filter((c) => (c as any).status === 'pending')
+              .slice(0, 5)
+              .map((candidate) => (
+                <div key={candidate.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 0' }}>
+                  <span style={{ flex: 1, color: 'var(--text-secondary)' }}>
+                    {candidate.term}
+                    <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>
+                      ({candidate.sourceCount} papers, {(candidate.confidence * 100).toFixed(0)}%)
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => acceptKeyword.mutate(candidate.id)}
+                    style={{ ...miniActionBtnStyle, color: 'var(--success, #38a169)' }}
+                    title="Accept"
+                  >
+                    <Check size={12} />
+                  </button>
+                  <button
+                    onClick={() => rejectKeyword.mutate(candidate.id)}
+                    style={{ ...miniActionBtnStyle, color: 'var(--danger, #e53e3e)' }}
+                    title="Reject"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* Impact preview */}
+      {impact && (
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+            {t('analysis.concepts.impactPreview', { defaultValue: 'Change Impact' })}
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 12px' }}>
+            <span style={{ color: 'var(--text-muted)' }}>{t('analysis.concepts.papers', { defaultValue: 'Papers' })}</span>
+            <span>{impact.affectedPaperCount}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{t('analysis.concepts.mappings', { defaultValue: 'Mappings' })}</span>
+            <span>{impact.affectedMappingCount}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{t('analysis.concepts.annotations', { defaultValue: 'Annotations' })}</span>
+            <span>{impact.affectedAnnotationCount}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{t('analysis.concepts.sections', { defaultValue: 'Sections' })}</span>
+            <span>{impact.affectedSectionCount}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{t('analysis.concepts.notes_memos', { defaultValue: 'Notes + Memos' })}</span>
+            <span>{impact.affectedNoteCount + impact.affectedMemoCount}</span>
+            {impact.requiresRemapping && (
+              <>
+                <span style={{ color: 'var(--text-muted)' }}>{t('analysis.concepts.remapTime', { defaultValue: 'Remap time' })}</span>
+                <span>{impact.estimatedRemapTime}</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Merge / Split buttons */}
       <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
@@ -286,6 +384,7 @@ export function ConceptDetail({ conceptId }: ConceptDetailProps) {
 
 /**
  * Sub-component: displays related memos and notes for a concept.
+ * Uses React Query hooks for data fetching (consistent with the rest of the codebase).
  */
 function RelatedNotesSection({ conceptId }: { conceptId: string }) {
   const { t } = useTranslation();
@@ -293,54 +392,24 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
   const selectMemo = useAppStore((s) => s.selectMemo);
   const navigateTo = useAppStore((s) => s.navigateTo);
 
-  // We use getAPI directly for getByEntity since there's no dedicated hook
-  const [memos, setMemos] = React.useState<Array<{ id: string; content: string }>>([]);
-  const [notes, setNotes] = React.useState<Array<{ id: string; title: string }>>([]);
-  const [loadState, setLoadState] = React.useState<'loading' | 'ready' | 'error'>('loading');
+  const { data: rawMemos, isLoading: memosLoading, isError: memosError } = useMemosForConcept(conceptId);
+  const { data: rawNotes, isLoading: notesLoading, isError: notesError } = useNotesForConcept(conceptId);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    setLoadState('loading');
-    setMemos([]);
-    setNotes([]);
+  const memos = useMemo(() =>
+    (rawMemos ?? []).map((m: any) => ({
+      id: m.id as string,
+      content: typeof m.text === 'string' ? m.text.slice(0, 60) : '',
+    })),
+  [rawMemos]);
 
-    const loadRelated = async () => {
-      try {
-        // Use IPC bridge to get memos and notes for this concept
-        const { getAPI } = await import('../../../../core/ipc/bridge');
-        const api = getAPI();
-        const [memoResult, noteResult] = await Promise.all([
-          api.db.memos.getByEntity('concept', conceptId),
-          api.db.notes.list({ conceptIds: [conceptId] }),
-        ]);
-        if (!cancelled) {
-          setMemos(
-            (memoResult ?? []).map((m: any) => ({
-              id: m.id,
-              content: typeof m.text === 'string' ? m.text.slice(0, 60) : '',
-            })),
-          );
-          setNotes(
-            (noteResult ?? []).map((n: any) => ({
-              id: n.id ?? n.noteId,
-              title: n.title ?? n.name ?? t('notes.note.untitled'),
-            })),
-          );
-          setLoadState('ready');
-        }
-      } catch {
-        if (!cancelled) {
-          setLoadState('error');
-        }
-      }
-    };
-    void loadRelated();
-    return () => {
-      cancelled = true;
-    };
-  }, [conceptId]);
+  const notes = useMemo(() =>
+    (rawNotes ?? []).map((n: any) => ({
+      id: (n.id ?? n.noteId) as string,
+      title: (n.title ?? t('notes.note.untitled')) as string,
+    })),
+  [rawNotes, t]);
 
-  if (loadState === 'loading') {
+  if (memosLoading || notesLoading) {
     return (
       <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
         {t('analysis.concepts.relatedNotesLoading')}
@@ -348,7 +417,7 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
     );
   }
 
-  if (loadState === 'error') {
+  if (memosError || notesError) {
     return (
       <div style={{ fontSize: 12, color: 'var(--danger, #e53e3e)' }}>
         {t('analysis.concepts.relatedNotesLoadError')}
@@ -363,9 +432,7 @@ function RelatedNotesSection({ conceptId }: { conceptId: string }) {
   if (memos.length === 0 && notes.length === 0) {
     return (
       <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-        {t('analysis.concepts.noRelatedNotes', {
-          defaultValue: 'No related notes or memos',
-        })}
+        {t('analysis.concepts.noRelatedNotes')}
       </div>
     );
   }
@@ -481,4 +548,14 @@ const actionBtnStyle: React.CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: 12,
   cursor: 'pointer',
+};
+
+const miniActionBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  padding: 2,
+  borderRadius: 3,
+  display: 'flex',
+  alignItems: 'center',
 };

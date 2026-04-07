@@ -7,7 +7,7 @@
  * 全屏模式：覆盖 ContextBody（由 ContextPanel 的 PanelGroup 驱动）。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Maximize2, Minimize2, Bot, MessageSquare, Plus, Trash2, Clock } from 'lucide-react';
 import { ChatHistory } from './ChatHistory';
@@ -21,7 +21,8 @@ import { buildChatCopilotEnvelope, mapCopilotToolStatus } from './copilotBridge'
 import { useChatStore, type ChatDockMode } from '../../../core/store/useChatStore';
 import { useEditorStore } from '../../../core/store/useEditorStore';
 import { getAPI } from '../../../core/ipc/bridge';
-import type { ChatMessage } from '../../../../shared-types/models';
+import type { ChatMessage, MessageAttachment } from '../../../../shared-types/models';
+import { useReaderStore } from '../../../core/store/useReaderStore';
 import type { CopilotOperationEvent, CopilotSessionState } from '../../../../copilot-runtime/types';
 
 interface OperationBinding {
@@ -54,6 +55,47 @@ function getToolDisplayLabel(
   return operation
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** 从当前 store 状态快照收集附件元数据 */
+function collectAttachments(): MessageAttachment[] | undefined {
+  const readerState = useReaderStore.getState();
+  const editorState = useEditorStore.getState();
+  const attachments: MessageAttachment[] = [];
+
+  // 引用文本
+  const quote = readerState.quotedSelection;
+  const payload = readerState.selectionPayload;
+  const text = quote?.text ?? payload?.text;
+  if (text) {
+    attachments.push({
+      type: 'quote',
+      text,
+      page: quote?.page ?? payload?.sourcePages?.[0],
+    });
+  }
+
+  // DLA 图片
+  if (payload?.images?.length) {
+    attachments.push({
+      type: 'image',
+      imageCount: payload.images.length,
+      imageTypes: [...new Set(payload.images.map((img) => img.type))],
+      page: payload.sourcePages?.[0],
+    });
+  }
+
+  // 写作选区 / 光标锚点
+  const wt = editorState.persistedWritingTarget;
+  if (wt) {
+    attachments.push({
+      type: 'writing-target',
+      targetKind: wt.kind,
+      selectedText: wt.kind === 'range' ? wt.selectedText : undefined,
+    });
+  }
+
+  return attachments.length > 0 ? attachments : undefined;
 }
 
 export const ChatDock = React.memo(function ChatDock() {
@@ -90,25 +132,68 @@ export const ChatDock = React.memo(function ChatDock() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // Track the pipeline phase of the active operation for status display.
+  type OperationPhase = 'preparing' | 'planning' | 'retrieving' | 'generating';
+  const [operationPhase, setOperationPhase] = useState<OperationPhase>('preparing');
+
   const streamingAssistantMessage = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant' && message.status === 'streaming');
   const activeToolCalls = (streamingAssistantMessage?.toolCalls ?? []).filter(
     (toolCall) => toolCall.status === 'running' || toolCall.status === 'pending',
   );
-  const toolStatusText = activeToolCalls.length === 1
-    ? t('context.chat.status.invokingTool', {
-      tool: getToolDisplayLabel(activeToolCalls[0]!.name, t),
-    })
-    : activeToolCalls.length > 1
-      ? t('context.chat.status.invokingTools', { count: activeToolCalls.length })
-      : t('context.chat.status.generating');
-  const toolStatusMode = activeToolCalls.length > 0 ? 'tool' : 'generating';
+
+  // Derive status text from tool calls (highest priority) → operation phase.
+  const { statusText: derivedStatusText, statusMode: derivedStatusMode } = useMemo(() => {
+    if (activeToolCalls.length === 1) {
+      return {
+        statusText: t('context.chat.status.invokingTool', {
+          tool: getToolDisplayLabel(activeToolCalls[0]!.name, t),
+        }),
+        statusMode: 'tool' as const,
+      };
+    }
+    if (activeToolCalls.length > 1) {
+      return {
+        statusText: t('context.chat.status.invokingTools', { count: activeToolCalls.length }),
+        statusMode: 'tool' as const,
+      };
+    }
+    // No active tool calls — show pipeline phase.
+    const phaseStatusMap: Record<OperationPhase, string> = {
+      preparing: t('context.chat.status.preparing'),
+      planning: t('context.chat.status.planning'),
+      retrieving: t('context.chat.status.retrieving'),
+      generating: t('context.chat.status.generating'),
+    };
+    return {
+      statusText: phaseStatusMap[operationPhase],
+      statusMode: 'generating' as const,
+    };
+  }, [activeToolCalls, operationPhase, t]);
 
   const accumulatorsRef = useRef<Map<string, ChunkAccumulator>>(new Map());
   const operationBindingsRef = useRef<Map<string, OperationBinding>>(new Map());
   const pendingCopilotEventsRef = useRef<Map<string, CopilotOperationEvent[]>>(new Map());
   const sessionOperationRef = useRef<Map<string, string>>(new Map());
+
+  // RAF-throttled draft stream buffer to avoid "Maximum update depth exceeded"
+  // when draft deltas arrive faster than React can render.
+  const draftBufferRef = useRef('');
+  const draftRafRef = useRef<number | null>(null);
+  const flushDraftBuffer = useCallback(() => {
+    if (draftBufferRef.current) {
+      useEditorStore.getState().appendDraftStreamText(draftBufferRef.current);
+      draftBufferRef.current = '';
+    }
+    draftRafRef.current = null;
+  }, []);
+  const scheduleDraftFlush = useCallback((chunk: string) => {
+    draftBufferRef.current += chunk;
+    if (draftRafRef.current === null) {
+      draftRafRef.current = requestAnimationFrame(flushDraftBuffer);
+    }
+  }, [flushDraftBuffer]);
 
   const getOrCreateAccumulator = useCallback((operationId: string, messageId: string, targetSessionKey: string) => {
     let accumulator = accumulatorsRef.current.get(operationId);
@@ -212,6 +297,40 @@ export const ChatDock = React.memo(function ChatDock() {
   const handleCopilotEvent = useCallback((event: CopilotOperationEvent) => {
     if (event.type === 'operation.started') {
       sessionOperationRef.current.set(event.sessionId, event.operationId);
+      setOperationPhase('preparing');
+      // Backfill routed intent into binding (covers handleSend which doesn't pass intent)
+      const existingBinding = operationBindingsRef.current.get(event.operationId);
+      if (existingBinding && !existingBinding.intent && event.intent) {
+        existingBinding.intent = event.intent;
+      }
+    }
+
+    // Update operation phase based on lifecycle events.
+    // These fire before the binding may exist, so handle them unconditionally.
+    switch (event.type) {
+      case 'context.resolved':
+        setOperationPhase('planning');
+        break;
+      case 'planning.finished':
+        // Stay on 'planning' — will transition to 'retrieving' or 'generating'
+        break;
+      case 'retrieval.started':
+        setOperationPhase('retrieving');
+        break;
+      case 'retrieval.finished':
+        setOperationPhase('generating');
+        break;
+      case 'model.thinking_delta':
+      case 'model.delta':
+        setOperationPhase('generating');
+        break;
+      case 'operation.completed':
+      case 'operation.failed':
+      case 'operation.aborted':
+        setOperationPhase('preparing');
+        break;
+      default:
+        break;
     }
 
     const binding = operationBindingsRef.current.get(event.operationId);
@@ -224,6 +343,10 @@ export const ChatDock = React.memo(function ChatDock() {
     const accumulator = getOrCreateAccumulator(event.operationId, binding.messageId, binding.sessionKey);
 
     switch (event.type) {
+      case 'model.thinking_delta':
+        accumulator.pushThinkingChunk(event.text);
+        break;
+
       case 'model.delta':
         if (event.channel === 'chat') {
           accumulator.pushChunk(event.text);
@@ -234,7 +357,9 @@ export const ChatDock = React.memo(function ChatDock() {
           if (!es.activeDraftOperationId) {
             es.setActiveDraftOperationId(event.operationId);
           }
-          es.appendDraftStreamText(event.text);
+          // Throttle via RAF to prevent "Maximum update depth exceeded"
+          // when deltas arrive faster than React can render.
+          scheduleDraftFlush(event.text);
         }
         break;
 
@@ -248,20 +373,43 @@ export const ChatDock = React.memo(function ChatDock() {
         break;
 
       case 'operation.completed': {
+        // Flush any pending draft buffer so the editor gets the final text.
+        if (draftBufferRef.current) {
+          if (draftRafRef.current !== null) {
+            cancelAnimationFrame(draftRafRef.current);
+            draftRafRef.current = null;
+          }
+          flushDraftBuffer();
+        }
+
         // For draft-mode operations (rewrite/expand/compress/continue-writing)
-        // the accumulator never receives chat-channel text — the assistant
-        // message would be empty.  Inject a short status note so the chat
-        // history shows what happened instead of an empty bubble.
-        const completedMsg = useChatStore.getState().sessions[binding.sessionKey]
-          ?.messages.find((m) => m.id === binding.messageId);
-        const hasContent = Boolean(
-          completedMsg && ((completedMsg.streamBuffer ?? completedMsg.content).trim().length > 0),
-        );
-        if (!hasContent) {
-          const label = DRAFT_INTENT_LABELS[binding.intent ?? '']
-            ?? (event as { resultSummary?: string }).resultSummary
-            ?? '✓ 操作已完成';
-          accumulator.pushChunk(label);
+        // show a short status label instead of the full generated text.
+        // Even if the recipe fell back to chat mode (e.g. missing selection),
+        // we still replace the content with the label — the text is already
+        // in the editor preview, duplicating it in chat is confusing.
+        const draftLabel = DRAFT_INTENT_LABELS[binding.intent ?? ''];
+        if (draftLabel) {
+          // Replace any streamed chat content with the status label
+          useChatStore.getState().updateMessageInSession(
+            binding.sessionKey,
+            binding.messageId,
+            (msg) => {
+              msg.content = draftLabel;
+              delete msg.streamBuffer;
+            },
+          );
+        } else {
+          // Non-draft operations: inject label only if message is empty
+          const completedMsg = useChatStore.getState().sessions[binding.sessionKey]
+            ?.messages.find((m) => m.id === binding.messageId);
+          const hasContent = Boolean(
+            completedMsg && ((completedMsg.streamBuffer ?? completedMsg.content).trim().length > 0),
+          );
+          if (!hasContent) {
+            const label = (event as { resultSummary?: string }).resultSummary
+              ?? '✓ 操作已完成';
+            accumulator.pushChunk(label);
+          }
         }
         finalizeOperation(event.operationId);
         break;
@@ -312,7 +460,7 @@ export const ChatDock = React.memo(function ChatDock() {
       default:
         break;
     }
-  }, [finalizeOperation, getOrCreateAccumulator, syncPendingClarification]);
+  }, [finalizeOperation, getOrCreateAccumulator, syncPendingClarification, scheduleDraftFlush, flushDraftBuffer]);
 
   const flushPendingCopilotEvents = useCallback((operationId: string) => {
     const pending = pendingCopilotEventsRef.current.get(operationId) ?? [];
@@ -364,6 +512,10 @@ export const ChatDock = React.memo(function ChatDock() {
 
     return () => {
       unsub();
+      if (draftRafRef.current !== null) {
+        cancelAnimationFrame(draftRafRef.current);
+        draftRafRef.current = null;
+      }
       for (const accumulator of accumulatorsRef.current.values()) {
         accumulator.dispose();
       }
@@ -400,6 +552,7 @@ export const ChatDock = React.memo(function ChatDock() {
         content: text,
         timestamp: Date.now(),
         status: 'sending',
+        attachments: collectAttachments(),
       };
 
       useChatStore.getState().ensureSession(sessionKey);
@@ -412,7 +565,8 @@ export const ChatDock = React.memo(function ChatDock() {
       };
 
       try {
-        const envelope = buildChatCopilotEnvelope(sessionKey, text, chatContext);
+        const reasoning = useChatStore.getState().chatReasoningEnabled || undefined;
+        const envelope = buildChatCopilotEnvelope(sessionKey, text, chatContext, { reasoning });
         const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -477,6 +631,7 @@ export const ChatDock = React.memo(function ChatDock() {
         content: text,
         timestamp: Date.now(),
         status: 'sending',
+        attachments: collectAttachments(),
       };
 
       useChatStore.getState().ensureSession(sessionKey);
@@ -489,7 +644,8 @@ export const ChatDock = React.memo(function ChatDock() {
       };
 
       try {
-        const envelope = buildChatCopilotEnvelope(sessionKey, text, chatContext, { intent });
+        const reasoning = useChatStore.getState().chatReasoningEnabled || undefined;
+        const envelope = buildChatCopilotEnvelope(sessionKey, text, chatContext, { intent, reasoning });
         const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -828,8 +984,8 @@ export const ChatDock = React.memo(function ChatDock() {
             onIntentSend={handleIntentSend}
             onAbort={handleAbort}
             streaming={chatStreaming}
-            statusText={chatStreaming ? toolStatusText : undefined}
-            statusMode={toolStatusMode}
+            statusText={chatStreaming ? derivedStatusText : undefined}
+            statusMode={derivedStatusMode}
           />
         </div>
       </div>

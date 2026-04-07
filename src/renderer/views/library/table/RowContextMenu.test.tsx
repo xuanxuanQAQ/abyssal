@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   linkLocalPdf: { mutate: vi.fn(), isPending: false },
   resetProcess: { mutate: vi.fn(), isPending: false },
   resetFulltext: { mutate: vi.fn(), isPending: false },
+  resetAnalysis: { mutate: vi.fn(), isPending: false },
   startPipeline: { mutate: vi.fn(), isPending: false },
 }));
 
@@ -45,6 +46,7 @@ vi.mock('../../../core/ipc/hooks/usePapers', () => ({
   useDeletePaper: () => state.deletePaper,
   useResetProcess: () => state.resetProcess,
   useResetFulltext: () => state.resetFulltext,
+  useResetAnalysis: () => state.resetAnalysis,
 }));
 
 vi.mock('../../../core/ipc/hooks/useAcquire', () => ({

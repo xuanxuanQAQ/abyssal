@@ -10,12 +10,13 @@ export const HIGH_SCALE_THRESHOLD = 2.0;
  */
 export class MemoryBudget {
   private canvasPixels: Map<number, number> = new Map();
-  /** Page access timestamps for LRU eviction decisions. */
+  /** Monotonic counter for LRU eviction (avoids Date.now() millisecond collisions). */
   private accessOrder: Map<number, number> = new Map();
+  private accessCounter = 0;
 
   registerCanvas(pageNumber: number, width: number, height: number): void {
     this.canvasPixels.set(pageNumber, width * height);
-    this.accessOrder.set(pageNumber, Date.now());
+    this.accessOrder.set(pageNumber, ++this.accessCounter);
   }
 
   unregisterCanvas(pageNumber: number): void {
@@ -26,7 +27,7 @@ export class MemoryBudget {
   /** Mark a page as recently accessed (call on scroll into view). */
   touch(pageNumber: number): void {
     if (this.canvasPixels.has(pageNumber)) {
-      this.accessOrder.set(pageNumber, Date.now());
+      this.accessOrder.set(pageNumber, ++this.accessCounter);
     }
   }
 

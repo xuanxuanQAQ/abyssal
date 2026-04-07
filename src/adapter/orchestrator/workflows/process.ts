@@ -300,6 +300,60 @@ export function createProcessWorkflow(services: ProcessServices) {
   };
 }
 
+// ─── Web article text processing (skip PDF extraction) ───
+
+async function processWebArticleText(
+  paperId: string,
+  textFilePath: string,
+  ctx: ProcessServices,
+): Promise<{ failed: boolean; failedStage?: string; failureReason: string | null }> {
+  const { processService, logger } = ctx;
+
+  const fullText = await fs.promises.readFile(textFilePath, 'utf-8');
+  const textQuality = assessExtractedTextQuality(fullText);
+
+  if (textQuality.isTooShort) {
+    logger.warn(`[process/web] Text too short for ${paperId} (${textQuality.charCount} chars)`);
+    return { failed: true, failedStage: 'text-quality', failureReason: 'extracted_text_too_short' };
+  }
+
+  // Section recognition (regex path)
+  let chunks: unknown[] = [];
+  if (processService) {
+    const sectionsResult = processService.extractSections(fullText, []);
+    logger.info(`[process/web] Section recognition for ${paperId}`, {
+      sectionCount: sectionsResult.sectionMap.size,
+    });
+
+    // Chunking
+    chunks = processService.chunkText(
+      sectionsResult.sectionMap,
+      sectionsResult.boundaries,
+      [fullText], // single "page"
+    );
+    logger.info(`[process/web] Chunking complete for ${paperId}`, { chunkCount: chunks.length });
+  }
+
+  // Embedding + indexing
+  if (chunks.length > 0) {
+    const ragService = resolveCurrentRagService(ctx);
+    if (ragService) {
+      try {
+        await ragService.embedAndIndexChunks(chunks);
+        logger.info(`[process/web] Vector indexing complete for ${paperId}`, { chunkCount: chunks.length });
+      } catch (err) {
+        logger.warn(`[process/web] Vector indexing failed for ${paperId}`, { error: (err as Error).message });
+        return { failed: true, failedStage: 'indexing', failureReason: 'vector_indexing_failed' };
+      }
+    } else {
+      logger.warn(`[process/web] RAG service unavailable for ${paperId}`);
+      return { failed: true, failedStage: 'indexing', failureReason: 'rag_service_unavailable' };
+    }
+  }
+
+  return { failed: false, failureReason: null };
+}
+
 // ─── Single paper processing ───
 
 interface SinglePaperResult {
@@ -345,6 +399,32 @@ async function processSinglePaper(
   if (!fileExists) {
     logger.warn(`[process] PDF not found for ${paperId}: ${resolvedPath}`);
     return { failed: true, failedStage: 'pre-check', failReason: `PDF not found: ${resolvedPath}` };
+  }
+
+  // ── 网页文章：跳过 PDF 提取，直接读取已有文本 → 分块 → 索引 ──
+  const paperType = paperField<string>(paper, 'paperType', 'unknown');
+  if (paperType === 'webpage') {
+    // 优先用 textPath，否则回退到 fulltextPath（.md 文件）
+    const textSource = textPath ?? fulltextPath;
+    if (!textSource) {
+      return { failed: true, failedStage: 'pre-check', failReason: `No text file path for web article: ${paperId}` };
+    }
+    const resolvedTextPath = path.isAbsolute(textSource) ? textSource : path.join(workspacePath, textSource);
+    logger.info(`[process] Web article detected for ${paperId}, skipping PDF extraction`, { resolvedTextPath });
+    if (!fs.existsSync(resolvedTextPath)) {
+      return { failed: true, failedStage: 'pre-check', failReason: `Text file not found: ${resolvedTextPath}` };
+    }
+    const result = await processWebArticleText(paperId, resolvedTextPath, ctx);
+    await writeExclusive(async () => {
+      await dbProxy.updatePaper(paperId, {
+        textPath: resolvedTextPath,
+        failureReason: result.failureReason,
+      });
+    });
+    if (result.failed) {
+      return { failed: true, failedStage: result.failedStage!, failReason: result.failureReason! };
+    }
+    return { failed: false };
   }
 
   logger.info(`[process] Starting post-processing for ${paperId}`, { pdfPath: resolvedPath });

@@ -18,8 +18,8 @@ export function saveMessage(db: Database.Database, record: ChatMessageRecord): v
 
     // Insert message (ignore duplicates from retry / double-send)
     db.prepare(`
-      INSERT OR IGNORE INTO chat_messages (id, context_source_key, role, content, timestamp, tool_calls, citations)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO chat_messages (id, context_source_key, role, content, timestamp, tool_calls, citations, attachments)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.id,
       record.contextSourceKey,
@@ -28,6 +28,7 @@ export function saveMessage(db: Database.Database, record: ChatMessageRecord): v
       record.timestamp,
       record.toolCalls ?? null,
       record.citations ?? null,
+      record.attachments ?? null,
     );
   });
 }
@@ -44,7 +45,7 @@ export function getHistory(
 
   if (beforeTimestamp != null) {
     return db.prepare(`
-      SELECT id, context_source_key AS contextSourceKey, role, content, timestamp, tool_calls AS toolCalls, citations
+      SELECT id, context_source_key AS contextSourceKey, role, content, timestamp, tool_calls AS toolCalls, citations, attachments
       FROM chat_messages
       WHERE context_source_key = ? AND timestamp < ?
       ORDER BY timestamp DESC, rowid DESC
@@ -53,7 +54,7 @@ export function getHistory(
   }
 
   return db.prepare(`
-    SELECT id, context_source_key AS contextSourceKey, role, content, timestamp, tool_calls AS toolCalls, citations
+    SELECT id, context_source_key AS contextSourceKey, role, content, timestamp, tool_calls AS toolCalls, citations, attachments
     FROM chat_messages
     WHERE context_source_key = ?
     ORDER BY timestamp DESC, rowid DESC

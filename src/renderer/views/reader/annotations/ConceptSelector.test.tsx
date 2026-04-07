@@ -36,14 +36,13 @@ vi.mock('lucide-react', () => ({
 function makeConcept(overrides: Partial<Concept> = {}): Concept {
   return {
     id: 'graph-neural-networks',
-    name: 'Graph Neural Networks',
     nameZh: '图神经网络',
     nameEn: 'Graph Neural Networks',
-    description: 'A neural architecture on graphs.',
+    definition: 'A neural architecture on graphs.',
     parentId: null,
     level: 0,
     maturity: 'working',
-    keywords: ['gnn', 'message passing'],
+    searchKeywords: ['gnn', 'message passing'],
     history: [],
     ...overrides,
   };
@@ -85,10 +84,9 @@ describe('ConceptSelector', () => {
             makeConcept(),
             makeConcept({
               id: 'bayesian-models',
-              name: 'Bayesian Models',
               nameZh: '贝叶斯模型',
               nameEn: 'Bayesian Models',
-              keywords: ['probabilistic'],
+              searchKeywords: ['probabilistic'],
             }),
           ]}
           onSelect={() => {}}

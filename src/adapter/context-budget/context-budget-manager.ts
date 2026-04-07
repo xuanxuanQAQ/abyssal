@@ -45,6 +45,8 @@ export interface BudgetRequest {
   conceptMaturities: string[]; // 'tentative' | 'working' | 'established'
   isAxiomSeed?: boolean;
   frameworkState?: FrameworkState;
+  /** Extra tokens to reserve for model reasoning/thinking (reduces available input budget). */
+  reasoningReserve?: number;
 }
 
 export interface TruncationDetail {
@@ -108,9 +110,10 @@ export class ContextBudgetManager {
       ...(request.isAxiomSeed != null && { isAxiomSeed: request.isAxiomSeed }),
     });
 
-    // Step 2: Compute budgets
+    // Step 2: Compute budgets (deduct reasoning reserve if model uses thinking tokens)
     const totalBudget = strategy.totalBudget;
-    const outputReserve = strategy.outputReserve;
+    const reasoningReserve = request.reasoningReserve ?? 0;
+    const outputReserve = strategy.outputReserve + reasoningReserve;
     const availableBudget = totalBudget - outputReserve;
 
     // Step 3: Precise ABSOLUTE source token counting (§3.2)
@@ -136,15 +139,20 @@ export class ContextBudgetManager {
       absoluteTotal += actualTokens;
     }
 
-    // §3.2 Step 3: ABSOLUTE overflow detection
+    // §3.2 Step 3: ABSOLUTE overflow detection — warn but preserve ABSOLUTE semantics.
+    // ABSOLUTE sources are never trimmed; callers must ensure reasonable sizes.
+    // If overflow occurs, non-ABSOLUTE sources get 0 budget (graceful degradation).
     if (absoluteTotal > availableBudget) {
-      this.logger.warn('ABSOLUTE sources exceed budget', {
+      const overflow = absoluteTotal - availableBudget;
+      this.logger.warn('ABSOLUTE sources exceed available budget', {
         absoluteTokens: absoluteTotal,
         availableBudget,
-        overflow: absoluteTotal - availableBudget,
+        totalBudget,
+        outputReserve,
+        reasoningReserve,
+        overflow,
+        contextWindowRisk: absoluteTotal + outputReserve > totalBudget,
       });
-      // Do NOT trim ABSOLUTE — accept overflow.
-      // Non-ABSOLUTE sources will receive 0 or minimal budget.
     }
 
     // Step 4: Compute remaining budget for non-ABSOLUTE (§3.2 Step 4)
@@ -187,11 +195,12 @@ export class ContextBudgetManager {
     }
 
     // Step 7: Maturity-aware adjustment (§1.3)
+    // Established concepts warrant deeper retrieval; tentative concepts use baseline.
     let skipReranker = strategy.skipReranker;
     let skipQueryExpansion = strategy.skipQueryExpansion;
 
-    const hasTentative = request.conceptMaturities.some((m) => m === 'tentative');
-    if (hasTentative) {
+    const hasEstablished = request.conceptMaturities.some((m) => m === 'established');
+    if (hasEstablished) {
       ragTopK = Math.ceil(ragTopK * 1.5);
       skipReranker = false;
       skipQueryExpansion = false;
@@ -228,7 +237,7 @@ export class ContextBudgetManager {
         ]),
       ),
       frameworkState: request.frameworkState ?? 'unknown',
-      hasTentativeConcepts: hasTentative,
+      hasEstablishedConcepts: hasEstablished,
     });
 
     return allocation;
@@ -239,4 +248,17 @@ export class ContextBudgetManager {
 
 export function createContextBudgetManager(logger: CBMLogger): ContextBudgetManager {
   return new ContextBudgetManager(logger);
+}
+
+// ─── Reasoning reserve helper ───
+
+const REASONING_RESERVE_MAP: Record<string, number> = {
+  low: 4096,
+  medium: 10240,
+  high: 32768,
+};
+
+/** Map a reasoning level to the token reserve needed for thinking output. */
+export function reasoningReserveForLevel(level: 'low' | 'medium' | 'high' | undefined): number {
+  return level ? (REASONING_RESERVE_MAP[level] ?? 0) : 0;
 }

@@ -22,9 +22,11 @@ import type { RankedChunk } from '../../core/types/chunk';
 import {
   ModelRouter,
   type ModelRoute,
+  type ResolvedReasoning,
   getModelContextWindow,
   inferProviderForModel,
   isAvailableRoute,
+  resolveReasoningConfig,
 } from './model-router';
 import { ClaudeAdapter } from './claude-adapter';
 import { OpenAIAdapter } from './openai-adapter';
@@ -67,6 +69,8 @@ export interface ToolCall {
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  /** Tokens spent on reasoning/thinking (subset of outputTokens for most providers). */
+  reasoningTokens?: number;
 }
 
 export type FinishReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'content_filter';
@@ -87,6 +91,7 @@ export interface CompletionResult {
 
 export type StreamChunk =
   | { type: 'text_delta'; delta: string }
+  | { type: 'thinking_delta'; delta: string }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_use_delta'; delta: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
@@ -105,7 +110,9 @@ export interface AdapterCallParams {
   signal?: AbortSignal;
   workflowId?: string;
   responseFormat?: ResponseFormat;
-  /** Extended thinking budget (Claude). Ignored by non-supporting adapters. */
+  /** Provider-agnostic reasoning configuration. Adapters translate to provider-specific params. */
+  reasoning?: ResolvedReasoning | null;
+  /** @deprecated Use reasoning instead. Kept for backward compat during migration. */
   thinkingBudget?: number;
 }
 
@@ -172,6 +179,11 @@ export class LlmClient implements VisionCapable {
   private readonly configProvider: ConfigProvider;
   private readonly unsubscribe: () => void;
   private localAdapterConfigs = new Map<string, { apiKey: string; baseURL: string; provider: string }>();
+
+  /** LRU dedup cache for embeddings — avoids re-embedding identical texts. */
+  private readonly embedCache = new Map<string, { vector: Float32Array; ts: number }>();
+  private static readonly EMBED_CACHE_MAX = 512;
+  private static readonly EMBED_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
 
   constructor(params: {
     configProvider: ConfigProvider;
@@ -242,6 +254,22 @@ export class LlmClient implements VisionCapable {
         apiKey: keys.siliconflowApiKey,
         baseURL: 'https://api.siliconflow.cn/v1',
         provider: 'siliconflow',
+      }));
+    }
+
+    if (keys.doubaoApiKey) {
+      this.adapters.set('doubao', new OpenAIAdapter({
+        apiKey: keys.doubaoApiKey,
+        baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+        provider: 'doubao',
+      }));
+    }
+
+    if (keys.kimiApiKey) {
+      this.adapters.set('kimi', new OpenAIAdapter({
+        apiKey: keys.kimiApiKey,
+        baseURL: 'https://api.moonshot.cn/v1',
+        provider: 'kimi',
       }));
     }
 
@@ -347,7 +375,62 @@ export class LlmClient implements VisionCapable {
     if (!this.embedFn) {
       throw new Error('Embed function not configured — no embedding backend available');
     }
-    return this.embedFn.embed(texts);
+
+    const now = Date.now();
+    const results: (Float32Array | null)[] = new Array(texts.length).fill(null);
+    const uncachedIndices: number[] = [];
+    const uncachedTexts: string[] = [];
+
+    // Check cache — dedup identical texts within and across calls
+    for (let i = 0; i < texts.length; i++) {
+      const cached = this.embedCache.get(texts[i]!);
+      if (cached && (now - cached.ts) < LlmClient.EMBED_CACHE_TTL_MS) {
+        results[i] = cached.vector;
+      } else {
+        uncachedIndices.push(i);
+        uncachedTexts.push(texts[i]!);
+      }
+    }
+
+    // Embed only uncached texts
+    if (uncachedTexts.length > 0) {
+      const startTime = Date.now();
+      const freshVectors = await this.embedFn.embed(uncachedTexts);
+
+      // Estimate embed token consumption.
+      // CJK characters are ~1-2 tokens each vs ~1 token per 4 Latin chars.
+      const estimatedTokens = uncachedTexts.reduce((sum, t) => {
+        const cjkCount = (t.match(/[\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF]/g) || []).length;
+        const otherCount = t.length - cjkCount;
+        return sum + cjkCount + Math.ceil(otherCount / 4);
+      }, 0);
+      this.costTracker.record({
+        model: 'embed',
+        provider: 'embed',
+        inputTokens: estimatedTokens,
+        outputTokens: 0,
+        durationMs: Date.now() - startTime,
+        workflowId: 'embed',
+      });
+
+      // Populate results and cache
+      for (let j = 0; j < uncachedIndices.length; j++) {
+        const idx = uncachedIndices[j]!;
+        const vec = freshVectors[j]!;
+        results[idx] = vec;
+        this.embedCache.set(uncachedTexts[j]!, { vector: vec, ts: now });
+      }
+
+      // Evict oldest entries if cache exceeds limit
+      if (this.embedCache.size > LlmClient.EMBED_CACHE_MAX) {
+        const entries = [...this.embedCache.entries()]
+          .sort((a, b) => a[1].ts - b[1].ts);
+        const toRemove = entries.slice(0, entries.length - LlmClient.EMBED_CACHE_MAX);
+        for (const [key] of toRemove) this.embedCache.delete(key);
+      }
+    }
+
+    return results as Float32Array[];
   }
 
   // ─── describeImage (§1.1) — VisionCapable implementation ───
@@ -363,10 +446,19 @@ export class LlmClient implements VisionCapable {
     const route = this.router.resolveAndValidate('vision');
     const adapter = this.getAdapter(route);
 
-    return retryableCall(
+    const startTime = Date.now();
+    const result = await retryableCall(
       () => adapter.describeImage(imageBase64, mimeType, prompt, maxTokens, route.model),
       { maxRetries: 2 },
     );
+
+    // Estimate token cost for vision calls — rough but provides visibility.
+    // Image ≈ base64 length / 4 * 0.75 bytes → ~1 token per 4 chars of base64.
+    const estimatedInput = Math.ceil(imageBase64.length / 4) + Math.ceil(prompt.length / 4);
+    const estimatedOutput = Math.ceil(result.length / 4);
+    this.recordCost(route, { inputTokens: estimatedInput, outputTokens: estimatedOutput }, Date.now() - startTime, 'vision');
+
+    return result;
   }
 
   // ─── rerank (§1.1) — proxy to RerankerScheduler ───
@@ -376,7 +468,22 @@ export class LlmClient implements VisionCapable {
     candidates: RankedChunk[],
     topK: number,
   ): Promise<RankedChunk[]> {
-    return this.reranker.rerank(query, candidates, topK);
+    const startTime = Date.now();
+    const result = await this.reranker.rerank(query, candidates, topK);
+
+    // Estimate rerank token consumption: query + each candidate chunk.
+    const estimatedTokens = Math.ceil(query.length / 4) +
+      candidates.reduce((sum, c) => sum + Math.ceil((c.text ?? '').length / 4), 0);
+    this.costTracker.record({
+      model: 'rerank',
+      provider: 'rerank',
+      inputTokens: estimatedTokens,
+      outputTokens: 0,
+      durationMs: Date.now() - startTime,
+      workflowId: 'rerank',
+    });
+
+    return result;
   }
 
   // ─── Cost stats (for IPC exposure) ───
@@ -448,7 +555,12 @@ export class LlmClient implements VisionCapable {
     if (params.signal != null) p.signal = params.signal;
     if (params.workflowId != null) p.workflowId = params.workflowId;
     if (params.responseFormat != null) p.responseFormat = params.responseFormat;
-    if (params.thinkingBudget != null) p.thinkingBudget = params.thinkingBudget;
+    // Reasoning: explicit thinkingBudget (legacy) > route-level reasoning config
+    if (params.thinkingBudget != null) {
+      p.reasoning = { level: 'high', budgetTokens: params.thinkingBudget };
+    } else if (route.reasoning) {
+      p.reasoning = route.reasoning;
+    }
     return p;
   }
 
@@ -463,6 +575,7 @@ export class LlmClient implements VisionCapable {
         ?? (params.model ? inferProviderForModel(params.model) : null)
         ?? baseRoute.provider,
       model: params.model ?? baseRoute.model,
+      ...(baseRoute.reasoning !== undefined && { reasoning: baseRoute.reasoning }),
     };
 
     if (!isAvailableRoute(resolvedRoute, this.configProvider.config.apiKeys)) {

@@ -1239,10 +1239,12 @@ export async function bootstrap(): Promise<AppContext> {
       );
     }
 
-    // Steps 9-11 run after renderer loads (did-finish-load)
+    // Steps 9-11 run once after initial renderer load.
+    // Use .once() — HMR full reloads / crash recovery must not re-run bootstrap steps.
     const mainWindow = getMainWindow();
     if (mainWindow) {
-      mainWindow.webContents.on('did-finish-load', async () => {
+      mainWindow.webContents.once('did-finish-load', async () => {
+        if (ctx.appContext!.isShuttingDown) return;
         await step9_evaluateFrameworkState(ctx);
         await step10_advisoryAgent(ctx);
         await step11_ready(ctx);

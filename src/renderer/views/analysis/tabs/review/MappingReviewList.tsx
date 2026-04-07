@@ -39,7 +39,7 @@ export function MappingReviewList({ paperId }: MappingReviewListProps) {
     const map = new Map<string, string>();
     if (framework) {
       for (const c of framework.concepts) {
-        map.set(c.id, c.name);
+        map.set(c.id, c.nameEn);
       }
     }
     return map;

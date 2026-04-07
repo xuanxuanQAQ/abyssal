@@ -41,10 +41,10 @@ describe('[Routing] Snapshot tests with Chinese instructions', () => {
   });
 
   /**
-   * Scenario 3: Paper retrieval request
+   * Scenario 3: Evidence recall request — "检索" + "证据" signals local recall
    * "帮我搜索和检索关于 Transformer 架构的论文证据"
    */
-  it('routes "搜索和检索论文" to retrieval_search family', () => {
+  it('routes "搜索和检索论文证据" to retrieval_search (local recall)', () => {
     const route = routeToolFamilies({
       userMessage: '帮我搜索和检索关于 Transformer 架构的论文证据',
     });
@@ -52,7 +52,21 @@ describe('[Routing] Snapshot tests with Chinese instructions', () => {
     expect(route.primaryFamily).toBe('retrieval_search');
     expect(route.allowedFamilies).toContain('retrieval_search');
     expect(route.confidence).toBeGreaterThan(0.8);
-    expect(route.reason).toBe('retrieval_request');
+    expect(route.reason).toBe('local_knowledge_recall');
+  });
+
+  /**
+   * Scenario 3b: Find specific paper — "搜索这篇文章" + long title → online discovery
+   */
+  it('routes "搜索这篇文章 [specific title]" to discovery_online', () => {
+    const route = routeToolFamilies({
+      userMessage: '帮我搜索这篇文章 电力现货市场交易运营的未来重大需求与关键技术',
+    });
+
+    expect(route.primaryFamily).toBe('discovery_online');
+    expect(route.allowedFamilies).toContain('discovery_online');
+    expect(route.confidence).toBeGreaterThan(0.9);
+    expect(route.reason).toBe('find_specific_paper');
   });
 
   /**
@@ -191,9 +205,9 @@ describe('[Scoring] Operation-level semantic relevance', () => {
     }> = [
       {
         capabilityName: 'discovery',
-        operationName: 'search',
-        description: 'Search for papers matching keywords.',
-        semanticKeywords: ['搜索', '检索', 'search'],
+        operationName: 'search_literature',
+        description: 'Search academic databases for papers on a topic.',
+        semanticKeywords: ['搜索', '检索', 'search', '文献', 'literature'],
       },
       {
         capabilityName: 'reader',
@@ -206,7 +220,7 @@ describe('[Scoring] Operation-level semantic relevance', () => {
     const scores = scoreOperations('搜索论文和阅读内容', operations);
 
     // Both should have scores since both have matching keywords
-    expect(scores['discovery--search']).toBeGreaterThan(0);
+    expect(scores['discovery--search_literature']).toBeGreaterThan(0);
     expect(scores['reader--get_page_content']).toBeGreaterThan(0);
   });
 

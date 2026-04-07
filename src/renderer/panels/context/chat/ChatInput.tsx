@@ -9,7 +9,7 @@
 
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Square, X, Quote, Image as ImageIcon, Loader2, Wrench, PenTool, MapPin, PenLine, Expand, Shrink, ArrowRight } from 'lucide-react';
+import { Send, Square, X, Quote, Image as ImageIcon, Loader2, Wrench, PenTool, MapPin, PenLine, Expand, Shrink, ArrowRight, Brain } from 'lucide-react';
 import type { CopilotIntent } from '../../../../copilot-runtime/types';
 import { useChatStore } from '../../../core/store/useChatStore';
 import { useReaderStore } from '../../../core/store/useReaderStore';
@@ -82,6 +82,8 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onInten
   const [isFocused, setIsFocused] = useState(false);
   const draft = useChatStore((s) => s.chatInputDraft);
   const setDraft = useChatStore((s) => s.setChatInputDraft);
+  const reasoningEnabled = useChatStore((s) => s.chatReasoningEnabled);
+  const toggleReasoning = useChatStore((s) => s.setChatReasoningEnabled);
   const quotedSelection = useReaderStore((s) => s.quotedSelection);
   const selectionPayload = useReaderStore((s) => s.selectionPayload);
   const mappedText = quotedSelection?.text ?? selectionPayload?.text ?? null;
@@ -533,6 +535,59 @@ export const ChatInput = React.memo(function ChatInput({ source, onSend, onInten
             fontFamily: 'system-ui, -apple-system, sans-serif',
           }}
         />
+
+        {/* 底部工具栏：推理模式 pill */}
+        <div
+          className="chat-input-footer"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 10px 6px 12px',
+            gap: 6,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => toggleReasoning(!reasoningEnabled)}
+            className="chat-input-reasoning-pill"
+            title={t('context.chat.reasoning', { defaultValue: reasoningEnabled ? '关闭深度思考' : '开启深度思考' })}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: reasoningEnabled ? '3px 10px 3px 7px' : '3px 7px',
+              fontSize: 11,
+              lineHeight: 1,
+              border: reasoningEnabled
+                ? '1px solid color-mix(in srgb, var(--accent-color) 24%, transparent)'
+                : '1px solid transparent',
+              borderRadius: 12,
+              background: reasoningEnabled
+                ? 'color-mix(in srgb, var(--accent-color) 10%, transparent)'
+                : 'transparent',
+              color: reasoningEnabled ? 'var(--accent-color)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              transition: 'all 180ms var(--easing-default)',
+              fontWeight: reasoningEnabled ? 500 : 400,
+            }}
+            onMouseEnter={e => {
+              if (!reasoningEnabled) {
+                e.currentTarget.style.color = 'var(--text-secondary)';
+                e.currentTarget.style.background = 'color-mix(in srgb, var(--text-muted) 6%, transparent)';
+              }
+            }}
+            onMouseLeave={e => {
+              if (!reasoningEnabled) {
+                e.currentTarget.style.color = 'var(--text-muted)';
+                e.currentTarget.style.background = 'transparent';
+              }
+            }}
+          >
+            <Brain size={12} />
+            {reasoningEnabled && <span>{t('context.chat.reasoningLabel', { defaultValue: '深度思考' })}</span>}
+          </button>
+        </div>
 
         {streaming ? (
           <button

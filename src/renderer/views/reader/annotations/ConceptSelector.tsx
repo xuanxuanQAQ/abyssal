@@ -9,17 +9,17 @@ function normalizeSearchValue(value: string): string {
 }
 
 function getConceptPrimaryLabel(concept: Concept): string {
-  return concept.nameZh.trim() || concept.nameEn.trim() || concept.name.trim() || concept.id;
+  return concept.nameZh.trim() || concept.nameEn.trim() || concept.id;
 }
 
 function getConceptSecondaryLabel(concept: Concept, primaryLabel: string): string {
-  const englishName = concept.nameEn.trim() || concept.name.trim();
+  const englishName = concept.nameEn.trim();
   if (englishName && englishName !== primaryLabel) {
     return englishName;
   }
 
-  if (concept.keywords.length > 0) {
-    return concept.keywords.slice(0, 3).join(', ');
+  if (concept.searchKeywords.length > 0) {
+    return concept.searchKeywords.slice(0, 3).join(', ');
   }
 
   return '';
@@ -32,11 +32,10 @@ function matchesConceptQuery(concept: Concept, query: string): boolean {
 
   return [
     concept.id,
-    concept.name,
     concept.nameZh,
     concept.nameEn,
-    concept.description,
-    ...concept.keywords,
+    concept.definition,
+    ...concept.searchKeywords,
   ]
     .map(normalizeSearchValue)
     .some((value) => value.includes(query));

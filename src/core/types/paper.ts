@@ -18,6 +18,7 @@ export const PAPER_TYPES = [
   'chapter',
   'preprint',
   'review',
+  'webpage',
   'unknown',
 ] as const;
 
@@ -29,6 +30,7 @@ export const PAPER_SOURCES = [
   'bibtex',
   'ris',
   'manual',
+  'web',
 ] as const;
 export type PaperSource = (typeof PAPER_SOURCES)[number];
 
@@ -91,6 +93,9 @@ export interface PaperMetadata {
   // 引文控制
   bibtexKey: string | null;
   biblioComplete: boolean;
+
+  // 网页来源
+  sourceUrl?: string | null;
 }
 
 // ═══ PaperStatus ═══

@@ -12,6 +12,7 @@ const TYPE_MAP: Record<PaperType, string> = {
   chapter: 'CHAP',
   preprint: 'RPRT',
   review: 'JOUR',
+  webpage: 'ELEC',
   unknown: 'GEN',
 };
 

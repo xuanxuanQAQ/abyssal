@@ -120,7 +120,7 @@ export async function parseFiguresWithVlm(
   const maxTokens = options.maxTokensPerPage ?? 1024;
   const figuresDir = options.figuresDir ?? null;
   const mupdf = await getMupdf();
-  const buffer = fs.readFileSync(pdfPath);
+  const buffer = await fs.promises.readFile(pdfPath);
 
   let doc: { loadPage(i: number): unknown; destroy(): void };
   try {
@@ -159,9 +159,9 @@ export async function parseFiguresWithVlm(
         // 可选：保存 PNG
         let imagePath: string | null = null;
         if (figuresDir) {
-          fs.mkdirSync(figuresDir, { recursive: true });
+          await fs.promises.mkdir(figuresDir, { recursive: true });
           imagePath = `${figuresDir}/page_${candidate.pageIndex}.png`;
-          fs.writeFileSync(imagePath, pngBuffer);
+          await fs.promises.writeFile(imagePath, pngBuffer);
         }
 
         // §5.4 步骤 2-3：VLM 调用
@@ -174,8 +174,8 @@ export async function parseFiguresWithVlm(
             VLM_PROMPT,
             maxTokens,
           );
-        } catch {
-          // VLM 调用失败——跳过该页
+        } catch (vlmErr) {
+          console.warn(`[VLM] Failed to analyze page ${candidate.pageIndex}: ${(vlmErr as Error).message}`);
           continue;
         }
 

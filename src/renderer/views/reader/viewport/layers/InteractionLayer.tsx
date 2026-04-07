@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { useReaderStore } from '../../../../core/store/useReaderStore';
 
 export interface InteractionLayerProps {
@@ -26,14 +26,16 @@ const InteractionLayer = React.memo(function InteractionLayer(props: Interaction
   const activeAnnotationTool = useReaderStore((s) => s.activeAnnotationTool);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [isDragging, setIsDragging] = useState(false);
-  const [startPos, setStartPos] = useState<Point | null>(null);
-  const [currentPos, setCurrentPos] = useState<Point | null>(null);
+  const isDraggingRef = useRef(false);
+  const startPosRef = useRef<Point | null>(null);
+  const currentPosRef = useRef<Point | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const selectionDivRef = useRef<HTMLDivElement>(null);
 
   const isActive = activeAnnotationTool === 'areaHighlight';
 
   const getRelativePosition = useCallback(
-    (e: React.MouseEvent): Point => {
+    (e: React.MouseEvent | MouseEvent): Point => {
       const container = containerRef.current;
       if (!container) {
         return { x: 0, y: 0 };
@@ -47,60 +49,94 @@ const InteractionLayer = React.memo(function InteractionLayer(props: Interaction
     [],
   );
 
+  const updateSelectionDiv = useCallback(() => {
+    const div = selectionDivRef.current;
+    const start = startPosRef.current;
+    const current = currentPosRef.current;
+    if (!div || !start || !current || !isDraggingRef.current) {
+      if (div) div.style.display = 'none';
+      return;
+    }
+    const left = Math.min(start.x, current.x);
+    const top = Math.min(start.y, current.y);
+    const width = Math.abs(current.x - start.x);
+    const height = Math.abs(current.y - start.y);
+    div.style.display = '';
+    div.style.left = `${left}px`;
+    div.style.top = `${top}px`;
+    div.style.width = `${width}px`;
+    div.style.height = `${height}px`;
+  }, []);
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (!isActive || e.button !== 0) return;
       e.preventDefault();
       const pos = getRelativePosition(e);
-      setStartPos(pos);
-      setCurrentPos(pos);
-      setIsDragging(true);
+      startPosRef.current = pos;
+      currentPosRef.current = pos;
+      isDraggingRef.current = true;
+      updateSelectionDiv();
     },
-    [isActive, getRelativePosition],
+    [isActive, getRelativePosition, updateSelectionDiv],
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!isDragging) return;
+      if (!isDraggingRef.current) return;
       e.preventDefault();
-      setCurrentPos(getRelativePosition(e));
+      currentPosRef.current = getRelativePosition(e);
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          updateSelectionDiv();
+        });
+      }
     },
-    [isDragging, getRelativePosition],
+    [getRelativePosition, updateSelectionDiv],
   );
 
-  const handleMouseUp = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isDragging || !startPos || !currentPos) return;
-      e.preventDefault();
+  const finishDrag = useCallback(
+    (e?: MouseEvent | React.MouseEvent) => {
+      if (!isDraggingRef.current || !startPosRef.current || !currentPosRef.current) return;
+      if (e) e.preventDefault();
 
-      // Normalize rect so width/height are positive
-      const x = Math.min(startPos.x, currentPos.x);
-      const y = Math.min(startPos.y, currentPos.y);
-      const width = Math.abs(currentPos.x - startPos.x);
-      const height = Math.abs(currentPos.y - startPos.y);
+      const start = startPosRef.current;
+      const current = currentPosRef.current;
+      const x = Math.min(start.x, current.x);
+      const y = Math.min(start.y, current.y);
+      const width = Math.abs(current.x - start.x);
+      const height = Math.abs(current.y - start.y);
 
-      // Only emit if the selection has meaningful size
       if (width > 4 && height > 4) {
         onAreaSelect(pageNumber, { x, y, width, height });
       }
 
-      setIsDragging(false);
-      setStartPos(null);
-      setCurrentPos(null);
+      isDraggingRef.current = false;
+      startPosRef.current = null;
+      currentPosRef.current = null;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      updateSelectionDiv();
     },
-    [isDragging, startPos, currentPos, pageNumber, onAreaSelect],
+    [pageNumber, onAreaSelect, updateSelectionDiv],
   );
 
-  // Compute selection rectangle for visual feedback
-  let selectionRect: { left: number; top: number; width: number; height: number } | null = null;
-  if (isDragging && startPos && currentPos) {
-    selectionRect = {
-      left: Math.min(startPos.x, currentPos.x),
-      top: Math.min(startPos.y, currentPos.y),
-      width: Math.abs(currentPos.x - startPos.x),
-      height: Math.abs(currentPos.y - startPos.y),
+  const handleMouseUp = useCallback(
+    (e: React.MouseEvent) => finishDrag(e),
+    [finishDrag],
+  );
+
+  // Handle mouse-up outside the component (e.g., user drags out of bounds)
+  useEffect(() => {
+    const onWindowMouseUp = (e: MouseEvent) => {
+      if (isDraggingRef.current) finishDrag(e);
     };
-  }
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+  }, [finishDrag]);
 
   return (
     <div
@@ -119,20 +155,16 @@ const InteractionLayer = React.memo(function InteractionLayer(props: Interaction
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      {selectionRect && (
-        <div
-          style={{
-            position: 'absolute',
-            left: selectionRect.left,
-            top: selectionRect.top,
-            width: selectionRect.width,
-            height: selectionRect.height,
-            border: '2px dashed var(--accent-color)',
-            backgroundColor: 'rgba(var(--accent-color-rgb), 0.1)',
-            pointerEvents: 'none',
-          }}
-        />
-      )}
+      <div
+        ref={selectionDivRef}
+        style={{
+          position: 'absolute',
+          display: 'none',
+          border: '2px dashed var(--accent-color)',
+          backgroundColor: 'rgba(var(--accent-color-rgb), 0.1)',
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   );
 });

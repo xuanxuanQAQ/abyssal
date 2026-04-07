@@ -339,14 +339,21 @@ export function useSelectionMachine(
       const currentPoint = dragPointFromEvent(e, pageEl, pageNumber);
       envelope.current = currentPoint;
 
+      // Scroll compensation: recalibrate start point during drag so the
+      // visual bounds stay accurate when the user scrolls mid-drag.
+      const startPageEl = findPageContainer(envelope.start.page);
+      const calibratedStart = startPageEl
+        ? recalibrateDragPoint(envelope.start, startPageEl)
+        : envelope.start;
+
       // Compute live per-page bounds for DLA highlight preview
       const tempEnd = currentPoint;
       const boundsMap = new Map<number, ColumnBounds[]>();
-      const minP = Math.min(envelope.start.page, tempEnd.page);
-      const maxP = Math.max(envelope.start.page, tempEnd.page);
+      const minP = Math.min(calibratedStart.page, tempEnd.page);
+      const maxP = Math.max(calibratedStart.page, tempEnd.page);
       for (let p = minP; p <= maxP; p++) {
         const bounds = computePageBounds(
-          { start: envelope.start, end: tempEnd },
+          { start: calibratedStart, end: tempEnd },
           p,
         );
         if (bounds.length > 0) boundsMap.set(p, bounds);

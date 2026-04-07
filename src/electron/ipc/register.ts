@@ -108,11 +108,25 @@ function sanitizeForIPC(value: unknown, cache: WeakMap<object, unknown> = new We
   return obj;
 }
 
+// ─── Shutdown guard ───
+
+let shutdownCheck: (() => boolean) | undefined;
+
+/**
+ * Wire a shutdown predicate so wrapHandler can early-reject during graceful
+ * shutdown, preventing "DbProxy is closed" races.
+ */
+export function setShutdownCheck(fn: () => boolean): void {
+  shutdownCheck = fn;
+}
+
 // ─── wrapHandler ───
 
 export interface WrapHandlerOptions {
   /** Timeout in ms. Default: 30000 (30s) */
   timeoutMs?: number;
+  /** Called when the handler times out — use to clean up in-flight work. */
+  onTimeout?: () => void;
 }
 
 /**
@@ -130,6 +144,17 @@ export function wrapHandler<T>(
   const timeoutMs = options?.timeoutMs ?? 30_000;
 
   return async (event, ...args) => {
+    if (shutdownCheck?.()) {
+      return {
+        ok: false,
+        error: {
+          code: 'APP_SHUTTING_DOWN',
+          message: 'Application is shutting down',
+          recoverable: false,
+        },
+      };
+    }
+
     const startTime = Date.now();
     logger.debug(`IPC call: ${channel}`, {
       argsPreview: JSON.stringify(args).slice(0, 200),
@@ -162,6 +187,7 @@ export function wrapHandler<T>(
 
       if (error instanceof IPCTimeoutError) {
         logger.warn(`IPC timeout: ${channel}`, { timeoutMs });
+        options?.onTimeout?.();
         return {
           ok: false,
           error: {
@@ -276,6 +302,7 @@ import { registerWindowHandlers } from './window-handler';
 import { registerWorkspaceHandlers } from './workspace-handler';
 import { registerDlaHandlers } from './dla-handler';
 import { registerPipelineHandlers } from './pipeline-handler';
+import { registerWebReaderHandlers } from './web-reader-handler';
 
 /**
  * Register all IPC handlers for all namespaces.
@@ -284,6 +311,8 @@ import { registerPipelineHandlers } from './pipeline-handler';
  * matter — channels are declarative (Electron stores them for later dispatch).
  */
 export function registerAllHandlers(ctx: AppContext): void {
+  setShutdownCheck(() => ctx.isShuttingDown);
+
   registerPapersHandlers(ctx);
   registerSearchHandlers(ctx);
   registerAcquireHandlers(ctx);
@@ -306,6 +335,7 @@ export function registerAllHandlers(ctx: AppContext): void {
   registerWorkspaceHandlers(ctx);
   registerDlaHandlers(ctx);
   registerPipelineHandlers(ctx);
+  registerWebReaderHandlers(ctx);
 
-  ctx.logger.info('IPC handlers registered', { namespaces: 22 });
+  ctx.logger.info('IPC handlers registered', { namespaces: 23 });
 }

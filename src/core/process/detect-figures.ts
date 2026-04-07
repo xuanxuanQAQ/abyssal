@@ -109,7 +109,7 @@ export async function detectFigurePages(
   pdfPath: string,
 ): Promise<FigureCandidate[]> {
   const mupdf = await getMupdf();
-  const buffer = fs.readFileSync(pdfPath);
+  const buffer = await fs.promises.readFile(pdfPath);
 
   let doc: { loadPage(i: number): unknown; countPages(): number; destroy(): void };
   try {

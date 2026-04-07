@@ -32,7 +32,7 @@ export const ConceptDetailCard = React.memo(function ConceptDetailCard({ concept
     <div style={containerStyle}>
       <div style={headerRowStyle}>
         <Lightbulb size={14} style={accentIconStyle} />
-        <span style={nameStyle}>{concept?.name ?? conceptId}</span>
+        <span style={nameStyle}>{concept?.nameEn ?? conceptId}</span>
       </div>
 
       {isLoading && <div style={mutedSmallStyle}>{t('context.conceptDetail.loading')}</div>}
@@ -40,7 +40,7 @@ export const ConceptDetailCard = React.memo(function ConceptDetailCard({ concept
 
       {concept && (
         <>
-          {concept.description && <p style={descriptionStyle}>{concept.description}</p>}
+          {concept.definition && <p style={descriptionStyle}>{concept.definition}</p>}
           {concept.parentId && <div style={parentIdStyle}>{t('context.conceptDetail.parent')}: {concept.parentId}</div>}
         </>
       )}

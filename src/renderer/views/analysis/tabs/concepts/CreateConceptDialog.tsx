@@ -51,7 +51,7 @@ export function CreateConceptDialog({
       nameEn: resolvedNameEn,
       nameZh: resolvedNameZh,
       definition: definition.trim(),
-      keywords: Array.from(new Set(keywordsStr.split(',').map((k) => k.trim()).filter(Boolean))),
+      searchKeywords: Array.from(new Set(keywordsStr.split(',').map((k) => k.trim()).filter(Boolean))),
       parentId: null,
     };
 

@@ -24,7 +24,21 @@ import type {
   LlmAdapter,
   AdapterCallParams,
 } from './llm-client';
-import { mapFinishReason, safeParseJson } from './shared';
+import type { ResolvedReasoning } from './model-router';
+import { classifyCreateError, mapFinishReason, safeParseJson } from './shared';
+
+// ─── Reasoning level → budget_tokens mapping ───
+
+const CLAUDE_THINKING_BUDGETS: Record<string, number> = {
+  low: 4096,
+  medium: 10240,
+  high: 32768,
+};
+
+function resolveClaudeThinkingBudget(reasoning: ResolvedReasoning): number {
+  if (reasoning.budgetTokens) return reasoning.budgetTokens;
+  return CLAUDE_THINKING_BUDGETS[reasoning.level] ?? 10240;
+}
 
 // ─── Claude adapter ───
 
@@ -49,15 +63,24 @@ export class ClaudeAdapter implements LlmAdapter {
       model: params.model,
       system: buildCacheableSystem(params.systemPrompt),
       messages,
-      max_tokens: params.maxTokens ?? 4096,
+      max_tokens: params.maxTokens ?? 16384,
       temperature: params.temperature ?? 0.7,
     };
 
-    // Extended thinking: budget_tokens enables chain-of-thought reasoning
-    if (params.thinkingBudget && params.thinkingBudget > 0) {
-      requestParams['thinking'] = { type: 'enabled', budget_tokens: params.thinkingBudget };
+    // Extended thinking: reasoning config or legacy thinkingBudget
+    const thinkingBudget = params.reasoning
+      ? resolveClaudeThinkingBudget(params.reasoning)
+      : (params.thinkingBudget && params.thinkingBudget > 0 ? params.thinkingBudget : 0);
+
+    if (thinkingBudget > 0) {
+      requestParams['thinking'] = { type: 'enabled', budget_tokens: thinkingBudget };
       // Anthropic requires temperature=1 when thinking is enabled
       requestParams['temperature'] = 1;
+      // Ensure max_tokens leaves room for both thinking and actual output
+      const minMaxTokens = thinkingBudget + 4096;
+      if ((requestParams['max_tokens'] as number) < minMaxTokens) {
+        requestParams['max_tokens'] = minMaxTokens;
+      }
     }
 
     if (params.tools && params.tools.length > 0) {
@@ -85,28 +108,47 @@ export class ClaudeAdapter implements LlmAdapter {
       model: params.model,
       system: buildCacheableSystem(params.systemPrompt),
       messages,
-      max_tokens: params.maxTokens ?? 4096,
+      max_tokens: params.maxTokens ?? 16384,
       temperature: params.temperature ?? 0.7,
     };
 
-    if (params.thinkingBudget && params.thinkingBudget > 0) {
-      requestParams['thinking'] = { type: 'enabled', budget_tokens: params.thinkingBudget };
+    const thinkingBudget = params.reasoning
+      ? resolveClaudeThinkingBudget(params.reasoning)
+      : (params.thinkingBudget && params.thinkingBudget > 0 ? params.thinkingBudget : 0);
+
+    if (thinkingBudget > 0) {
+      requestParams['thinking'] = { type: 'enabled', budget_tokens: thinkingBudget };
       requestParams['temperature'] = 1;
+      const minMaxTokens = thinkingBudget + 4096;
+      if ((requestParams['max_tokens'] as number) < minMaxTokens) {
+        requestParams['max_tokens'] = minMaxTokens;
+      }
     }
 
     if (params.tools && params.tools.length > 0) {
       requestParams['tools'] = params.tools.map(toClaudeTool);
     }
 
-    const stream = this.client.messages.stream(
-      requestParams as unknown as Anthropic.MessageCreateParamsStreaming,
-    );
+    let stream;
+    try {
+      stream = this.client.messages.stream(
+        requestParams as unknown as Anthropic.MessageCreateParamsStreaming,
+      );
+    } catch (err) {
+      if (params.signal?.aborted) {
+        yield { type: 'error', code: 'ABORTED', message: 'Request cancelled' };
+      } else {
+        yield { type: 'error', code: classifyCreateError(err), message: (err as Error).message };
+      }
+      return;
+    }
 
     // AbortSignal → stream.abort() (§2.6)
     if (params.signal) {
       params.signal.addEventListener('abort', () => stream.abort(), { once: true });
     }
 
+    const emitThinking = !!params.reasoning;
     let fullText = '';
     let thinkingText = '';
     let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
@@ -149,8 +191,9 @@ export class ClaudeAdapter implements LlmAdapter {
             if (buf) buf.json += partialJson;
             yield { type: 'tool_use_delta', delta: partialJson };
           } else if (delta['type'] === 'thinking_delta') {
-            // Silently accumulate thinking content
-            thinkingText += (delta['thinking'] as string) ?? '';
+            const thinkDelta = (delta['thinking'] as string) ?? '';
+            thinkingText += thinkDelta;
+            if (thinkDelta && emitThinking) yield { type: 'thinking_delta' as const, delta: thinkDelta };
           }
         } else if (type === 'content_block_stop') {
           const index = (event as unknown as Record<string, unknown>)['index'] as number;
@@ -194,7 +237,7 @@ export class ClaudeAdapter implements LlmAdapter {
       if (params.signal?.aborted) {
         yield { type: 'error', code: 'ABORTED', message: 'Request cancelled' };
       } else {
-        yield { type: 'error', code: 'STREAM_ERROR', message: (err as Error).message };
+        yield { type: 'error', code: classifyCreateError(err), message: (err as Error).message };
       }
     }
   }

@@ -1,11 +1,13 @@
-export const PROVIDERS = ['anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow', 'doubao', 'kimi'] as const;
 
 export const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: 'Claude (Anthropic)',
+  anthropic: 'Anthropic',
   openai: 'OpenAI',
-  gemini: 'Google Gemini',
+  gemini: 'Google',
   deepseek: 'DeepSeek',
   siliconflow: 'SiliconFlow',
+  doubao: 'ByteDance',
+  kimi: 'Moonshot',
 };
 
 export const MODELS_BY_PROVIDER: Record<string, string[]> = {
@@ -14,6 +16,8 @@ export const MODELS_BY_PROVIDER: Record<string, string[]> = {
   gemini: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
   siliconflow: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen3-235B-A22B', 'Qwen/Qwen2.5-72B-Instruct'],
+  doubao: ['doubao-seed-2-0-pro-260215', 'doubao-seed-2-0-lite-260215', 'doubao-seed-2-0-mini-260215', 'doubao-seed-1-8-251228'],
+  kimi: ['kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-turbo-preview', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo'],
 };
 
 export const WORKFLOW_KEYS = ['discover', 'analyze', 'synthesize', 'article', 'agent', 'vision'] as const;

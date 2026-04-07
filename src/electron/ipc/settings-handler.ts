@@ -126,6 +126,7 @@ export function registerSettingsHandlers(ctx: AppContext): void {
         proxyMode: c.acquire.proxyMode,
       },
       discovery: {
+        searchBackend: c.discovery.searchBackend ?? 'openalex',
         traversalDepth: c.discovery.traversalDepth,
         maxResultsPerQuery: c.discovery.maxResultsPerQuery,
         concurrency: c.discovery.concurrency,
@@ -156,10 +157,13 @@ export function registerSettingsHandlers(ctx: AppContext): void {
         geminiApiKey: maskKey(c.apiKeys.geminiApiKey),
         deepseekApiKey: maskKey(c.apiKeys.deepseekApiKey),
         semanticScholarApiKey: maskKey(c.apiKeys.semanticScholarApiKey),
+        openalexApiKey: maskKey(c.apiKeys.openalexApiKey),
         unpaywallEmail: c.apiKeys.unpaywallEmail,
         cohereApiKey: maskKey(c.apiKeys.cohereApiKey),
         jinaApiKey: maskKey(c.apiKeys.jinaApiKey),
         siliconflowApiKey: maskKey(c.apiKeys.siliconflowApiKey),
+        doubaoApiKey: maskKey(c.apiKeys.doubaoApiKey),
+        kimiApiKey: maskKey(c.apiKeys.kimiApiKey),
         webSearchApiKey: maskKey(c.apiKeys.webSearchApiKey),
       },
       webSearch: {

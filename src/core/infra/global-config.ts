@@ -41,6 +41,8 @@ function defaultGlobalToml(): string {
 # cohereApiKey = ""
 # jinaApiKey = ""
 # siliconflowApiKey = "sk-..."
+# doubaoApiKey = ""  # 字节豆包 API key
+# kimiApiKey = ""  # Moonshot Kimi API key
 # webSearchApiKey = ""  # Tavily / SerpAPI / Bing API key
 
 [llm]
@@ -260,6 +262,8 @@ const ENV_MAP: Record<string, [keyof GlobalConfig, string]> = {
   ABYSSAL_COHERE_API_KEY: ['apiKeys', 'cohereApiKey'],
   ABYSSAL_JINA_API_KEY: ['apiKeys', 'jinaApiKey'],
   ABYSSAL_SILICONFLOW_API_KEY: ['apiKeys', 'siliconflowApiKey'],
+  ABYSSAL_DOUBAO_API_KEY: ['apiKeys', 'doubaoApiKey'],
+  ABYSSAL_KIMI_API_KEY: ['apiKeys', 'kimiApiKey'],
   ABYSSAL_WEB_SEARCH_API_KEY: ['apiKeys', 'webSearchApiKey'],
   ABYSSAL_LLM_PROVIDER: ['llm', 'defaultProvider'],
   ABYSSAL_LLM_MODEL: ['llm', 'defaultModel'],

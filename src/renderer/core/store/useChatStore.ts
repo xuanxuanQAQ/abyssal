@@ -38,12 +38,15 @@ interface ChatState {
   chatStreaming: boolean;
   /** ChatDock 形态 */
   chatDockMode: ChatDockMode;
+  /** 是否启用推理模式（深度思考） */
+  chatReasoningEnabled: boolean;
 
   // ── Actions ──
   setActiveSessionKey: (key: string) => void;
   setChatInputDraft: (draft: string) => void;
   setChatStreaming: (streaming: boolean) => void;
   setChatDockMode: (mode: ChatDockMode) => void;
+  setChatReasoningEnabled: (enabled: boolean) => void;
 
   /** 确保会话存在于热缓存中（不存在则创建空会话） */
   ensureSession: (key: string) => void;
@@ -61,6 +64,8 @@ interface ChatState {
   appendToStreamBuffer: (chunk: string) => void;
   /** 追加文本到指定会话最后一条 assistant 消息的 streamBuffer */
   appendToStreamBufferInSession: (key: string, chunk: string) => void;
+  /** 追加思考内容到指定会话最后一条 assistant 消息的 thinkingBuffer */
+  appendToThinkingBufferInSession: (key: string, chunk: string) => void;
   /** 将 streamBuffer 刷新到 content（RAF 节流后调用） */
   flushStreamBuffer: () => void;
   /** 将指定会话的 streamBuffer 刷新到 content */
@@ -110,6 +115,7 @@ export const useChatStore = create<ChatState>()(
         chatInputDraft: '',
         chatStreaming: false,
         chatDockMode: 'collapsed' as ChatDockMode,
+        chatReasoningEnabled: false,
 
         setActiveSessionKey: (key) =>
           set((state) => {
@@ -132,6 +138,11 @@ export const useChatStore = create<ChatState>()(
         setChatDockMode: (mode) =>
           set((state) => {
             state.chatDockMode = mode;
+          }),
+
+        setChatReasoningEnabled: (enabled) =>
+          set((state) => {
+            state.chatReasoningEnabled = enabled;
           }),
 
         ensureSession: (key) =>
@@ -200,6 +211,16 @@ export const useChatStore = create<ChatState>()(
             const last = session.messages[session.messages.length - 1];
             if (last && last.role === 'assistant') {
               last.streamBuffer = (last.streamBuffer ?? '') + chunk;
+            }
+          }),
+
+        appendToThinkingBufferInSession: (key, chunk) =>
+          set((state) => {
+            const session = state.sessions[key];
+            if (!session) return;
+            const last = session.messages[session.messages.length - 1];
+            if (last && last.role === 'assistant') {
+              last.thinkingBuffer = (last.thinkingBuffer ?? '') + chunk;
             }
           }),
 

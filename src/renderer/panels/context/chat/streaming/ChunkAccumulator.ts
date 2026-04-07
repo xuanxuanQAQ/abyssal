@@ -43,6 +43,16 @@ export class ChunkAccumulator {
   }
 
   /**
+   * 接收思考内容 chunk
+   */
+  pushThinkingChunk(chunk: string): void {
+    if (!this.sessionKey) return;
+    useChatStore.getState().appendToThinkingBufferInSession(this.sessionKey, chunk);
+    this.dirty = true;
+    this.scheduleFlush();
+  }
+
+  /**
    * 接收 tool call 更新
    */
   pushToolCall(toolCall: ToolCallInfo): void {
@@ -86,6 +96,10 @@ export class ChunkAccumulator {
       store.updateMessageInSession(this.sessionKey, this.messageId, (msg) => {
         msg.content = msg.streamBuffer ?? msg.content;
         delete msg.streamBuffer;
+        if (msg.thinkingBuffer) {
+          msg.thinking = msg.thinkingBuffer;
+          delete msg.thinkingBuffer;
+        }
         msg.status = 'completed';
       });
 

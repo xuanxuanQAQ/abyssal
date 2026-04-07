@@ -96,6 +96,12 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
   },
 
   // ── discovery ──
+  'discovery.searchBackend': {
+    type: 'enum',
+    default: 'openalex',
+    required: false,
+    constraints: { enum: ['openalex', 'semantic_scholar', 'arxiv'] },
+  },
   'discovery.traversalDepth': {
     type: 'integer',
     default: 2,
@@ -506,7 +512,7 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     type: 'enum',
     default: 'anthropic',
     required: false,
-    constraints: { enum: ['claude', 'anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow'] },
+    constraints: { enum: ['claude', 'anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow', 'doubao', 'kimi'] },
     cliFlag: '--provider',
     envVar: 'ABYSSAL_LLM_DEFAULT_PROVIDER',
   },
@@ -560,6 +566,13 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     envVar: 'DEEPSEEK_API_KEY',
     requiredWhen: (c) => usesProvider(c, 'deepseek'),
   },
+  'apiKeys.openalexApiKey': {
+    type: 'string',
+    default: null,
+    required: false,
+    sensitive: true,
+    envVar: 'ABYSSAL_OPENALEX_API_KEY',
+  },
   'apiKeys.unpaywallEmail': {
     type: 'string',
     default: null,
@@ -594,6 +607,24 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
       usesProvider(c, 'siliconflow') ||
       getNestedValue(c, 'rag.rerankerBackend') === 'siliconflow' ||
       getNestedValue(c, 'rag.embeddingProvider') === 'siliconflow',
+  },
+
+  'apiKeys.doubaoApiKey': {
+    type: 'string',
+    default: null,
+    required: false,
+    sensitive: true,
+    envVar: 'DOUBAO_API_KEY',
+    requiredWhen: (c) => usesProvider(c, 'doubao'),
+  },
+
+  'apiKeys.kimiApiKey': {
+    type: 'string',
+    default: null,
+    required: false,
+    sensitive: true,
+    envVar: 'KIMI_API_KEY',
+    requiredWhen: (c) => usesProvider(c, 'kimi'),
   },
 
   'apiKeys.webSearchApiKey': {

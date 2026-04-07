@@ -5,11 +5,10 @@ export function historyEntryToFrontend(entry: ConceptDefinition['history'][numbe
   return {
     timestamp: entry.timestamp,
     type: entry.changeType,
-    details: {
-      summary: entry.oldValueSummary,
-      reason: entry.reason,
-      ...(entry.metadata ?? {}),
-    },
+    oldValueSummary: entry.oldValueSummary,
+    reason: entry.reason,
+    isBreaking: entry.isBreaking,
+    metadata: entry.metadata,
   };
 }
 
@@ -59,14 +58,13 @@ export function conceptToFrontend(
 ): Concept {
   return {
     id: concept.id,
-    name: concept.nameEn,
     nameZh: concept.nameZh,
     nameEn: concept.nameEn,
-    description: concept.definition,
+    definition: concept.definition,
     parentId: concept.parentId,
     level: levelById.get(concept.id) ?? 0,
     maturity: concept.maturity,
-    keywords: Array.isArray(concept.searchKeywords) ? concept.searchKeywords : [],
+    searchKeywords: Array.isArray(concept.searchKeywords) ? concept.searchKeywords : [],
     history: Array.isArray(concept.history) ? concept.history.map(historyEntryToFrontend) : [],
   };
 }

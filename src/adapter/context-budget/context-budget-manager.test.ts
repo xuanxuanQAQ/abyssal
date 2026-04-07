@@ -147,23 +147,23 @@ describe('ContextBudgetManager', () => {
 
   // ─── Maturity-aware adjustment ───
 
-  it('increases ragTopK by 1.5x for tentative concepts', () => {
+  it('increases ragTopK by 1.5x for established concepts', () => {
     const cbm = makeCBM();
     const baseResult = cbm.allocate(makeRequest({
-      conceptMaturities: ['established'],
-      sources: [
-        { sourceType: 'rag_passages', estimatedTokens: 120_000, priority: 'MEDIUM', content: null },
-      ],
-    }));
-
-    const tentativeResult = cbm.allocate(makeRequest({
       conceptMaturities: ['tentative'],
       sources: [
         { sourceType: 'rag_passages', estimatedTokens: 120_000, priority: 'MEDIUM', content: null },
       ],
     }));
 
-    expect(tentativeResult.ragTopK).toBeGreaterThanOrEqual(Math.ceil(baseResult.ragTopK * 1.4));
+    const establishedResult = cbm.allocate(makeRequest({
+      conceptMaturities: ['established'],
+      sources: [
+        { sourceType: 'rag_passages', estimatedTokens: 120_000, priority: 'MEDIUM', content: null },
+      ],
+    }));
+
+    expect(establishedResult.ragTopK).toBeGreaterThanOrEqual(Math.ceil(baseResult.ragTopK * 1.4));
   });
 
   // ─── Smart degradation ───

@@ -2,10 +2,11 @@
 // §二 Level 6: 概念框架完整性检查
 
 import * as fs from 'node:fs';
+import * as yaml from 'js-yaml';
 import type { ConceptId } from '../types/common';
 import { isConceptId } from '../types/common';
 import type { ConceptDefinition } from '../types/concept';
-import { CONCEPT_MATURITIES, type ConceptMaturity } from '../types/concept';
+import { CONCEPT_MATURITIES, type ConceptMaturity, isKnownLayer } from '../types/concept';
 
 // ─── YAML 原始结构 ───
 
@@ -41,7 +42,6 @@ export interface ConceptValidationResult {
 export function loadConceptsYaml(filePath: string): ConceptDefinition[] {
   if (!fs.existsSync(filePath)) return [];
 
-  const yaml = require('js-yaml');
   const rawText = fs.readFileSync(filePath, 'utf-8');
   const parsed = yaml.load(rawText) as ConceptsYamlFile | null;
 
@@ -125,6 +125,11 @@ export function validateConceptFramework(concepts: ConceptDefinition[]): Concept
     const m = concept.maturity ?? 'working';
     if (!CONCEPT_MATURITIES.includes(m)) {
       errors.push(`Concept ${concept.id}: invalid maturity "${m}"`);
+    }
+
+    // 6d-2: layer 枚举校验（未知值仅警告，不阻断）
+    if (concept.layer && !isKnownLayer(concept.layer)) {
+      warnings.push(`Concept ${concept.id}: unknown layer "${concept.layer}" — known layers: core, domain, methodological, theoretical, applied`);
     }
 
     // 6e: parent_id 悬空引用

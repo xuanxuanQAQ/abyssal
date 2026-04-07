@@ -2,7 +2,7 @@
  * TableToolbar — 搜索框 + 排序/筛选指示器 + 导入按钮（§8）
  *
  * 搜索：200→320px 动画，300ms 防抖。
- * 导入：下拉菜单 BibTeX/RIS/PDF/文本粘贴/DOI。
+ * 导入：下拉菜单 文件/文本粘贴/DOI/网页，与 ImportDialog Tab 一一对应。
  */
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
@@ -26,7 +26,7 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
   const [localQuery, setLocalQuery] = useState(librarySearchQuery);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [importOpen, setImportOpen] = useState(false);
-  const [importMode, setImportMode] = useState<'file' | 'text' | 'doi'>('file');
+  const [importMode, setImportMode] = useState<'file' | 'text' | 'doi' | 'web'>('file');
 
   // 300ms 防抖
   const handleSearchChange = useCallback(
@@ -198,32 +198,25 @@ export function TableToolbar({ filter, resultCount }: TableToolbarProps) {
                 onSelect={() => { setImportMode('file'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                {t('library.import.bibtex')}
+                {t('library.import.menu.file')}
               </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onSelect={() => { setImportMode('file'); setImportOpen(true); }}
-                style={menuItemStyle}
-              >
-                {t('library.import.ris')}
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onSelect={() => { setImportMode('file'); setImportOpen(true); }}
-                style={menuItemStyle}
-              >
-                {t('library.import.pdf')}
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator style={{ height: 1, backgroundColor: 'var(--border-subtle)', margin: '4px 0' }} />
               <DropdownMenu.Item
                 onSelect={() => { setImportMode('text'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                {t('library.import.pasteBibtex')}
+                {t('library.import.menu.text')}
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 onSelect={() => { setImportMode('doi'); setImportOpen(true); }}
                 style={menuItemStyle}
               >
-                {t('library.import.fromDoi')}
+                {t('library.import.menu.doi')}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => { setImportMode('web'); setImportOpen(true); }}
+                style={menuItemStyle}
+              >
+                {t('library.import.menu.web')}
               </DropdownMenu.Item>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>

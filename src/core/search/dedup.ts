@@ -52,6 +52,7 @@ function mergePapers(existing: PaperMetadata, incoming: PaperMetadata): PaperMet
     url: existing.url ?? incoming.url,
     bibtexKey: existing.bibtexKey ?? incoming.bibtexKey,
     biblioComplete: existing.biblioComplete || incoming.biblioComplete,
+    sourceUrl: existing.sourceUrl ?? incoming.sourceUrl ?? null,
   };
 
   return merged;

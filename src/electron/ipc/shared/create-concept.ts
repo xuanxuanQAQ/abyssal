@@ -50,8 +50,8 @@ export async function createConceptFromDraft(
   const definition = typeof draft['definition'] === 'string'
     ? draft['definition']
     : fallbackDefinition ?? '';
-  const searchKeywords = Array.isArray(draft['keywords'])
-    ? draft['keywords'].filter((keyword): keyword is string => typeof keyword === 'string')
+  const searchKeywords = Array.isArray(draft['searchKeywords'])
+    ? draft['searchKeywords'].filter((keyword): keyword is string => typeof keyword === 'string')
     : [];
   const parentId = typeof draft['parentId'] === 'string' ? draft['parentId'] : null;
 

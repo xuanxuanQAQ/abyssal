@@ -34,6 +34,7 @@ function recordToMessage(record: ChatMessageRecord): ChatMessage {
     status: 'completed',
     toolCalls: record.toolCalls ? JSON.parse(record.toolCalls) : undefined,
     citations: record.citations ? JSON.parse(record.citations) : undefined,
+    attachments: record.attachments ? JSON.parse(record.attachments) : undefined,
   };
 }
 
@@ -53,6 +54,7 @@ export function messageToRecord(
   };
   if (msg.toolCalls) record.toolCalls = JSON.stringify(msg.toolCalls);
   if (msg.citations) record.citations = JSON.stringify(msg.citations);
+  if (msg.attachments) record.attachments = JSON.stringify(msg.attachments);
   return record;
 }
 

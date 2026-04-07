@@ -29,6 +29,30 @@ function copyMigrations() {
   }
 }
 
+// ─── 复制 prompt 模板文件（.md）───
+
+function copyPromptTemplates() {
+  const srcBase = path.join(__dirname, 'src/adapter/prompt-assembler/templates');
+  // 模板在 bundle 后通过 __dirname + 'templates' 读取
+  // main.ts 输出到 dist/electron/main.js，所以目标是 dist/electron/templates/
+  const dstBase = path.join(__dirname, 'dist/electron/templates');
+
+  function copyDirRecursive(src, dst) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const srcPath = path.join(src, entry.name);
+      const dstPath = path.join(dst, entry.name);
+      if (entry.isDirectory()) {
+        copyDirRecursive(srcPath, dstPath);
+      } else if (entry.name.endsWith('.md')) {
+        fs.copyFileSync(srcPath, dstPath);
+      }
+    }
+  }
+
+  copyDirRecursive(srcBase, dstBase);
+}
+
 function copyRuntimeProcessFiles() {
   const files = [
     {
@@ -69,6 +93,7 @@ async function buildTsMigrations() {
 
 copyMigrations();
 copyRuntimeProcessFiles();
+copyPromptTemplates();
 
 // ─── Native 模块和 Electron 标记为 external ───
 
@@ -79,6 +104,7 @@ const externalModules = [
   'mupdf',
   'tesseract.js',
   'onnxruntime-node',
+  'jsdom',
   // Node.js builtins 由 platform: 'node' 自动处理
 ];
 
@@ -188,6 +214,7 @@ if (isWatch) {
   await buildTsMigrations();
   copyMigrations();
   copyRuntimeProcessFiles();
+  copyPromptTemplates();
 
   // Watch migrations directory for new/changed .ts and .sql files.
   // esbuild context.watch() only tracks import graphs — dynamically-loaded
@@ -233,4 +260,5 @@ if (isWatch) {
     buildTsMigrations(),
   ]);
   copyRuntimeProcessFiles();
+  copyPromptTemplates();
 }

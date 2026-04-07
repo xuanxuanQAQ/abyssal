@@ -71,8 +71,8 @@ async function mapSuggestedConcept(
 function mapConceptDraftToOverrides(draft: Record<string, unknown> | null | undefined): Partial<ConceptDefinition> | undefined {
   if (!draft) return undefined;
 
-  const searchKeywords = Array.isArray(draft['keywords'])
-    ? draft['keywords'].filter((keyword): keyword is string => typeof keyword === 'string' && keyword.trim().length > 0)
+  const searchKeywords = Array.isArray(draft['searchKeywords'])
+    ? draft['searchKeywords'].filter((keyword): keyword is string => typeof keyword === 'string' && keyword.trim().length > 0)
     : undefined;
 
   const overrides: Partial<ConceptDefinition> = {};

@@ -9,14 +9,17 @@ import { getAPI } from '../../../core/ipc/bridge';
 export function ApiKeysTab({ settings, onReload }: { settings: SettingsData; onReload: () => void }) {
   const { t } = useTranslation();
   const keys: Array<{ name: string; field: keyof SettingsData['apiKeys']; provider: string; label: string; isEmail?: boolean | undefined }> = [
-    { name: 'Anthropic (Claude)', field: 'anthropicApiKey', provider: 'anthropic', label: 'Anthropic API Key' },
+    { name: 'Anthropic', field: 'anthropicApiKey', provider: 'anthropic', label: 'Anthropic API Key' },
     { name: 'OpenAI', field: 'openaiApiKey', provider: 'openai', label: 'OpenAI API Key' },
-    { name: 'Google Gemini', field: 'geminiApiKey', provider: 'gemini', label: 'Gemini API Key' },
+    { name: 'Google', field: 'geminiApiKey', provider: 'gemini', label: 'Gemini API Key' },
     { name: 'DeepSeek', field: 'deepseekApiKey', provider: 'deepseek', label: 'DeepSeek API Key' },
-    { name: 'Cohere (Reranker)', field: 'cohereApiKey', provider: 'cohere', label: 'Cohere API Key' },
-    { name: 'Jina (Reranker)', field: 'jinaApiKey', provider: 'jina', label: 'Jina API Key' },
-    { name: 'SiliconFlow (LLM/Embed/Rerank)', field: 'siliconflowApiKey', provider: 'siliconflow', label: 'SiliconFlow API Key' },
+    { name: 'Cohere', field: 'cohereApiKey', provider: 'cohere', label: 'Cohere API Key' },
+    { name: 'Jina', field: 'jinaApiKey', provider: 'jina', label: 'Jina API Key' },
+    { name: 'SiliconFlow', field: 'siliconflowApiKey', provider: 'siliconflow', label: 'SiliconFlow API Key' },
+    { name: 'ByteDance', field: 'doubaoApiKey', provider: 'doubao', label: 'Doubao API Key' },
+    { name: 'Moonshot', field: 'kimiApiKey', provider: 'kimi', label: 'Kimi API Key' },
     { name: 'Semantic Scholar', field: 'semanticScholarApiKey', provider: '', label: 'S2 API Key' },
+    { name: 'OpenAlex', field: 'openalexApiKey', provider: '', label: 'OpenAlex API Key' },
     { name: 'Unpaywall', field: 'unpaywallEmail', provider: '', label: 'Email', isEmail: true },
     { name: 'Tavily (Web Search)', field: 'webSearchApiKey', provider: 'tavily', label: 'Tavily API Key' },
   ];

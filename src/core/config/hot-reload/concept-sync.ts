@@ -2,6 +2,7 @@
 // §六: 概念框架热重载
 
 import * as fs from 'node:fs';
+import * as yaml from 'js-yaml';
 import type Database from 'better-sqlite3';
 import type { ConceptId } from '../../types/common';
 import type { ConceptDefinition } from '../../types/concept';
@@ -153,7 +154,6 @@ export function exportConceptsToYaml(
   outputPath: string,
 ): void {
   const concepts = conceptsDao.getAllConcepts(db, false);
-  const yaml = require('js-yaml');
 
   const yamlData = {
     concepts: concepts.map((c) => ({

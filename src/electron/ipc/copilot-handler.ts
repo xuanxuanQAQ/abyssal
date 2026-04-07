@@ -174,6 +174,7 @@ export function getOrCreateCopilotRuntime(ctx: AppContext): CopilotRuntime {
       session: ctx.session ?? (() => { throw new Error('session not initialized'); })(),
       eventBus: ctx.eventBus ?? (() => { throw new Error('eventBus not initialized'); })(),
       governor: new ToolCallingGovernor(),
+      logger: (msg, data) => ctx.logger.info(`[CopilotRuntime] ${msg}`, data as Record<string, unknown>),
       buildSystemPrompt: async (operation) => {
         // Direct editor mutations use a focused writing prompt —
         // no tools, no project stats, just writing instructions.
@@ -402,22 +403,43 @@ export function registerCopilotHandlers(ctx: AppContext): void {
   const { logger } = ctx;
 
   // ── copilot:execute ──
+  // LLM calls can take well over 30s; use 120s and abort on timeout
+  // to prevent ghost operations leaking tokens.
+  const activeOperations = new Map<string, AbortController>();
   typedHandler('copilot:execute', logger, async (_e, envelope) => {
     const runtime = getOrCreateCopilotRuntime(ctx);
     const env = envelope as CopilotOperationEnvelope;
     const op = env.operation;
+    const abortCtrl = new AbortController();
+    activeOperations.set(op.id, abortCtrl);
     await hydrateConversationCache(ctx, op.sessionId ?? 'workspace', op.prompt);
     // Track user prompt for conversation cache
     if (op.prompt) {
       pushTurn(op.sessionId ?? 'workspace', 'user', op.prompt);
       operationMeta.set(op.id, { sessionId: op.sessionId ?? 'workspace', userPrompt: op.prompt });
     }
-    const result = await runtime.execute(env);
-    if (op.prompt) {
-      syncOperationMeta(op.id, result.operationId, op.sessionId ?? 'workspace', op.prompt);
+    try {
+      const result = await runtime.execute(env);
+      if (op.prompt) {
+        syncOperationMeta(op.id, result.operationId, op.sessionId ?? 'workspace', op.prompt);
+      }
+      bindSessionToOperation(result.sessionId, result.operationId);
+      return result;
+    } finally {
+      activeOperations.delete(op.id);
     }
-    bindSessionToOperation(result.sessionId, result.operationId);
-    return result;
+  }, {
+    timeoutMs: 120_000,
+    onTimeout: () => {
+      // Abort all active operations on timeout
+      for (const [operationId, ctrl] of activeOperations) {
+        logger.warn('Aborting timed-out copilot operation', { operationId });
+        ctrl.abort();
+        const runtime = getOrCreateCopilotRuntime(ctx);
+        runtime.abort(operationId);
+      }
+      activeOperations.clear();
+    },
   });
 
   // ── copilot:abort ──
@@ -474,21 +496,25 @@ export function registerCopilotHandlers(ctx: AppContext): void {
 const WRITING_INTENT_INSTRUCTIONS: Record<string, string> = {
   'rewrite-selection': [
     'The user wants you to REWRITE the selected text.',
-    'Produce an improved version of the selected text, preserving the original meaning.',
-    'Match the style, register, and language of the original.',
+    'The "Selected Editor Text" in the user message is the text to rewrite.',
+    'The "Editor Context" (if present) shows surrounding text for style/tone reference.',
+    'Produce an improved version preserving the original meaning. Match the style and language of the original.',
   ].join('\n'),
   'expand-selection': [
     'The user wants you to EXPAND the selected text.',
-    'Elaborate on the ideas in the selected text, adding detail, examples, or analysis.',
-    'Maintain consistency with the surrounding content.',
+    'The "Selected Editor Text" in the user message is the text to expand.',
+    'The "Editor Context" (if present) shows surrounding text for consistency.',
+    'Elaborate on the ideas, adding detail, examples, or analysis.',
   ].join('\n'),
   'compress-selection': [
     'The user wants you to COMPRESS the selected text.',
+    'The "Selected Editor Text" in the user message is the text to compress.',
     'Produce a shorter, more concise version while preserving the core meaning.',
   ].join('\n'),
   'continue-writing': [
-    'The user wants you to CONTINUE WRITING from the current position.',
-    'Seamlessly extend the existing text, maintaining style, tone, and argument flow.',
+    'The user wants you to CONTINUE WRITING from the current cursor position.',
+    'The "Editor Context" section in the user message contains the text before and after the cursor.',
+    'Seamlessly extend the text, maintaining style, tone, and argument flow.',
     'Write 1-3 paragraphs unless the user specifies otherwise.',
   ].join('\n'),
 };

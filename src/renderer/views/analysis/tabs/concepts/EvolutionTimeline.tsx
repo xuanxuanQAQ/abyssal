@@ -51,11 +51,11 @@ function getSummary(
   entry: HistoryEntry,
   t: TranslateFn,
 ): string {
-  const d = entry.details as Record<string, unknown>;
-  const summary = typeof d.summary === 'string' ? d.summary : '';
-  const reason = typeof d.reason === 'string' ? d.reason : '';
-  const from = typeof d.from === 'string' ? d.from : '';
-  const to = typeof d.to === 'string' ? d.to : '';
+  const meta = (entry.metadata ?? {}) as Record<string, unknown>;
+  const summary = entry.oldValueSummary;
+  const reason = entry.reason ?? '';
+  const from = typeof meta.from === 'string' ? meta.from : '';
+  const to = typeof meta.to === 'string' ? meta.to : '';
   switch (entry.type) {
     case 'created':
       return t('analysis.concepts.history.events.created');
@@ -65,11 +65,11 @@ function getSummary(
       });
     case 'keywords_added':
       return t('analysis.concepts.history.events.keywordsAdded', {
-        keywords: formatList(d.added, summary) || t('analysis.concepts.history.events.noDetails'),
+        keywords: formatList(meta.added, summary) || t('analysis.concepts.history.events.noDetails'),
       });
     case 'keywords_removed':
       return t('analysis.concepts.history.events.keywordsRemoved', {
-        keywords: formatList(d.removed, summary) || t('analysis.concepts.history.events.noDetails'),
+        keywords: formatList(meta.removed, summary) || t('analysis.concepts.history.events.noDetails'),
       });
     case 'maturity_upgraded':
       return t('analysis.concepts.history.events.maturityUpgraded', {
@@ -83,11 +83,11 @@ function getSummary(
       });
     case 'merged_from':
       return t('analysis.concepts.history.events.mergedFrom', {
-        source: summary || t('common.concept'),
+        source: (typeof meta.sourceConceptName === 'string' ? meta.sourceConceptName : '') || summary || t('common.concept'),
       });
     case 'split_into':
       return t('analysis.concepts.history.events.splitInto', {
-        targets: summary || t('common.concepts'),
+        targets: (Array.isArray(meta.newConceptIds) ? (meta.newConceptIds as string[]).join(', ') : '') || summary || t('common.concepts'),
       });
     case 'parent_changed':
       return t('analysis.concepts.history.events.parentChanged', {

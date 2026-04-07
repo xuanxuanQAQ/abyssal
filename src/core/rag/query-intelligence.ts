@@ -24,6 +24,9 @@ function matchConcepts(
   const matched: ConceptDefinition[] = [];
 
   for (const concept of concepts) {
+    // Skip tag-maturity concepts — they are labels, not retrieval targets
+    if (concept.maturity === 'tag') continue;
+
     // 精确匹配优先
     if (
       queryLower.includes(concept.nameEn.toLowerCase()) ||
@@ -61,7 +64,9 @@ function buildNaturalVariant(
     (kw) => !queryWords.has(kw.toLowerCase()),
   );
 
-  const maxKeywords = concept.maturity === 'tentative' ? 8 : 5;
+  const maxKeywords = concept.maturity === 'established' ? 8
+    : concept.maturity === 'working' ? 5
+    : 3; // tentative (or unknown)
   const selected = newKeywords.slice(0, maxKeywords);
 
   // 向量检索变体：融合为自然命题
@@ -185,8 +190,23 @@ export function expandQuery(
     }
   }
 
-  // §6.6: 成熟度感知参数
-  const hasTentative = matchedConcepts.some((c) => c.maturity === 'tentative');
+  // §6.6: 成熟度感知参数 — established concepts get more resources
+  const hasEstablished = matchedConcepts.some((c) => c.maturity === 'established');
+  const hasWorking = matchedConcepts.some((c) => c.maturity === 'working');
+
+  let expandFactorMultiplier: number;
+  let topKMultiplier: number;
+  if (hasEstablished) {
+    expandFactorMultiplier = 2.0;
+    topKMultiplier = 1.5;
+  } else if (hasWorking) {
+    expandFactorMultiplier = 1.5;
+    topKMultiplier = 1.2;
+  } else {
+    // tentative only — minimal expansion
+    expandFactorMultiplier = 1.0;
+    topKMultiplier = 1.0;
+  }
 
   // FTS 关键词去重
   const uniqueFtsKeywords = [...new Set(allFtsKeywords)];
@@ -196,8 +216,8 @@ export function expandQuery(
     ftsKeywords: uniqueFtsKeywords,
     matchedConcepts,
     expandParams: {
-      expandFactorMultiplier: hasTentative ? 2.0 : 1.0,
-      topKMultiplier: hasTentative ? 1.5 : 1.0,
+      expandFactorMultiplier,
+      topKMultiplier,
     },
   };
 }

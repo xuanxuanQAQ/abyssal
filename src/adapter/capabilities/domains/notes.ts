@@ -11,12 +11,13 @@ export function createNotesCapability(): Capability {
     name: 'notes',
     domain: 'notes',
     description: 'Research note and memo management — create, query, link to papers and concepts',
-    routeFamilies: ['writing_edit', 'research_qa', 'workspace_control'],
+    routeFamilies: ['note_management', 'research_qa', 'workspace_control'],
     operations: [
       {
         name: 'create',
-        description: 'Create a new research note. Automatically links to currently active papers/concepts from the session if not specified.',
-        routeFamilies: ['writing_edit', 'workspace_control'],
+        description: 'Create a structured research note (long-form). Only use when the user explicitly asks to create/save a research note. Do NOT use for casual writing or quick thoughts — use add_memo instead.',
+        routeFamilies: ['note_management', 'workspace_control'],
+        semanticKeywords: ['创建笔记', '新建笔记', '研究笔记', 'create note', 'research note', '保存笔记', '写笔记'],
         params: [
           { name: 'title', type: 'string', description: 'Note title', required: true },
           { name: 'content', type: 'string', description: 'Note content (markdown)' },
@@ -64,7 +65,8 @@ export function createNotesCapability(): Capability {
       {
         name: 'create_from_findings',
         description: 'Create a note from the current working memory findings. Automatically compiles relevant findings into a structured note.',
-        routeFamilies: ['writing_edit', 'workspace_control'],
+        routeFamilies: ['note_management', 'workspace_control'],
+        semanticKeywords: ['整理笔记', '汇总发现', 'compile findings', '生成笔记', '总结到笔记'],
         params: [
           { name: 'title', type: 'string', description: 'Note title', required: true },
           { name: 'findingTypes', type: 'array', description: 'Types of memory entries to include', itemType: 'string' },
@@ -129,7 +131,8 @@ export function createNotesCapability(): Capability {
       {
         name: 'query',
         description: 'Search and filter research notes by text, tags, linked papers, or linked concepts.',
-        routeFamilies: ['writing_edit', 'research_qa', 'retrieval_search'],
+        routeFamilies: ['note_management', 'research_qa', 'retrieval_search'],
+        semanticKeywords: ['查找笔记', '搜索笔记', '笔记列表', 'search notes', 'find notes', '我的笔记'],
         params: [
           { name: 'searchText', type: 'string', description: 'Full-text search' },
           { name: 'tags', type: 'array', description: 'Filter by tags', itemType: 'string' },
@@ -153,7 +156,8 @@ export function createNotesCapability(): Capability {
       {
         name: 'get',
         description: 'Get a specific note by ID with full metadata.',
-        routeFamilies: ['writing_edit', 'research_qa'],
+        routeFamilies: ['note_management', 'research_qa'],
+        semanticKeywords: ['查看笔记', '获取笔记', 'get note', '打开笔记'],
         params: [
           { name: 'noteId', type: 'string', description: 'Note ID', required: true },
         ],
@@ -167,7 +171,8 @@ export function createNotesCapability(): Capability {
       {
         name: 'update',
         description: 'Update a note\'s metadata (title, tags, linked entities).',
-        routeFamilies: ['writing_edit', 'workspace_control'],
+        routeFamilies: ['note_management', 'workspace_control'],
+        semanticKeywords: ['修改笔记', '更新笔记', 'update note', '编辑笔记'],
         params: [
           { name: 'noteId', type: 'string', description: 'Note ID', required: true },
           { name: 'title', type: 'string', description: 'New title' },
@@ -195,12 +200,13 @@ export function createNotesCapability(): Capability {
       },
       {
         name: 'add_memo',
-        description: 'Create a quick research memo linked to a paper, concept, or annotation.',
-        routeFamilies: ['writing_edit', 'workspace_control'],
+        description: 'Create a quick research memo (short fragment). Preferred over create for casual thoughts, quick notes, and brief content. Can optionally link to a paper, concept, or annotation.',
+        routeFamilies: ['note_management', 'workspace_control'],
+        semanticKeywords: ['备忘', '随手记', '记一下', 'memo', '快速记录', '记录', '随便写', '写点东西'],
         params: [
           { name: 'text', type: 'string', description: 'Memo content', required: true },
-          { name: 'entityType', type: 'string', description: 'Entity type', required: true, enumValues: ['paper', 'concept', 'annotation'] },
-          { name: 'entityId', type: 'string', description: 'Entity ID', required: true },
+          { name: 'entityType', type: 'string', description: 'Entity type to link (optional)', enumValues: ['paper', 'concept', 'annotation'] },
+          { name: 'entityId', type: 'string', description: 'Entity ID to link (optional, required if entityType is set)' },
           { name: 'tags', type: 'array', description: 'Tags', itemType: 'string' },
         ],
         permissionLevel: 1,
@@ -208,10 +214,27 @@ export function createNotesCapability(): Capability {
           if (!ctx.services.dbProxy.addMemo) {
             return { success: false, summary: 'Memo service not available' };
           }
+
+          // Auto-link to active paper/concept from session if no entity specified
+          let entityType = params['entityType'] as string | undefined;
+          let entityId = params['entityId'] as string | undefined;
+
+          if (!entityType || !entityId) {
+            const activePapers = ctx.session.focus.activePapers;
+            const activeConcepts = ctx.session.focus.activeConcepts;
+            if (activePapers.length > 0) {
+              entityType = 'paper';
+              entityId = activePapers[0];
+            } else if (activeConcepts.length > 0) {
+              entityType = 'concept';
+              entityId = activeConcepts[0];
+            }
+          }
+
           const memo = {
             text: params['text'],
-            entityType: params['entityType'],
-            entityId: params['entityId'],
+            entityType: entityType ?? null,
+            entityId: entityId ?? null,
             tags: params['tags'] ?? [],
           };
           const result = await ctx.services.dbProxy.addMemo(memo, null);
@@ -221,7 +244,8 @@ export function createNotesCapability(): Capability {
       {
         name: 'query_memos',
         description: 'Query memos by entity (paper, concept, or annotation).',
-        routeFamilies: ['writing_edit', 'research_qa'],
+        routeFamilies: ['note_management', 'research_qa'],
+        semanticKeywords: ['查找备忘', '搜索memo', '查看备忘', 'query memos', '我的备忘'],
         params: [
           { name: 'entityType', type: 'string', description: 'Entity type', required: true, enumValues: ['paper', 'concept', 'annotation', 'outline'] },
           { name: 'entityId', type: 'string', description: 'Entity ID', required: true },

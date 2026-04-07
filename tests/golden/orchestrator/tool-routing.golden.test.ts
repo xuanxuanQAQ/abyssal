@@ -17,13 +17,12 @@ describe('tool routing golden behavior', () => {
     expect(route).toMatchInlineSnapshot(`
       {
         "allowedFamilies": [
-          "writing_edit",
-          "research_qa",
           "retrieval_search",
+          "research_qa",
         ],
-        "confidence": 0.82,
-        "primaryFamily": "writing_edit",
-        "reason": "writing_request",
+        "confidence": 0.88,
+        "primaryFamily": "retrieval_search",
+        "reason": "local_knowledge_recall",
       }
     `);
   });

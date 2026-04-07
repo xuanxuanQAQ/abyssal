@@ -38,10 +38,10 @@ export function SelectionToolbar({
     alignItems: 'center',
     gap: 2,
     padding: '0 8px',
-    backgroundColor: '#1e1e1e',
-    border: '1px solid #3a3a3a',
+    backgroundColor: 'var(--bg-elevated)',
+    border: '1px solid var(--border-default)',
     borderRadius: 8,
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
     zIndex: 25,
     whiteSpace: 'nowrap',
   };
@@ -55,14 +55,14 @@ export function SelectionToolbar({
     border: 'none',
     borderRadius: 'var(--radius-sm)',
     cursor: 'pointer',
-    color: '#e0e0e0',
+    color: 'var(--text-primary)',
     fontSize: 13,
   };
 
   const separatorStyle: React.CSSProperties = {
     width: 1,
     height: 20,
-    backgroundColor: '#444',
+    backgroundColor: 'var(--border-subtle)',
     margin: '0 2px',
   };
 
@@ -112,10 +112,10 @@ export function SelectionToolbar({
               left: 0,
               marginTop: 4,
               padding: 6,
-              backgroundColor: '#1e1e1e',
-              border: '1px solid #3a3a3a',
+              backgroundColor: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
               borderRadius: 'var(--radius-sm)',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
               zIndex: 26,
             }}
           >

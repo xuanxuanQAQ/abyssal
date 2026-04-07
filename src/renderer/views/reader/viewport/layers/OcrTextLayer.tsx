@@ -226,79 +226,61 @@ const OcrTextLayer = React.memo(function OcrTextLayer(props: OcrTextLayerProps) 
     if (!isInRenderWindow) return;
     const container = containerRef.current;
     if (!container) return;
+    let rafId: number | null = null;
 
     // Clear old content
     while (container.firstChild) container.removeChild(container.firstChild);
 
-    // Build text block list for bbox clipping (constrains spans to column boundaries)
+    // Build text block list for bbox clipping
     const textBlocks = blocksRef.current
       .filter((b) => TEXT_BLOCK_TYPES.has(b.type))
       .map((b) => ({ bbox: b.bbox }));
+
+    // Batch DOM creation with DocumentFragment
+    const fragment = document.createDocumentFragment();
+
+    const applySpanStyle = (span: HTMLElement, clipped: NormBBox) => {
+      const heightPx = clipped.h * cssHeight;
+      span.style.cssText = `position:absolute;left:${clipped.x * cssWidth}px;top:${clipped.y * cssHeight}px;width:${clipped.w * cssWidth}px;height:${heightPx}px;font-size:${heightPx * 0.92}px;line-height:${heightPx}px;font-family:${OCR_FONT_FAMILY};white-space:pre;overflow:hidden;color:transparent;cursor:text;transform-origin:0 0`;
+    };
 
     for (const line of ocrLines) {
       const hasWords = line.words && line.words.length > 0;
 
       if (hasWords) {
-        // ── Word-level rendering: each word gets its own precisely-positioned span ──
         for (const word of line.words!) {
           const clipped = clipBBoxToBlock(word.bbox, textBlocks);
-
           const span = document.createElement('span');
           span.setAttribute('data-ocr-line', String(line.lineIndex));
           span.setAttribute('data-ocr-word', '1');
           span.textContent = word.text;
-
-          span.style.position = 'absolute';
-          span.style.left = `${clipped.x * cssWidth}px`;
-          span.style.top = `${clipped.y * cssHeight}px`;
-          span.style.width = `${clipped.w * cssWidth}px`;
-          span.style.height = `${clipped.h * cssHeight}px`;
-
-          const wordHeightPx = clipped.h * cssHeight;
-          span.style.fontSize = `${wordHeightPx * 0.92}px`;
-          span.style.lineHeight = `${wordHeightPx}px`;
-          span.style.fontFamily = OCR_FONT_FAMILY;
-          span.style.whiteSpace = 'pre';
-          span.style.overflow = 'hidden';
-          span.style.color = 'transparent';
-          span.style.cursor = 'text';
-          span.style.transformOrigin = '0 0';
-
-          container.appendChild(span);
+          applySpanStyle(span, clipped);
+          fragment.appendChild(span);
         }
       } else {
-        // ── Line-level fallback (legacy data without word bboxes) ──
         const clipped = clipBBoxToBlock(line.bbox, textBlocks);
-
         const span = document.createElement('span');
         span.setAttribute('data-ocr-line', String(line.lineIndex));
         span.textContent = line.text;
-
-        span.style.position = 'absolute';
-        span.style.left = `${clipped.x * cssWidth}px`;
-        span.style.top = `${clipped.y * cssHeight}px`;
-        span.style.width = `${clipped.w * cssWidth}px`;
-        span.style.height = `${clipped.h * cssHeight}px`;
-
-        const lineHeightPx = clipped.h * cssHeight;
-        span.style.fontSize = `${lineHeightPx * 0.92}px`;
-        span.style.lineHeight = `${lineHeightPx}px`;
-        span.style.fontFamily = OCR_FONT_FAMILY;
-        span.style.whiteSpace = 'pre';
-        span.style.overflow = 'hidden';
-        span.style.color = 'transparent';
-        span.style.cursor = 'text';
-        span.style.transformOrigin = '0 0';
-
-        container.appendChild(span);
+        applySpanStyle(span, clipped);
+        fragment.appendChild(span);
       }
     }
 
-    // Keep native glyph widths to avoid geometric warping from forced scaleX fitting.
+    // Add endOfContent sentinel
+    const end = document.createElement('div');
+    end.className = 'endOfContent';
+    fragment.appendChild(end);
 
-    // Check OCR geometry alignment: if first line bbox doesn't match rendering position,
-    // signal parent to disable OCR layer (fallback to pdf.js TextLayer)
-    requestAnimationFrame(() => {
+    // Single DOM append for all spans
+    container.appendChild(fragment);
+
+    // Apply DLA blockers
+    applyDLA(container, blocksRef.current, cssWidth, cssHeight);
+
+    // Check OCR geometry alignment in rAF
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
       const firstLine = ocrLines[0];
       const firstSpan = container.querySelector<HTMLElement>('span[data-ocr-line]');
       if (!onGeometryMismatch || !firstLine || !firstSpan) return;
@@ -310,9 +292,7 @@ const OcrTextLayer = React.memo(function OcrTextLayer(props: OcrTextLayerProps) 
 
       const xDeviation = Math.abs(actualX - expectedX);
       const deviationRatio = xDeviation / cssWidth;
-      const thresholdRatio = 0.03;
-      // If left edge deviates more than 3%, geometry is misaligned (likely different page bounds)
-      if (deviationRatio > thresholdRatio) {
+      if (deviationRatio > 0.03) {
         console.warn(
           `[OcrTextLayer] Page ${pageNumber}: geometry mismatch detected (X deviation: ${deviationRatio.toFixed(2)}). Disabling OCR layer.`,
         );
@@ -320,13 +300,9 @@ const OcrTextLayer = React.memo(function OcrTextLayer(props: OcrTextLayerProps) 
       }
     });
 
-    // Add endOfContent sentinel for selection
-    const end = document.createElement('div');
-    end.className = 'endOfContent';
-    container.appendChild(end);
-
-    // Apply DLA blockers
-    applyDLA(container, blocksRef.current, cssWidth, cssHeight);
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, [isInRenderWindow, ocrLines, blocks, cssWidth, cssHeight]);
 
   // ---- Effect 2: Re-apply DLA when blocks arrive after render ----
@@ -432,7 +408,7 @@ const OcrTextLayer = React.memo(function OcrTextLayer(props: OcrTextLayerProps) 
     };
   }, [isInRenderWindow, pageNumber]);
 
-  // ---- Effect 4: DLA highlight from dragBounds ----
+  // ---- Effect 4: DLA drag highlight ----
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !isInRenderWindow) return;
@@ -441,7 +417,7 @@ const OcrTextLayer = React.memo(function OcrTextLayer(props: OcrTextLayerProps) 
     if (blockers.length === 0) return;
 
     if (!dragBounds || dragBounds.length === 0) {
-      blockers.forEach((el) => el.classList.remove('dla-drag-highlight'));
+      for (const el of blockers) el.classList.remove('dla-drag-highlight');
       return;
     }
 

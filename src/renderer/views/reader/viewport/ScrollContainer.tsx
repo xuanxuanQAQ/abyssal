@@ -164,6 +164,36 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       return map;
     }, [annotations]);
 
+    // Stabilize callback refs so PageSlot list doesn't rebuild on every parent render.
+    const getPageTransformRef = useRef(getPageTransform);
+    getPageTransformRef.current = getPageTransform;
+    const renderPageRef = useRef(renderPage);
+    renderPageRef.current = renderPage;
+    const getPageRef = useRef(getPage);
+    getPageRef.current = getPage;
+    const onAreaSelectRef = useRef(onAreaSelect);
+    onAreaSelectRef.current = onAreaSelect;
+    const onAnnotationHoverRef = useRef(onAnnotationHover);
+    onAnnotationHoverRef.current = onAnnotationHover;
+    const onAnnotationClickRef = useRef(onAnnotationClick);
+    onAnnotationClickRef.current = onAnnotationClick;
+    const onBlockSelectRef = useRef(onBlockSelect);
+    onBlockSelectRef.current = onBlockSelect;
+
+    const stableGetPageTransform = useCallback((p: number) => getPageTransformRef.current(p), []);
+    const stableRenderPage = useCallback(
+      (canvas: HTMLCanvasElement, p: number, s: number, d: number) => renderPageRef.current(canvas, p, s, d),
+      [],
+    );
+    const stableGetPage = useCallback((p: number) => getPageRef.current(p), []);
+    const stableOnAreaSelect = useCallback(
+      (p: number, r: { x: number; y: number; width: number; height: number }) => onAreaSelectRef.current(p, r),
+      [],
+    );
+    const stableOnAnnotationHover = useCallback((id: string | null) => onAnnotationHoverRef.current(id), []);
+    const stableOnAnnotationClick = useCallback((id: string) => onAnnotationClickRef.current(id), []);
+    const stableOnBlockSelect = useCallback((block: ContentBlockDTO) => onBlockSelectRef.current?.(block), []);
+
     const pages = useMemo(() => {
       const slots: React.ReactNode[] = [];
       for (let i = 1; i <= totalPages; i++) {
@@ -171,7 +201,7 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
         if (!metadata) continue;
 
         const pageAnnotations = annotationsByPage.get(i) ?? [];
-        const transform = getPageTransform(i);
+        const transform = stableGetPageTransform(i);
         // DLA blocks use 0-based pageIndex
         const pageBlocks = blockMap?.get(i - 1) ?? [];
         const pageOcrLines = ocrLineMap?.get(i - 1);
@@ -187,14 +217,14 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
             annotations={pageAnnotations}
             transform={transform}
             flashingAnnotationId={flashingAnnotationId}
-            renderPage={renderPage}
-            getPage={getPage}
-            onAreaSelect={onAreaSelect}
-            onAnnotationHover={onAnnotationHover}
-            onAnnotationClick={onAnnotationClick}
+            renderPage={stableRenderPage}
+            getPage={stableGetPage}
+            onAreaSelect={stableOnAreaSelect}
+            onAnnotationHover={stableOnAnnotationHover}
+            onAnnotationClick={stableOnAnnotationClick}
             blocks={pageBlocks}
             {...(pageOcrLines ? { ocrLines: pageOcrLines } : {})}
-            {...(onBlockSelect ? { onBlockSelect } : {})}
+            onBlockSelect={stableOnBlockSelect}
             dragBounds={dragBoundsMap?.get(i)}
           />,
         );
@@ -207,15 +237,15 @@ const ScrollContainer = forwardRef<ScrollContainerHandle, ScrollContainerProps>(
       renderWindow,
       annotationsByPage,
       flashingAnnotationId,
-      getPageTransform,
-      renderPage,
-      getPage,
-      onAreaSelect,
-      onAnnotationHover,
-      onAnnotationClick,
+      stableGetPageTransform,
+      stableRenderPage,
+      stableGetPage,
+      stableOnAreaSelect,
+      stableOnAnnotationHover,
+      stableOnAnnotationClick,
+      stableOnBlockSelect,
       blockMap,
       ocrLineMap,
-      onBlockSelect,
       dragBoundsMap,
     ]);
 

@@ -149,9 +149,9 @@ export function RetrievalTab({ settings, onUpdate }: { settings: SettingsData; o
           <SegmentedControl
             value={rag.rerankerBackend}
             options={[
+              { value: 'siliconflow', label: 'SiliconFlow' },
               { value: 'cohere', label: 'Cohere API' },
               { value: 'jina', label: 'Jina API' },
-              { value: 'siliconflow', label: 'SiliconFlow' },
             ]}
             onChange={(v) => onUpdate('rag', { rerankerBackend: v })}
           />

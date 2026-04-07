@@ -60,14 +60,16 @@ export const QuickActions = React.memo(function QuickActions({ paperId }: QuickA
     {
       icon: isAnalyzing ? <Loader2 size={14} className="spin" /> : <Microscope size={14} />,
       label: t('context.quickActions.analyze'),
-      disabled: !paper || isAnalyzing || paper.analysisStatus === 'in_progress' || !hasFulltext,
+      disabled: !paper || isAnalyzing || paper.analysisStatus === 'in_progress' || paper.analysisStatus === 'completed' || !hasFulltext,
       onClick: () => {
         startPipeline.mutate({ workflow: 'analyze', config: { paperIds: [paperId] } });
       },
     },
     {
       icon: <FileText size={14} />,
-      label: t('context.quickActions.openPDF'),
+      label: paper?.paperType === 'webpage'
+        ? t('context.quickActions.openWebArticle')
+        : t('context.quickActions.openPDF'),
       disabled: !hasFulltext,
       onClick: () => {
         navigateTo({ type: 'paper', id: paperId, view: 'reader' });

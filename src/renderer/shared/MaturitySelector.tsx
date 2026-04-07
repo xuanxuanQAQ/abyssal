@@ -6,6 +6,7 @@
  */
 
 import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as ToggleGroup from '@radix-ui/react-toggle-group';
 import { useAppDialog } from './useAppDialog';
 import type { Maturity } from '../../shared-types/enums';
@@ -16,12 +17,13 @@ interface MaturitySelectorProps {
   disabled?: boolean;
 }
 
-const MATURITY_ORDER: Maturity[] = ['tentative', 'working', 'established'];
+const MATURITY_ORDER: Maturity[] = ['tag', 'tentative', 'working', 'established'];
 
-const MATURITY_LABELS: Record<Maturity, { label: string; color: string }> = {
-  tentative: { label: 'Tentative', color: '#3B82F6' },
-  working: { label: 'Working', color: '#F59E0B' },
-  established: { label: 'Established', color: '#10B981' },
+const MATURITY_COLORS: Record<Maturity, string> = {
+  tag: '#9CA3AF',
+  tentative: '#3B82F6',
+  working: '#F59E0B',
+  established: '#10B981',
 };
 
 function isDowngrade(from: Maturity, to: Maturity): boolean {
@@ -29,6 +31,7 @@ function isDowngrade(from: Maturity, to: Maturity): boolean {
 }
 
 export function MaturitySelector({ value, onChange, disabled }: MaturitySelectorProps) {
+  const { t } = useTranslation();
   const { confirm, dialog } = useAppDialog();
 
   const handleValueChange = useCallback(
@@ -37,9 +40,9 @@ export function MaturitySelector({ value, onChange, disabled }: MaturitySelector
       const nextMaturity = next as Maturity;
       if (isDowngrade(value, nextMaturity)) {
         const confirmed = await confirm({
-          title: '确认降级成熟度',
-          description: '降级成熟度将影响后续分析的 prompt 指令和检索策略，是否继续？',
-          confirmLabel: '继续降级',
+          title: t('analysis.concepts.maturityDowngrade.title'),
+          description: t('analysis.concepts.maturityDowngrade.description'),
+          confirmLabel: t('analysis.concepts.maturityDowngrade.confirm'),
           confirmTone: 'danger',
         });
         if (confirmed) {
@@ -49,7 +52,7 @@ export function MaturitySelector({ value, onChange, disabled }: MaturitySelector
         onChange(nextMaturity);
       }
     },
-    [confirm, value, onChange],
+    [confirm, t, value, onChange],
   );
 
   return (
@@ -66,7 +69,7 @@ export function MaturitySelector({ value, onChange, disabled }: MaturitySelector
         }}
       >
         {MATURITY_ORDER.map((m) => {
-          const cfg = MATURITY_LABELS[m]!;
+          const color = MATURITY_COLORS[m];
           const isActive = m === value;
           return (
             <ToggleGroup.Item
@@ -79,13 +82,14 @@ export function MaturitySelector({ value, onChange, disabled }: MaturitySelector
                 fontWeight: isActive ? 600 : 400,
                 border: 'none',
                 borderRight: m !== 'established' ? '1px solid var(--border-subtle)' : 'none',
-                backgroundColor: isActive ? `${cfg.color}18` : 'transparent',
-                color: isActive ? cfg.color : 'var(--text-secondary)',
+                backgroundColor: isActive ? `${color}18` : 'transparent',
+                color: isActive ? color : 'var(--text-secondary)',
                 cursor: disabled ? 'not-allowed' : 'pointer',
-                opacity: disabled ? 0.5 : 1,
+                opacity: disabled ? 0.5 : (m === 'tag' ? 0.7 : 1),
               }}
             >
-              {cfg.label}
+              {m === 'tag' && <span style={{ marginRight: 2, fontWeight: 700 }}>#</span>}
+              {t(`analysis.merge.maturityLabels.${m}`)}
             </ToggleGroup.Item>
           );
         })}

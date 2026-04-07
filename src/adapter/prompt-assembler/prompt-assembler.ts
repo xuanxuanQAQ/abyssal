@@ -645,7 +645,7 @@ Output your analysis as a YAML frontmatter block (between --- markers) followed 
 
 YAML schema:
 - paper_id: the paper identifier (string)
-- paper_type: one of "journal", "conference", "preprint", "theoretical", "review", "book", "chapter", "unknown"
+- paper_type: one of "journal", "conference", "preprint", "theoretical", "review", "book", "chapter", "webpage", "unknown"
 - concept_mappings: array of objects, each with:
   - concept_id: the concept identifier from the framework
   - relation: one of "supports", "challenges", "extends", "operationalizes", "irrelevant"

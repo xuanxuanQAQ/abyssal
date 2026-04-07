@@ -208,6 +208,7 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
   // Called after concept mutations (add, update, deprecate, merge, split, adopt).
   // Broadcasts to renderer via pushManager when state changes.
   ctx.refreshFrameworkState = async () => {
+    if (ctx.isShuttingDown) return;
     try {
       const oldState = ctx.frameworkState;
       const stats = (await ctx.dbProxy.getStats()) as {

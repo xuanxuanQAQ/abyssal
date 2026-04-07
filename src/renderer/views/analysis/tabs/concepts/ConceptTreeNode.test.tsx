@@ -64,14 +64,13 @@ describe('ConceptTreeNode', () => {
             node={{
               concept: {
                 id: 'c-1',
-                name: 'Concept One',
                 nameZh: '概念一',
                 nameEn: 'Concept One',
-                description: '',
+                definition: '',
                 parentId: null,
                 level: 0,
                 maturity: 'working',
-                keywords: [],
+                searchKeywords: [],
                 history: [],
               },
               children: [],

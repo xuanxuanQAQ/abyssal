@@ -1,5 +1,5 @@
 // ═══ Web Search 集成 ═══
-// 通用网页搜索，支持 Tavily / SerpAPI / Bing 后端
+// 通用网页搜索，支持 Tavily / SerpAPI / Bing / Bocha 后端
 // 纯网络 I/O，无数据库依赖
 
 import type { HttpClient } from '../infra/http-client';
@@ -17,7 +17,7 @@ export interface WebSearchResult {
   content?: string | undefined;
 }
 
-export type WebSearchBackend = 'tavily' | 'serpapi' | 'bing';
+export type WebSearchBackend = 'tavily' | 'serpapi' | 'bing' | 'bocha';
 
 export interface WebSearchOptions {
   /** 最大结果数（默认 5，上限 10） */
@@ -31,7 +31,7 @@ export interface WebSearchServiceConfig {
   market?: string | undefined;
 }
 
-const VALID_BACKENDS: ReadonlySet<string> = new Set<WebSearchBackend>(['tavily', 'serpapi', 'bing']);
+const VALID_BACKENDS: ReadonlySet<string> = new Set<WebSearchBackend>(['tavily', 'serpapi', 'bing', 'bocha']);
 
 // ─── WebSearchService ───
 
@@ -73,6 +73,8 @@ export class WebSearchService {
           return await this.searchSerpApi(query, limit);
         case 'bing':
           return await this.searchBing(query, limit);
+        case 'bocha':
+          return await this.searchBocha(query, limit);
         default:
           throw new Error(`Unknown web search backend: ${this.backend}`);
       }
@@ -161,6 +163,36 @@ export class WebSearchService {
       snippet: truncateSnippet(r.snippet ?? '', 500),
     }));
   }
+  // ─── Bocha (博查) ───
+
+  private async searchBocha(query: string, limit: number): Promise<WebSearchResult[]> {
+    await this.limiter.acquire();
+
+    const resp = await this.http.postJson<BochaResponse>(
+      'https://api.bocha.cn/v1/web-search',
+      {
+        query,
+        count: limit,
+        summary: true,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+      },
+    );
+
+    if (resp.code !== 200) {
+      throw new Error(resp.msg ?? `Bocha API error (code ${resp.code})`);
+    }
+
+    return (resp.data?.webPages?.value ?? []).slice(0, limit).map((r) => ({
+      title: r.name ?? '',
+      url: r.url ?? '',
+      snippet: truncateSnippet(r.snippet ?? '', 500),
+      content: r.summary ? truncateSnippet(r.summary, 1000) : undefined,
+    }));
+  }
 }
 
 // ─── API 响应类型 ───
@@ -189,6 +221,21 @@ interface BingResponse {
       url?: string;
       snippet?: string;
     }>;
+  };
+}
+
+interface BochaResponse {
+  code: number;
+  msg?: string | null;
+  data?: {
+    webPages?: {
+      value?: Array<{
+        name?: string;
+        url?: string;
+        snippet?: string;
+        summary?: string;
+      }>;
+    };
   };
 }
 

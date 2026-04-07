@@ -91,9 +91,21 @@ function extractTailTokens(text: string, targetTokens: number): string {
   const totalTokens = countTokens(text);
   if (totalTokens <= targetTokens) return text;
 
-  // 二分搜索：找到使得 text.slice(mid) 的 token 数 <= targetTokens 的最小 mid
-  let lo = 0;
-  let hi = text.length;
+  // Estimate initial cut point based on character/token ratio, then refine.
+  // This avoids O(n log n) countTokens calls in the binary search.
+  const avgCharsPerToken = text.length / totalTokens;
+  const estimatedCut = Math.max(0, Math.floor(text.length - targetTokens * avgCharsPerToken));
+
+  // Refine: check if estimate is close enough (within 10%), otherwise binary search
+  const estimateTail = text.slice(estimatedCut);
+  const estimateTokens = countTokens(estimateTail);
+  if (estimateTokens >= targetTokens * 0.9 && estimateTokens <= targetTokens) {
+    return estimateTail;
+  }
+
+  // Binary search with narrowed range around estimate
+  let lo = estimateTokens > targetTokens ? estimatedCut : 0;
+  let hi = estimateTokens > targetTokens ? text.length : estimatedCut;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     const tailTokens = countTokens(text.slice(mid));

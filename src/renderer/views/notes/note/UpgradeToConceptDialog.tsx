@@ -50,7 +50,7 @@ export function UpgradeToConceptDialog({
       nameEn: nameEn.trim(),
       nameZh: nameZh.trim(),
       definition: definition.trim(),
-      keywords: keywordsStr.split(',').map((k) => k.trim()).filter(Boolean),
+      searchKeywords: keywordsStr.split(',').map((k) => k.trim()).filter(Boolean),
       parentId: null,
     };
 

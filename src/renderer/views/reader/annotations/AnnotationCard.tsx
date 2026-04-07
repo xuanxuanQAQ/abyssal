@@ -53,7 +53,7 @@ export function AnnotationCard({
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    color: '#e0e0e0',
+    color: 'var(--text-primary)',
   };
 
   return (
@@ -157,11 +157,11 @@ export function AnnotationCard({
         <ContextMenu.Content
           className="workspace-floating-menu reader-annotation-menu"
           style={{
-            backgroundColor: '#1e1e1e',
-            border: '1px solid #3a3a3a',
+            backgroundColor: 'var(--bg-elevated)',
+            border: '1px solid var(--border-default)',
             borderRadius: 8,
             padding: 4,
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
             minWidth: 140,
             zIndex: 50,
           }}
@@ -169,17 +169,17 @@ export function AnnotationCard({
           <ContextMenu.Sub>
             <ContextMenu.SubTrigger style={menuItemStyle}>
               {t('reader.annotations.changeColor')}
-              <span style={{ marginLeft: 'auto', color: '#888' }}>▸</span>
+              <span style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}>▸</span>
             </ContextMenu.SubTrigger>
             <ContextMenu.Portal>
               <ContextMenu.SubContent
                 className="workspace-floating-menu reader-annotation-menu"
                 style={{
-                  backgroundColor: '#1e1e1e',
-                  border: '1px solid #3a3a3a',
+                  backgroundColor: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-default)',
                   borderRadius: 8,
                   padding: 4,
-                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
                   minWidth: 100,
                   zIndex: 51,
                 }}
@@ -210,7 +210,7 @@ export function AnnotationCard({
           <ContextMenu.Separator
             style={{
               height: 1,
-              backgroundColor: '#3a3a3a',
+              backgroundColor: 'var(--border-subtle)',
               margin: '4px 0',
             }}
           />

@@ -31,11 +31,14 @@ const PROVIDER_API_KEY_FIELDS: Record<string, keyof GlobalConfig['apiKeys']> = {
   gemini: 'geminiApiKey',
   deepseek: 'deepseekApiKey',
   siliconflow: 'siliconflowApiKey',
+  doubao: 'doubaoApiKey',
+  kimi: 'kimiApiKey',
   cohere: 'cohereApiKey',
   jina: 'jinaApiKey',
   tavily: 'webSearchApiKey',
   serpapi: 'webSearchApiKey',
   bing: 'webSearchApiKey',
+  bocha: 'webSearchApiKey',
 };
 
 const SOURCE_PRESETS: Record<'china' | 'overseas', string[]> = {

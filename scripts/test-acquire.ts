@@ -74,6 +74,8 @@ const testConfig: AbyssalConfig = {
     cohereApiKey: null,
     jinaApiKey: null,
     siliconflowApiKey: null,
+    doubaoApiKey: null,
+    kimiApiKey: null,
   },
   workspace: {
     rootDir: OUT_DIR,

@@ -12,6 +12,7 @@ import type {
   AffectedMappings, MergeResult, SplitResult, MergeConflictResolution,
   MappingAssignment, DefinitionUpdateResult, ConceptParentUpdateResult,
   HistoryEntry, HeatmapMatrix,
+  ChangeImpactReport, ConceptHealthScore, KeywordCandidate, PaperAnalysisBase,
   Annotation, NewAnnotation,
   ArticleOutline, ArticleWorkspaceSummary, DraftSummary, DraftOutline, DraftPatch, DraftVersion, DraftDocumentPayload, WritingContextRequest, SectionNode, SectionOrder, SectionContent, SectionPatch, SectionVersion,
   FullDocumentContent, SectionSave, ArticleAsset, ArticleDocumentPayload,
@@ -98,6 +99,15 @@ export interface IpcContract {
   'db:concepts:getStats':             { args: [conceptId: string];                       result: ConceptStats };
   'db:concepts:getMatrix':            { args: [conceptIds?: string[], filters?: unknown]; result: HeatmapMatrix };
   'db:concepts:updateKeywords':       { args: [conceptId: string, keywords: string[]];   result: { updated: boolean } };
+  'db:concepts:previewImpact':        { args: [conceptId: string];                       result: ChangeImpactReport };
+  'db:concepts:getHealth':            { args: [conceptId: string];                       result: ConceptHealthScore };
+  'db:concepts:getKeywordCandidates': { args: [conceptId: string];                       result: KeywordCandidate[] };
+  'db:concepts:acceptKeyword':        { args: [candidateId: number];                     result: { term: string } };
+  'db:concepts:rejectKeyword':        { args: [candidateId: number];                     result: { ok: boolean } };
+
+  // ── db:analysisBase ──
+  'db:analysisBase:get':              { args: [paperId: string];                         result: PaperAnalysisBase | null };
+  'db:analysisBase:has':              { args: [paperId: string];                         result: boolean };
 
   // ── db:memos ──
   'db:memos:list':                    { args: [filter?: MemoFilter];                     result: Memo[] };
@@ -229,8 +239,14 @@ export interface IpcContract {
   'copilot:getSession':               { args: [sessionId: string];                       result: CopilotSessionState | null };
   'copilot:clearSession':             { args: [sessionId: string];                       result: void };
 
+  // ── web ──
+  /** 抓取网页并作为 paper 导入（Readability 提取正文 → Markdown 存储） */
+  'web:import':                       { args: [url: string];                             result: { paperId: string; title: string } };
+
   // ── fs ──
   'fs:openPDF':                       { args: [paperId: string];                         result: { path: string; data: Uint8Array } };
+  /** 读取网页文章的 Markdown 内容（source='web' 的 paper） */
+  'fs:openWebArticle':                { args: [paperId: string];                         result: { markdown: string; sourceUrl: string; title: string } };
   'fs:savePDFAnnotations':            { args: [paperId: string, annotations: PDFAnnotation[]]; result: void };
   'fs:exportArticle':                 { args: [articleId: string, format: ExportFormat, citationStyle?: CitationStyle, draftId?: string];  result: string };
   'fs:importFiles':                   { args: [paths: string[]];                         result: ImportResult };

@@ -40,8 +40,8 @@ function buildTree(concepts: Concept[]): TreeNode[] {
     }
   }
 
-  // Sort: established > working > tentative
-  const maturityOrder = { established: 0, working: 1, tentative: 2 };
+  // Sort: established > working > tentative > tag
+  const maturityOrder: Record<string, number> = { established: 0, working: 1, tentative: 2, tag: 3 };
   const sortNodes = (nodes: TreeNode[]) => {
     nodes.sort((a, b) => (maturityOrder[a.concept.maturity] ?? 2) - (maturityOrder[b.concept.maturity] ?? 2));
     for (const n of nodes) sortNodes(n.children);

@@ -23,7 +23,7 @@ const PAPER_COLUMNS = [
   'series', 'issn', 'pmid', 'pmcid', 'url', 'bibtex_key', 'biblio_complete',
   'fulltext_status', 'fulltext_path', 'text_path', 'analysis_status',
   'analysis_path', 'relevance', 'decision_note', 'failure_reason',
-  'discovered_at', 'updated_at',
+  'source_url', 'discovered_at', 'updated_at',
 ] as const;
 
 // ─── §3.1 addPaper (UPSERT) ───
@@ -91,6 +91,7 @@ export function addPaper(
     relevance: status?.relevance ?? 'medium',
     decisionNote: status?.decisionNote ?? null,
     failureReason: status?.failureReason ?? null,
+    sourceUrl: paper.sourceUrl ?? null,
     discoveredAt: timestamp,
     updatedAt: timestamp,
   } as Record<string, unknown>);
@@ -159,6 +160,7 @@ export function addPaper(
       relevance       = COALESCE(excluded.relevance, papers.relevance),
       decision_note   = COALESCE(excluded.decision_note, papers.decision_note),
       failure_reason  = COALESCE(excluded.failure_reason, papers.failure_reason),
+      source_url      = COALESCE(excluded.source_url, papers.source_url),
       updated_at      = excluded.updated_at
   `).run(...PAPER_COLUMNS.map((col) => row[col] ?? null));
 

@@ -9,6 +9,8 @@ export type SupportedApiDiagnosticProvider =
   | 'cohere'
   | 'jina'
   | 'siliconflow'
+  | 'doubao'
+  | 'kimi'
   | 'tavily';
 
 const PROVIDER_KEY_MAP: Record<SupportedApiDiagnosticProvider, keyof ApiKeysConfig | null> = {
@@ -19,6 +21,8 @@ const PROVIDER_KEY_MAP: Record<SupportedApiDiagnosticProvider, keyof ApiKeysConf
   cohere: 'cohereApiKey',
   jina: 'jinaApiKey',
   siliconflow: 'siliconflowApiKey',
+  doubao: 'doubaoApiKey',
+  kimi: 'kimiApiKey',
   tavily: 'webSearchApiKey',
 };
 
@@ -103,6 +107,22 @@ export async function testApiKeyDirect(
       }
       case 'siliconflow': {
         const res = await fetch('https://api.siliconflow.cn/v1/models', {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        return res.ok
+          ? { ok: true, message: 'Connected' }
+          : { ok: false, message: `HTTP ${res.status}` };
+      }
+      case 'doubao': {
+        const res = await fetch('https://ark.cn-beijing.volces.com/api/v3/models', {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        return res.ok
+          ? { ok: true, message: 'Connected' }
+          : { ok: false, message: `HTTP ${res.status}` };
+      }
+      case 'kimi': {
+        const res = await fetch('https://api.moonshot.cn/v1/models', {
           headers: { Authorization: `Bearer ${apiKey}` },
         });
         return res.ok

@@ -175,10 +175,28 @@ function bucketRects(
 ): Map<number, DOMRect[]> {
   const buckets = new Map<number, DOMRect[]>();
 
-  // Fast path: single-page selection
+  // Fast path: single-page selection — verify all rects actually fall on that page
   if (startPage !== null && endPage !== null && startPage === endPage) {
-    buckets.set(startPage, rects);
-    return buckets;
+    const pageSlots = collectPageSlotRects();
+    const slot = pageSlots.find((s) => s.pageNumber === startPage);
+    if (slot) {
+      const allOnPage = rects.every((rect) => {
+        const cy = rect.top + rect.height * 0.5;
+        return cy >= slot.rect.top && cy <= slot.rect.bottom;
+      });
+      if (allOnPage) {
+        buckets.set(startPage, rects);
+        return buckets;
+      }
+      // Some rects are off-page — fall through to full bucketing with precomputed pageSlots
+      for (const rect of rects) {
+        const pageNumber = pageNumberFromRect(rect, pageSlots) ?? fallbackPage;
+        if (pageNumber === null) continue;
+        const group = buckets.get(pageNumber);
+        if (group) { group.push(rect); } else { buckets.set(pageNumber, [rect]); }
+      }
+      return buckets;
+    }
   }
 
   const pageSlots = collectPageSlotRects();

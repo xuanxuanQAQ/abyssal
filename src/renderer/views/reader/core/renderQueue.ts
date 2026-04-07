@@ -7,21 +7,40 @@ export interface RenderRequest {
 }
 
 const MAX_CONCURRENT = 2;
+const MAX_QUEUE_SIZE = 64;
 
 export class RenderQueue {
   private queue: RenderRequest[] = [];
   private activeCount = 0;
+  private currentPage = 1;
 
   enqueue(
     pageNumber: number,
     renderFn: RenderFn,
     currentPage: number,
   ): RenderRequest {
+    this.currentPage = currentPage;
+
     const request: RenderRequest = {
       pageNumber,
       renderFn,
       cancelled: false,
     };
+
+    // Enforce queue size limit — drop the farthest-from-current-page entry
+    if (this.queue.length >= MAX_QUEUE_SIZE) {
+      let worstIdx = 0;
+      let worstDist = 0;
+      for (let i = 0; i < this.queue.length; i++) {
+        const dist = Math.abs(this.queue[i]!.pageNumber - currentPage);
+        if (dist > worstDist) {
+          worstDist = dist;
+          worstIdx = i;
+        }
+      }
+      this.queue[worstIdx]!.cancelled = true;
+      this.queue.splice(worstIdx, 1);
+    }
 
     const priority = Math.abs(pageNumber - currentPage);
 
@@ -51,6 +70,8 @@ export class RenderQueue {
         request.cancelled = true;
       }
     }
+    // Compact cancelled entries
+    this.queue = this.queue.filter((r) => !r.cancelled);
   }
 
   cancelAll(): void {
@@ -64,6 +85,12 @@ export class RenderQueue {
     if (this.activeCount >= MAX_CONCURRENT) {
       return;
     }
+
+    // Re-sort queue by dynamic priority (current page may have changed)
+    const cp = this.currentPage;
+    this.queue.sort(
+      (a, b) => Math.abs(a.pageNumber - cp) - Math.abs(b.pageNumber - cp),
+    );
 
     while (this.queue.length > 0) {
       const request = this.queue.shift()!;

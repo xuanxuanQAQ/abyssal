@@ -37,6 +37,7 @@ export type AnalyzeTemplateId =
   | 'analyze-empirical'
   | 'analyze-theoretical'
   | 'analyze-review'
+  | 'analyze-webpage'
   | 'analyze-generic';
 
 export type SynthesizeTemplateId = 'synthesize';
@@ -72,6 +73,8 @@ export function selectAnalyzeTemplate(
       return 'analyze-theoretical';
     case 'review':
       return 'analyze-review';
+    case 'webpage':
+      return 'analyze-webpage';
     default:
       return 'analyze-empirical'; // default for 'unknown' and others
   }

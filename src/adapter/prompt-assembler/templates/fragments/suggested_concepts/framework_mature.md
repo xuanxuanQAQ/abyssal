@@ -1,3 +1,5 @@
-## Concept Suggestions (Rare)
+## Concept Suggestions (Stable Vocabulary)
 
-The concept framework is mature and well-established. Only suggest a new concept if you encounter a term that is genuinely distinct from all existing concepts AND appears analytically significant. In most analyses, `suggested_new_concepts` should be an empty array.
+The concept vocabulary is relatively stable, but it is not closed. If you encounter a term that is genuinely distinct from all existing concepts and appears analytically significant in the paper, you are welcome to add it to `suggested_new_concepts`.
+
+Do not feel obligated to force findings into existing concepts — if the paper introduces something new, report it as-is. That said, in most analyses `suggested_new_concepts` will be an empty array, and that is perfectly fine.

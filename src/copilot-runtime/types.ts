@@ -66,6 +66,8 @@ export interface CopilotExecutionOptions {
   allowMutation?: boolean;
   traceLevel?: 'minimal' | 'standard' | 'verbose';
   skipIdempotency?: boolean;
+  /** Enable extended thinking/reasoning for this operation. */
+  reasoning?: boolean;
 }
 
 export interface CopilotConstraints {
@@ -476,6 +478,7 @@ export type CopilotOperationEvent =
   | RetrievalStartedEvent
   | RetrievalFinishedEvent
   | ModelDeltaEvent
+  | ModelThinkingDeltaEvent
   | ToolCallEvent
   | PatchProposedEvent
   | PatchAppliedEvent
@@ -522,6 +525,11 @@ export interface RetrievalFinishedEvent extends BaseOperationEvent {
 export interface ModelDeltaEvent extends BaseOperationEvent {
   type: 'model.delta';
   channel: 'chat' | 'draft';
+  text: string;
+}
+
+export interface ModelThinkingDeltaEvent extends BaseOperationEvent {
+  type: 'model.thinking_delta';
   text: string;
 }
 

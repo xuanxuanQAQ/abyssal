@@ -517,9 +517,21 @@ function buildEnhancedQuery(
   if (request.taskType === 'ad_hoc') return request.queryText;
 
   if (request.taskType === 'synthesize' && request.conceptIds.length > 0) {
-    const concept = dbService.getConcept(request.conceptIds[0]!);
-    if (concept) {
-      return `Evidence for the concept "${concept.nameEn}": ${concept.definition}\nKey terms: ${concept.searchKeywords.join(', ')}`;
+    // Build multi-concept query — primary concept gets full detail, secondary concepts
+    // get abbreviated context. Uses natural language instead of synthetic weight tokens
+    // that confuse cross-encoder rerankers.
+    const parts: string[] = [];
+    for (let i = 0; i < request.conceptIds.length; i++) {
+      const concept = dbService.getConcept(request.conceptIds[i]!);
+      if (!concept) continue;
+      if (i === 0) {
+        parts.push(`Evidence for the concept "${concept.nameEn}": ${concept.definition}\nKey terms: ${concept.searchKeywords.join(', ')}`);
+      } else {
+        parts.push(`Also relevant: "${concept.nameEn}" (${concept.definition.slice(0, 100)})`);
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join('\n');
     }
   }
 

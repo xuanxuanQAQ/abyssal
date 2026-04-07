@@ -235,12 +235,13 @@ describe('tool routing golden — Chinese requests', () => {
     expect(route).toMatchInlineSnapshot(`
       {
         "allowedFamilies": [
+          "discovery_online",
           "retrieval_search",
           "research_qa",
         ],
-        "confidence": 0.83,
-        "primaryFamily": "retrieval_search",
-        "reason": "retrieval_request",
+        "confidence": 0.78,
+        "primaryFamily": "discovery_online",
+        "reason": "ambiguous_search",
       }
     `);
   });

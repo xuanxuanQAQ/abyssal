@@ -18,6 +18,7 @@ import type {
   ExecutionStep,
 } from '../types';
 import type { OperationEventEmitter } from '../event-emitter';
+import type { OperationResult } from '../../adapter/capabilities/types';
 
 export interface AgentExecutorDeps {
   llmClient: LlmClient;
@@ -26,6 +27,7 @@ export interface AgentExecutorDeps {
   eventBus: EventBus;
   governor: ToolCallingGovernor;
   buildSystemPrompt: (operation: CopilotOperation) => Promise<string>;
+  logger?: (msg: string, data?: unknown) => void;
 }
 
 export interface AgentExecutorResult {
@@ -41,9 +43,11 @@ export interface AgentExecutorResult {
 
 export class AgentExecutor {
   private deps: AgentExecutorDeps;
+  private log: (msg: string, data?: unknown) => void;
 
   constructor(deps: AgentExecutorDeps) {
     this.deps = deps;
+    this.log = deps.logger ?? (() => {});
   }
 
   async execute(
@@ -107,6 +111,27 @@ export class AgentExecutor {
     // patch = raw text patching
     const allowToolUse = step.mode === 'chat' && !disableToolUse;
 
+    this.log('[AgentExecutor] setup', {
+      operationId: operation.id,
+      intent: operation.intent,
+      stepMode: step.mode,
+      gateType: promptGate.type,
+      disableToolUse,
+      allowToolUse,
+      routePrimaryFamily: route.primaryFamily,
+      routeAllowedFamilies: route.allowedFamilies,
+      routeConfidence: route.confidence,
+      routeReason: route.reason,
+      effectiveFamilies,
+      toolCount: tools.length,
+      toolNames: tools.map((t) => t.name),
+      hasStepFamilies: !!stepFamilies,
+      useReasoning: operation.metadata?.reasoning === true,
+      promptPreview: operation.prompt.slice(0, 100),
+      selectionKind: operation.context?.selection?.kind ?? null,
+      channel: step.mode === 'chat' ? 'chat' : 'draft',
+    });
+
     // Reset governor for this operation
     this.deps.governor.reset();
 
@@ -117,6 +142,10 @@ export class AgentExecutor {
     let round = 0;
     const maxRounds = 15;
 
+    // Estimate total message size for debug logging
+    const estimateMessagesSize = (msgs: Array<{ content: string }>): number =>
+      msgs.reduce((sum, m) => sum + m.content.length, 0);
+
     while (round < maxRounds) {
       round++;
 
@@ -124,9 +153,24 @@ export class AgentExecutor {
         break;
       }
 
+      const roundStartTime = Date.now();
+      const msgChars = estimateMessagesSize(messages) + systemPrompt.length;
+      this.log('[AgentExecutor] round start', {
+        round,
+        maxRounds,
+        systemPromptChars: systemPrompt.length,
+        messageCount: messages.length,
+        totalContextChars: msgChars,
+        toolCount: tools.length,
+        allowToolUse,
+      });
+
+      const useReasoning = operation.metadata?.reasoning === true;
       const stream = this.deps.llmClient.completeStream({
         systemPrompt,
         messages,
+        workflowId: useReasoning ? 'agent.reasoning' : 'agent',
+        ...(useReasoning ? { thinkingBudget: 10240 } : {}),
         ...(allowToolUse && tools.length > 0 ? { tools } : {}),
         ...(signal ? { signal } : {}),
       });
@@ -141,6 +185,14 @@ export class AgentExecutor {
         if (signal?.aborted) break;
 
         switch (chunk.type) {
+          case 'thinking_delta':
+            emitter.emit({
+              type: 'model.thinking_delta',
+              operationId: operation.id,
+              text: chunk.delta,
+            });
+            break;
+
           case 'text_delta':
             roundText += chunk.delta;
             emitter.emit({
@@ -174,8 +226,26 @@ export class AgentExecutor {
             totalOutput += chunk.usage?.outputTokens ?? 0;
             break;
 
-          case 'error':
-            throw new Error(`LLM error: [${chunk.code}] ${chunk.message}`);
+          case 'error': {
+            this.log('[AgentExecutor] LLM error in round', {
+              round,
+              code: chunk.code,
+              message: chunk.message,
+              roundElapsedMs: Date.now() - roundStartTime,
+              contextChars: msgChars,
+              messageCount: messages.length,
+              toolCount: tools.length,
+              accumulatedTextLength: fullText.length + roundText.length,
+              pendingToolCalls: roundToolCalls.length,
+            });
+            const err = new Error(
+              chunk.code === 'CONTENT_FILTERED'
+                ? `模型内容安全审核拒绝了此请求。建议：1) 用英文关键词重试；2) 简化查询内容；3) 切换其他模型。\n(原始错误: ${chunk.message})`
+                : `LLM error: [${chunk.code}] ${chunk.message}`,
+            );
+            (err as unknown as Record<string, unknown>)['code'] = chunk.code;
+            throw err;
+          }
         }
       }
 
@@ -186,7 +256,14 @@ export class AgentExecutor {
         break;
       }
 
-      // Execute tool calls
+      // Push the assistant's text ONCE before executing any tool calls.
+      // Previously this was inside the loop, causing duplicate assistant messages
+      // when a round had multiple tool calls.
+      messages.push({ role: 'assistant', content: roundText });
+
+      // Execute tool calls — collect all results, then push as a single user message
+      const toolResultParts: string[] = [];
+
       for (const tc of roundToolCalls) {
         if (signal?.aborted) break;
 
@@ -194,6 +271,7 @@ export class AgentExecutor {
         const guardResult = this.deps.governor.canCallTool(tc.name);
         if (!guardResult.allowed) {
           toolCalls.push({ name: tc.name, input: tc.input, status: 'failed' });
+          toolResultParts.push(`[Tool BLOCKED: ${tc.name}]\nGovernor blocked this call: ${guardResult.reason ?? 'rate limited'}`);
           continue;
         }
 
@@ -208,9 +286,6 @@ export class AgentExecutor {
           const result = await this.deps.capabilities.execute(tc.name, tc.input, signal);
 
           if (!result.success) {
-            // Capability returned a structured failure (not an exception).
-            // Record as failed so governor tracks the miss, and feed an
-            // explicit error signal back to the model so it stops retrying.
             this.deps.governor.recordCall(tc.name, false);
 
             const failText = result.summary ?? 'Tool execution failed';
@@ -224,16 +299,13 @@ export class AgentExecutor {
               message: failText.substring(0, 200),
             });
 
-            // Tell the model this tool failed — use a clearly distinct format
-            // so the model doesn't treat the error text as a successful result.
-            messages.push({ role: 'assistant', content: roundText });
-            messages.push({ role: 'user', content: `[Tool FAILED: ${tc.name}]\n${failText}\nDo NOT retry this tool. Proceed with generation using available context.` });
+            toolResultParts.push(`[Tool FAILED: ${tc.name}]\n${failText}\nDo NOT retry this tool. Briefly report the failure to the user.`);
             continue;
           }
 
           this.deps.governor.recordCall(tc.name, true);
 
-          const resultText = result.summary ?? JSON.stringify(result.data ?? '');
+          const resultText = formatToolResult(result);
           toolCalls.push({ name: tc.name, input: tc.input, output: resultText, status: 'completed' });
 
           emitter.emit({
@@ -241,17 +313,17 @@ export class AgentExecutor {
             operationId: operation.id,
             toolName: tc.name,
             status: 'completed',
-            message: resultText.substring(0, 200),
+            message: (result.summary ?? resultText).substring(0, 200),
           });
 
-          // Feed result back for next round
-          messages.push({ role: 'assistant', content: roundText });
-          messages.push({ role: 'user', content: `[Tool result: ${tc.name}]\n${resultText}` });
+          toolResultParts.push(`[Tool result: ${tc.name}]\n${resultText}`);
         } catch (err) {
           this.deps.governor.recordCall(tc.name, false);
 
           const errMsg = err instanceof Error ? err.message : String(err);
           toolCalls.push({ name: tc.name, input: tc.input, output: errMsg, status: 'failed' });
+
+          toolResultParts.push(`[Tool FAILED: ${tc.name}]\n${errMsg}\nDo NOT retry this tool. Briefly report the failure to the user.`);
 
           emitter.emit({
             type: 'tool.call',
@@ -262,6 +334,23 @@ export class AgentExecutor {
           });
         }
       }
+
+      // Feed all tool results back as a single user message for next round
+      const toolResultPayload = toolResultParts.join('\n\n');
+      if (toolResultParts.length > 0) {
+        messages.push({ role: 'user', content: toolResultPayload });
+      }
+
+      this.log('[AgentExecutor] round end', {
+        round,
+        roundElapsedMs: Date.now() - roundStartTime,
+        toolCallCount: roundToolCalls.length,
+        toolNames: roundToolCalls.map((tc) => tc.name),
+        toolResultChars: toolResultPayload.length,
+        roundTextChars: roundText.length,
+        cumulativeInputTokens: totalInput,
+        cumulativeOutputTokens: totalOutput,
+      });
     }
 
     return {
@@ -310,8 +399,22 @@ function buildPromptWithContext(operation: CopilotOperation): string {
   }
 
   const selection = operation.context.selection;
-  if (selection?.kind === 'editor' && selection.selectedText.trim().length > 0) {
-    blocks.push(`## Selected Editor Text\n${selection.selectedText}`);
+  if (selection?.kind === 'editor') {
+    // For range selections: include the selected text
+    if (selection.selectedText.trim().length > 0) {
+      blocks.push(`## Selected Editor Text\n${selection.selectedText}`);
+    }
+
+    // For caret (continue-writing) and range: include surrounding context
+    // so the LLM knows what precedes/follows the cursor.
+    const beforeText = selection.beforeText;
+    const afterText = selection.afterText;
+    if (beforeText || afterText) {
+      const contextLines: string[] = [];
+      if (beforeText) contextLines.push(`### Text before cursor\n${beforeText}`);
+      if (afterText) contextLines.push(`### Text after cursor\n${afterText}`);
+      blocks.push(`## Editor Context\n${contextLines.join('\n\n')}`);
+    }
   }
 
   if (selection?.kind === 'reader' && selection.selectedText.trim().length > 0) {
@@ -334,4 +437,27 @@ function buildPromptWithContext(operation: CopilotOperation): string {
   }
 
   return blocks.join('\n\n');
+}
+
+/**
+ * Format an OperationResult for LLM feedback.
+ *
+ * Previously only `result.summary` was returned, so the model never saw the
+ * actual data (e.g. search result papers, concept details). Now both summary
+ * and data are included, with a size cap to avoid blowing up context.
+ */
+const TOOL_RESULT_DATA_CAP = 6000; // chars — roughly ≤ 2k tokens
+
+function formatToolResult(result: OperationResult): string {
+  const summary = result.summary ?? '';
+  if (result.data == null) return summary || 'OK';
+
+  const dataStr = JSON.stringify(result.data, null, 2);
+  if (dataStr.length <= TOOL_RESULT_DATA_CAP) {
+    return summary ? `${summary}\n\n${dataStr}` : dataStr;
+  }
+  // Truncate large payloads but keep summary intact
+  return summary
+    ? `${summary}\n\n${dataStr.slice(0, TOOL_RESULT_DATA_CAP)}…(truncated)`
+    : `${dataStr.slice(0, TOOL_RESULT_DATA_CAP)}…(truncated)`;
 }

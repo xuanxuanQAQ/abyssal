@@ -109,15 +109,19 @@ export function computePageBounds(
     }
 
     // Cross-column on same page:
-    // Left column: [first.ny .. 1.0], Right column: [0.0 .. last.ny]
-    // "first" is the normalized-earlier point (smaller ny),
-    // but we need to figure out which is L and which is R.
+    // "first" has smaller ny (earlier vertically). Determine which is L/R by nx.
     const leftPt = first.nx < last.nx ? first : last;
     const rightPt = first.nx < last.nx ? last : first;
 
+    // Left column: from leftPt.ny down to page bottom
+    // Right column: from page top down to rightPt.ny
+    // Ensure top < bottom by using min/max with the normalized ny values.
+    const lTop = Math.min(leftPt.ny, 1.0);
+    const rBottom = Math.max(rightPt.ny, 0.0);
+
     return [
-      { col: 'L', top: leftPt.ny, bottom: 1.0 },
-      { col: 'R', top: 0.0, bottom: rightPt.ny },
+      { col: 'L', top: lTop, bottom: 1.0 },
+      { col: 'R', top: 0.0, bottom: rBottom },
     ];
   }
 

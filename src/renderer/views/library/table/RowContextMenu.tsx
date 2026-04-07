@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { useAppStore } from '../../../core/store';
-import { useUpdatePaper, useDeletePaper, useResetProcess, useResetFulltext } from '../../../core/ipc/hooks/usePapers';
+import { useUpdatePaper, useDeletePaper, useResetProcess, useResetFulltext, useResetAnalysis } from '../../../core/ipc/hooks/usePapers';
 import { useAcquireFulltext, useLinkLocalPdf } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
 import { useDeferredMenuAction } from '../../../shared/useDeferredMenuAction';
@@ -54,6 +54,7 @@ export function RowContextMenu({ paper, children }: RowContextMenuProps) {
   const linkLocalPdf = useLinkLocalPdf();
   const resetProcess = useResetProcess();
   const resetFulltext = useResetFulltext();
+  const resetAnalysis = useResetAnalysis();
   const startPipeline = useStartPipeline();
   const deferMenuAction = useDeferredMenuAction();
   const { confirm, dialog } = useAppDialog();
@@ -120,17 +121,6 @@ export function RowContextMenu({ paper, children }: RowContextMenuProps) {
               onSelect={() => deferMenuAction(() => navigateTo({ type: 'paper', id: paper.id, view: 'reader' }))}
             >
               {t('library.contextMenu.openInReader')}
-            </ContextMenu.Item>
-          )}
-          {hasFulltext && (
-            <ContextMenu.Item
-              style={menuItemStyle}
-              onSelect={() => deferMenuAction(() => {
-                const fp = paper.fulltextPath;
-                if (fp) window.open(`file://${fp}`);
-              })}
-            >
-              {t('library.contextMenu.openPdf')}
             </ContextMenu.Item>
           )}
           {hasAnalysis && (
@@ -217,6 +207,23 @@ export function RowContextMenu({ paper, children }: RowContextMenuProps) {
           <ContextMenu.Separator style={separatorStyle} />
 
           {/* ── 危险区：仅显示有东西可删的选项 ── */}
+          {hasAnalysis && (
+            <ContextMenu.Item
+              style={dangerStyle}
+              onSelect={() => deferMenuAction(async () => {
+                const confirmed = await confirm({
+                  title: t('library.contextMenu.resetAnalysis'),
+                  description: t('library.contextMenu.resetAnalysisConfirm', { title: paperTitle }),
+                  confirmLabel: t('library.contextMenu.resetAnalysis'),
+                  confirmTone: 'danger',
+                });
+                if (!confirmed) return;
+                resetAnalysis.mutate(paper.id);
+              })}
+            >
+              {t('library.contextMenu.resetAnalysis')}
+            </ContextMenu.Item>
+          )}
           {hasText && (
             <ContextMenu.Item
               style={dangerStyle}

@@ -46,7 +46,7 @@ describe('graphSynchronizer', () => {
       ],
     });
 
-    expect(graph.getNodeAttribute('note__note-1', 'type')).toBe('note');
+    expect(graph.getNodeAttribute('note__note-1', 'type')).toBe('circle');
     expect(graph.getNodeAttribute('note__note-1', 'nodeType')).toBe('note');
     expect(graph.getNodeAttribute('note__note-1', 'entityId')).toBe('note-1');
     expect(graph.getNodeAttribute('concept-1', 'conceptLevel')).toBe(2);

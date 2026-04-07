@@ -1,6 +1,7 @@
 import type Graph from 'graphology';
 import type { GraphData, GraphNode, GraphEdge } from '../../../../shared-types/models';
-import { computeNodeSize, computeNodeColor } from './nodeAttributes';
+import type { Maturity } from '../../../../shared-types/enums';
+import { computeNodeSize, computeNodeColor, shouldSkipNode, computeMaturityMeta } from './nodeAttributes';
 import { computeEdgeColor, computeEdgeSize, assignCurvatures } from './edgeAttributes';
 
 export interface SyncResult {
@@ -39,11 +40,21 @@ export function synchronizeGraph(
 
   // Add new nodes and update existing ones
   for (const node of newData.nodes) {
-    const size = computeNodeSize(node.type, node.citationCount);
+    const maturity = node.metadata?.maturity as Maturity | undefined;
+    // Skip tag-maturity concept nodes entirely
+    if (shouldSkipNode(node.type, maturity)) {
+      if (currentNodeIds.has(node.id)) {
+        graph.dropNode(node.id);
+        result.removedNodes.push(node.id);
+      }
+      continue;
+    }
+    const size = computeNodeSize(node.type, node.citationCount, maturity);
     const color = computeNodeColor(node.type, node.relevance, node.level);
+    const maturityMeta = computeMaturityMeta(maturity);
     const attrs = {
       label: node.label,
-      type: node.type,
+      type: 'circle',
       nodeType: node.type,
       relevance: node.relevance,
       citationCount: node.citationCount,
@@ -51,6 +62,7 @@ export function synchronizeGraph(
       entityId: (node.metadata?.entityId as string | undefined) ?? node.id,
       size,
       color,
+      ...maturityMeta,
       x: (node.metadata?.x as number | undefined) ?? (Math.random() - 0.5) * 100,
       y: (node.metadata?.y as number | undefined) ?? (Math.random() - 0.5) * 100,
     };
@@ -103,13 +115,15 @@ export function synchronizeGraph(
     if (!currentEdgeIds.has(edgeId)) {
       const layer = edge.type;
       const weight = edge.weight ?? 1;
+      const isStale = edge.stale === true;
       graph.addEdgeWithKey(edgeId, edge.source, edge.target, {
         layer,
         edgeType: edge.type,
         weight,
         conceptId: edge.conceptId,
-        color: computeEdgeColor(layer),
-        size: computeEdgeSize(layer, weight),
+        color: isStale ? 'rgba(156, 163, 175, 0.35)' : computeEdgeColor(layer),
+        size: isStale ? Math.max(0.5, computeEdgeSize(layer, weight) * 0.5) : computeEdgeSize(layer, weight),
+        stale: isStale,
       });
       result.addedEdges.push(edgeId);
     }

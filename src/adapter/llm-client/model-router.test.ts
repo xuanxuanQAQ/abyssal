@@ -18,11 +18,14 @@ function makeApiKeys(overrides: Partial<ApiKeysConfig> = {}): ApiKeysConfig {
     geminiApiKey: null,
     deepseekApiKey: null,
     semanticScholarApiKey: null,
+    openalexApiKey: null,
     openalexEmail: null,
     unpaywallEmail: null,
     cohereApiKey: null,
     jinaApiKey: null,
     siliconflowApiKey: null,
+    doubaoApiKey: null,
+    kimiApiKey: null,
     webSearchApiKey: null,
     ...overrides,
   };
@@ -84,8 +87,8 @@ describe('ModelRouter', () => {
         makeApiKeys({ deepseekApiKey: 'sk-ds', openaiApiKey: 'sk-openai' }),
       );
 
-      expect(router.resolve('discover')).toEqual({ provider: 'deepseek', model: 'deepseek-chat' });
-      expect(router.resolve('analyze.section')).toEqual({ provider: 'openai', model: 'gpt-4o' });
+      expect(router.resolve('discover')).toEqual({ provider: 'deepseek', model: 'deepseek-chat', reasoning: null });
+      expect(router.resolve('analyze.section')).toEqual({ provider: 'openai', model: 'gpt-4o', reasoning: null });
     });
   });
 

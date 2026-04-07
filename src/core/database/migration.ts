@@ -85,7 +85,7 @@ function loadMigrationScripts(
 
 /**
  * 初始化或更新 _meta 表中的嵌入配置信息。
- * 在 003_meta_table 迁移执行后调用。
+ * 在 001_baseline 迁移执行后调用。
  */
 function seedMetaValues(
   db: Database.Database,
@@ -265,7 +265,7 @@ export function checkEmbeddingDimensionStructured(
  * 2. 扫描 migrationsDir 中版本号 > currentVersion 的 .sql / .ts 脚本
  * 3. 每个脚本在 BEGIN IMMEDIATE 事务中执行
  * 4. 执行后更新 user_version
- * 5. 003 迁移后回填 _meta 元信息
+ * 5. baseline 迁移后回填 _meta 元信息
  * 6. 检查 _meta.embedding_dimension 与配置一致性
  */
 export function runMigrations(
@@ -325,8 +325,8 @@ export function runMigrations(
       });
     }
 
-    // 003 迁移执行后回填 _meta 值
-    if (script.version === 3) {
+    // baseline 迁移执行后回填 _meta 值
+    if (script.version === 1) {
       try {
         seedMetaValues(db, config);
         logger.info('_meta values seeded', {

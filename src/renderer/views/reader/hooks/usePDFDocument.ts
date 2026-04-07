@@ -85,6 +85,7 @@ export function usePDFDocument(paperId: string | null): PDFDocumentState {
 
         if (activeLoadRef.current !== loadId) {
           docManager.destroy();
+          managerRef.current = null;
           return;
         }
 

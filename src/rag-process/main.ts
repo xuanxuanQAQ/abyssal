@@ -165,7 +165,8 @@ async function handleRequest(msg: RagRequest): Promise<void> {
         result = await service.searchSemantic(
           msg.args[0] as Parameters<RagService['searchSemantic']>[0],
           msg.args[1] as Parameters<RagService['searchSemantic']>[1],
-          msg.args[2] as Parameters<RagService['searchSemantic']>[2],
+          // IPC structured clone converts undefined → null; coerce back so the default = {} kicks in
+          (msg.args[2] ?? undefined) as Parameters<RagService['searchSemantic']>[2],
         );
         break;
       case 'retrieve':

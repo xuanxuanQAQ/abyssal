@@ -233,6 +233,8 @@ describe('batch runner smoke', () => {
         cohereApiKey: null,
         jinaApiKey: null,
         siliconflowApiKey: null,
+        doubaoApiKey: null,
+        kimiApiKey: null,
         webSearchApiKey: null,
       },
     }));

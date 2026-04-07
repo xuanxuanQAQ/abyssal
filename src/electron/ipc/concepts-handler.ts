@@ -14,8 +14,10 @@
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
 import type { ConceptDefinition } from '../../core/types/concept';
-import { asConceptId } from '../../core/types/common';
+import { asConceptId, asPaperId } from '../../core/types/common';
 import type { UpdateConceptFields, ConflictResolution } from '../../core/database/dao/concepts';
+import type { ChangeImpactReport, ConceptHealthScore, PaperAnalysisBase } from '../../shared-types/models';
+import type { PaperId } from '../../core/types/common';
 import { buildHeatmapMatrix } from './shared/build-heatmap-matrix';
 import { createConceptFromDraft } from './shared/create-concept';
 import { mapConceptsToFrontend, findConceptFrontendById, historyEntryToFrontend } from './shared/concept-frontend';
@@ -133,25 +135,92 @@ export function registerConceptsHandlers(ctx: AppContext): void {
   });
 
   // ── db:concepts:merge ──
-  typedHandler('db:concepts:merge', logger, async (_e, retainId, mergeId) => {
+  typedHandler('db:concepts:merge', logger, async (_e, retainId, mergeId, resolutions) => {
+    // 从前端 MergeConflictResolution[] 推断全局冲突解决策略
+    let strategy: ConflictResolution = 'max_confidence';
+    if (Array.isArray(resolutions) && resolutions.length > 0) {
+      const actions = (resolutions as Array<{ action: string }>).map((r) => r.action);
+      const unique = new Set(actions);
+      if (unique.size === 1) {
+        const action = actions[0]!;
+        if (action === 'keep_retain') strategy = 'keep';
+        else if (action === 'keep_merge') strategy = 'merge';
+        // 'merge_confidence' → 'max_confidence' (default)
+      }
+      // 混合策略时保持 max_confidence 作为安全默认
+    }
+
     const result = (await ctx.dbProxy.mergeConcepts(
       asConceptId(retainId),
       asConceptId(mergeId),
-      'max_confidence' as ConflictResolution,
+      strategy,
     )) as any;
     await afterMutation(['concepts', 'paper_concept_map'], 'update');
     return { conflicts: result['conflicts'], migratedMappings: result['migratedMappings'] } as any;
   });
 
   // ── db:concepts:split ──
-  typedHandler('db:concepts:split', logger, async (_e, originalId, c1, c2) => {
+  typedHandler('db:concepts:split', logger, async (_e, originalId, c1, c2, assignments) => {
     const result = (await ctx.dbProxy.splitConcept(
       asConceptId(originalId),
       c1 as unknown as ConceptDefinition,
       c2 as unknown as ConceptDefinition,
     )) as any;
+
+    const conceptAId = asConceptId(result['conceptA'] as string);
+    const conceptBId = asConceptId(result['conceptB'] as string);
+    const pendingMappings = (result['pendingMappings'] ?? []) as Array<{ id: string; paperId: string }>;
+
+    // 将前端 'a1'/'a2'/'both' 映射解析为实际概念 ID 并完成拆分
+    if (Array.isArray(assignments) && assignments.length > 0) {
+      const mappingById = new Map(pendingMappings.map((m) => [m.id, m]));
+      const splitAssignments: Array<{ paperId: string; targetConceptId: string }> = [];
+      const bothPapers: Array<{ paperId: string }> = [];
+
+      for (const a of assignments as Array<{ mappingId: string; targetConceptId: string }>) {
+        const mapping = mappingById.get(a.mappingId);
+        if (!mapping) continue;
+
+        if (a.targetConceptId === 'a2') {
+          splitAssignments.push({ paperId: mapping.paperId, targetConceptId: conceptBId });
+        } else {
+          // 'a1' 和 'both' 都先分配给 conceptA
+          splitAssignments.push({ paperId: mapping.paperId, targetConceptId: conceptAId });
+          if (a.targetConceptId === 'both') {
+            bothPapers.push({ paperId: mapping.paperId });
+          }
+        }
+      }
+
+      // completeSplit: 迁移映射 + 废弃原概念
+      await ctx.dbProxy.completeSplit(asConceptId(originalId), splitAssignments as any);
+
+      // 'both' 的论文需要额外复制一份映射到 conceptB
+      for (const bp of bothPapers) {
+        const orig = pendingMappings.find((m) => m.paperId === bp.paperId) as any;
+        if (orig) {
+          await ctx.dbProxy.mapPaperConcept({
+            paperId: bp.paperId,
+            conceptId: conceptBId,
+            relation: orig.relation ?? 'supports',
+            confidence: orig.confidence ?? 0.5,
+            evidence: orig.evidence ?? null,
+            annotationId: null,
+            reviewed: false,
+            reviewedAt: null,
+          } as any);
+        }
+      }
+    }
+
     await afterMutation(['concepts', 'paper_concept_map'], 'update');
-    return { conceptA: result['conceptA'], conceptB: result['conceptB'], pendingMappings: result['pendingMappings'] } as any;
+
+    // 返回前端友好的结果
+    const allConcepts = (await ctx.dbProxy.getAllConcepts()) as ConceptDefinition[];
+    return {
+      concept1: findConceptFrontendById(allConcepts, conceptAId),
+      concept2: findConceptFrontendById(allConcepts, conceptBId),
+    } as any;
   });
 
 
@@ -200,5 +269,45 @@ export function registerConceptsHandlers(ctx: AppContext): void {
   // ── db:concepts:getMatrix ──
   typedHandler('db:concepts:getMatrix', logger, async () => {
     return await buildHeatmapMatrix(ctx.dbProxy) as any;
+  });
+
+  // ── db:concepts:previewImpact ──
+  typedHandler('db:concepts:previewImpact', logger, async (_e, conceptId) => {
+    return await ctx.dbProxy.previewConceptChangeImpact(asConceptId(conceptId)) as ChangeImpactReport;
+  });
+
+  // ── db:concepts:getHealth ──
+  typedHandler('db:concepts:getHealth', logger, async (_e, conceptId) => {
+    return await ctx.dbProxy.computeConceptHealth(asConceptId(conceptId)) as ConceptHealthScore;
+  });
+
+  // ── db:concepts:getKeywordCandidates ──
+  typedHandler('db:concepts:getKeywordCandidates', logger, async (_e, conceptId) => {
+    const rows = await ctx.dbProxy.getKeywordCandidates(asConceptId(conceptId));
+    // KeywordCandidateRow.id is number, frontend KeywordCandidate.id is string
+    return rows.map((r) => ({ ...r, id: String(r.id) })) as unknown as import('../../shared-types/models').KeywordCandidate[];
+  });
+
+  // ── db:concepts:acceptKeyword ──
+  typedHandler('db:concepts:acceptKeyword', logger, async (_e, candidateId) => {
+    const term = await ctx.dbProxy.acceptKeywordCandidate(candidateId);
+    await afterMutation(['concepts', 'keyword_candidates'], 'update');
+    return { term };
+  });
+
+  // ── db:concepts:rejectKeyword ──
+  typedHandler('db:concepts:rejectKeyword', logger, async (_e, candidateId) => {
+    await ctx.dbProxy.rejectKeywordCandidate(candidateId);
+    return { ok: true };
+  });
+
+  // ── db:analysisBase:get ──
+  typedHandler('db:analysisBase:get', logger, async (_e, paperId) => {
+    return await ctx.dbProxy.getAnalysisBase(paperId as PaperId) as PaperAnalysisBase | null;
+  });
+
+  // ── db:analysisBase:has ──
+  typedHandler('db:analysisBase:has', logger, async (_e, paperId) => {
+    return await ctx.dbProxy.hasAnalysisBase(paperId as PaperId) as boolean;
   });
 }

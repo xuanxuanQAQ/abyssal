@@ -61,6 +61,7 @@ export function AiModelsTab({ settings, onUpdate }: { settings: SettingsData; on
                 <th style={{ padding: '4px 8px', fontWeight: 500 }}>{t('settings.aiModels.colDefault')}</th>
                 <th style={{ padding: '4px 8px', fontWeight: 500 }}>{t('settings.aiModels.colProvider')}</th>
                 <th style={{ padding: '4px 8px', fontWeight: 500 }}>{t('settings.aiModels.colModel')}</th>
+                <th style={{ padding: '4px 8px', fontWeight: 500 }}>{t('settings.aiModels.colReasoning')}</th>
               </tr>
             </thead>
             <tbody>
@@ -98,6 +99,23 @@ export function AiModelsTab({ settings, onUpdate }: { settings: SettingsData; on
                     onChangeModel={(m) => {
                       const overrides = { ...llm.workflowOverrides };
                       overrides[wf] = { ...overrides[wf], provider: overrides[wf]?.provider ?? llm.defaultProvider, model: m };
+                      onUpdate('llm', { workflowOverrides: overrides });
+                    }}
+                    reasoningLevel={override?.reasoning?.level}
+                    onChangeReasoning={(level) => {
+                      const overrides = { ...llm.workflowOverrides };
+                      if (level === 'auto') {
+                        // Remove explicit reasoning config — fall back to workflow defaults
+                        if (overrides[wf]) {
+                          const { reasoning: _, ...rest } = overrides[wf]!;
+                          overrides[wf] = rest;
+                        }
+                      } else {
+                        overrides[wf] = {
+                          ...overrides[wf] ?? { provider: llm.defaultProvider, model: llm.defaultModel },
+                          reasoning: { level: level as 'off' | 'low' | 'medium' | 'high' },
+                        };
+                      }
                       onUpdate('llm', { workflowOverrides: overrides });
                     }}
                   />
@@ -156,7 +174,15 @@ export function AiModelsTab({ settings, onUpdate }: { settings: SettingsData; on
   );
 }
 
-function WorkflowRow({ workflow, label, hint, isDefault, provider, model, onToggleDefault, onChangeProvider, onChangeModel }: {
+const REASONING_OPTIONS = [
+  { value: 'auto', labelKey: 'settings.aiModels.reasoningAuto' },
+  { value: 'off', labelKey: 'settings.aiModels.reasoningOff' },
+  { value: 'low', labelKey: 'settings.aiModels.reasoningLow' },
+  { value: 'medium', labelKey: 'settings.aiModels.reasoningMedium' },
+  { value: 'high', labelKey: 'settings.aiModels.reasoningHigh' },
+] as const;
+
+function WorkflowRow({ workflow, label, hint, isDefault, provider, model, onToggleDefault, onChangeProvider, onChangeModel, reasoningLevel, onChangeReasoning }: {
   workflow: string;
   label: string;
   hint?: string | undefined;
@@ -166,6 +192,8 @@ function WorkflowRow({ workflow, label, hint, isDefault, provider, model, onTogg
   onToggleDefault: (useDefault: boolean) => void;
   onChangeProvider: (p: string) => void;
   onChangeModel: (m: string) => void;
+  reasoningLevel?: string | undefined;
+  onChangeReasoning: (level: string) => void;
 }) {
   const { t } = useTranslation();
   const models = MODELS_BY_PROVIDER[provider] ?? [];
@@ -224,6 +252,23 @@ function WorkflowRow({ workflow, label, hint, isDefault, provider, model, onTogg
             }}
           />
         )}
+      </td>
+      <td style={{ padding: '6px 8px' }}>
+        <select
+          value={reasoningLevel ?? 'auto'}
+          disabled={isDefault}
+          onChange={(e) => onChangeReasoning(e.target.value)}
+          style={{
+            padding: '3px 6px', fontSize: 12, width: 90,
+            background: 'var(--bg-base)', color: 'var(--text-primary)',
+            border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)',
+            opacity: isDefault ? 0.4 : 1,
+          }}
+        >
+          {REASONING_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
+          ))}
+        </select>
       </td>
     </tr>
   );

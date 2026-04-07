@@ -1,3 +1,5 @@
+import type { Maturity } from '../../../../shared-types/enums';
+
 export const BASE_SIZE = 5;
 export const LOG_SCALE = 3;
 export const MIN_SIZE = 4;
@@ -11,8 +13,11 @@ function clamp(value: number, min: number, max: number): number {
 export function computeNodeSize(
   type: 'paper' | 'concept' | 'memo' | 'note',
   citationCount?: number,
+  maturity?: Maturity,
 ): number {
   if (type === 'concept') {
+    if (maturity === 'tentative') return CONCEPT_SIZE * 0.8;
+    if (maturity === 'established') return CONCEPT_SIZE * 1.3;
     return CONCEPT_SIZE;
   }
   if (type === 'memo' || type === 'note') {
@@ -23,6 +28,11 @@ export function computeNodeSize(
     MIN_SIZE,
     MAX_SIZE,
   );
+}
+
+/** Returns true if a concept node with this maturity should be excluded from the graph. */
+export function shouldSkipNode(type: string, maturity?: Maturity): boolean {
+  return type === 'concept' && maturity === 'tag';
 }
 
 export const RELEVANCE_COLORS: Record<string, string> = {
@@ -64,9 +74,20 @@ export function computeNodeColor(
 export function computeNodeOpacity(
   type: 'paper' | 'concept',
   relevance?: string,
+  maturity?: Maturity,
 ): number {
   if (relevance === 'excluded') {
     return 0.5;
   }
+  if (type === 'concept' && maturity === 'tentative') {
+    return 0.4;
+  }
   return 1.0;
+}
+
+/** Returns additional metadata for concept maturity styling. */
+export function computeMaturityMeta(maturity?: Maturity): Record<string, unknown> {
+  if (maturity === 'tentative') return { borderStyle: 'dashed' };
+  if (maturity === 'established') return { glow: true };
+  return {};
 }

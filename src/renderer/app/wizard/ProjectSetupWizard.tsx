@@ -32,20 +32,24 @@ import { Z_INDEX } from '../../styles/zIndex';
 
 // ═══ Constants ═══
 
-const PROVIDERS = ['anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow'] as const;
+const PROVIDERS = ['anthropic', 'openai', 'gemini', 'deepseek', 'siliconflow', 'doubao', 'kimi'] as const;
 const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: 'Claude (Anthropic)',
+  anthropic: 'Anthropic',
   openai: 'OpenAI',
-  gemini: 'Google Gemini',
+  gemini: 'Google',
   deepseek: 'DeepSeek',
   siliconflow: 'SiliconFlow',
+  doubao: 'ByteDance',
+  kimi: 'Moonshot',
 };
 const MODELS_BY_PROVIDER: Record<string, string[]> = {
   anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250901', 'claude-haiku-4-5-20251001'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'],
   gemini: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
-  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  deepseek: ['deepseek-chat'],
   siliconflow: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen3-235B-A22B', 'Qwen/Qwen2.5-72B-Instruct'],
+  doubao: ['doubao-seed-2-0-pro-260215', 'doubao-seed-2-0-lite-260215', 'doubao-seed-2-0-mini-260215', 'doubao-seed-1-8-251228'],
+  kimi: ['kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-turbo-preview', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo'],
 };
 
 const EMBEDDING_PROVIDERS: EmbeddingProvider[] = ['openai', 'siliconflow', 'jina'];
@@ -62,11 +66,12 @@ const RERANKER_LABELS: Record<string, string> = {
   siliconflow: 'SiliconFlow',
 };
 
-const WEB_SEARCH_BACKENDS = ['tavily', 'serpapi', 'bing'] as const;
+const WEB_SEARCH_BACKENDS = ['tavily', 'serpapi', 'bing', 'bocha'] as const;
 const WEB_SEARCH_LABELS: Record<string, string> = {
   tavily: 'Tavily',
   serpapi: 'SerpAPI',
   bing: 'Bing',
+  bocha: 'Bocha',
 };
 
 const ALL_SOURCES = ['unpaywall', 'arxiv', 'pmc', 'scihub', 'cnki', 'wanfang'] as const;
@@ -91,6 +96,8 @@ const PROVIDER_FOR_KEY_TEST: Record<string, string> = {
   gemini: 'gemini',
   deepseek: 'deepseek',
   siliconflow: 'siliconflow',
+  doubao: 'doubao',
+  kimi: 'kimi',
   cohere: 'cohere',
   jina: 'jina',
   tavily: 'tavily',
@@ -181,7 +188,7 @@ export function ProjectSetupWizard({
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [proxyUrl, setProxyUrl] = useState('http://127.0.0.1:7890');
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-  const [webSearchBackend, setWebSearchBackend] = useState<'tavily' | 'serpapi' | 'bing'>('tavily');
+  const [webSearchBackend, setWebSearchBackend] = useState<'tavily' | 'serpapi' | 'bing' | 'bocha'>('tavily');
   const [webSearchApiKey, setWebSearchApiKey] = useState('');
   const [semanticScholarApiKey, setSemanticScholarApiKey] = useState('');
 
@@ -428,6 +435,18 @@ export function ProjectSetupWizard({
     if (step > 1) setStep((step - 1) as WizardStep);
   }, [step]);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && canProceedFinal && !creating) {
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag === 'SELECT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        goNext();
+      }
+    },
+    [canProceedFinal, creating, goNext],
+  );
+
   // ── Step labels ──
 
   const stepLabels = useMemo(
@@ -453,6 +472,7 @@ export function ProjectSetupWizard({
           }}
         />
         <Dialog.Content
+          onKeyDown={handleKeyDown}
           style={{
             position: 'fixed',
             top: '50%',

@@ -1,7 +1,10 @@
 /**
  * ReaderView — 顶层 Reader 视图容器
  *
- * 三面板水平布局：ThumbnailNav + PDFViewport + AnnotationList
+ * 根据 paper 类型分流：
+ * - PDF 论文 → 三面板水平布局：ThumbnailNav + PDFViewport + AnnotationList
+ * - 网页文章 → WebArticleView（Markdown 渲染）
+ *
  * 使用 react-resizable-panels 管理面板尺寸。
  */
 
@@ -9,11 +12,13 @@ import React, { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
+import { usePaper } from '../../core/ipc/hooks/usePapers';
 import { useAnnotations } from '../../core/ipc/hooks/useAnnotations';
 import { usePDFDocument } from './hooks/usePDFDocument';
 import { PDFViewport } from './viewport/PDFViewport';
 import { ThumbnailNav } from './thumbnails/ThumbnailNav';
 import { AnnotationList } from './annotations/AnnotationList';
+import { WebArticleView } from './WebArticleView';
 import type { ScrollContainerHandle } from './viewport/ScrollContainer';
 
 export function ReaderView() {
@@ -24,8 +29,12 @@ export function ReaderView() {
     (s) => s.readerAnnotationListOpen,
   );
 
+  // 获取 paper 元数据以判断类型
+  const { data: paper } = usePaper(selectedPaperId);
+  const isWebArticle = paper?.paperType === 'webpage';
+
   const { manager, pageMetadataMap, pdfPath, status, error } =
-    usePDFDocument(selectedPaperId);
+    usePDFDocument(isWebArticle ? null : selectedPaperId);
   const { data: annotations = [] } = useAnnotations(selectedPaperId);
 
   const scrollContainerRef = useRef<ScrollContainerHandle>(null);
@@ -125,6 +134,43 @@ export function ReaderView() {
     );
   }
 
+  // ── 网页文章模式 ──
+  if (isWebArticle) {
+    return (
+      <div className="workspace-view workspace-view--reader" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Group className="workspace-panel-group" orientation="horizontal" style={{ flex: 1 }}>
+          <Panel style={{ overflow: 'hidden' }}>
+            <WebArticleView paperId={selectedPaperId} paper={paper} />
+          </Panel>
+
+          {readerAnnotationListOpen && (
+            <>
+              <Separator style={{ width: 1, background: 'var(--border-subtle)' }} />
+              <Panel
+                defaultSize="20%"
+                minSize="14%"
+                maxSize="28%"
+                collapsible
+                style={{
+                  background: 'var(--bg-surface-low)',
+                  borderLeft: '1px solid var(--border-subtle)',
+                }}
+              >
+                <div className="workspace-lens-panel reader-side-panel reader-annotations-shell">
+                  <AnnotationList
+                    paperId={selectedPaperId}
+                    onScrollToAnnotation={() => {}}
+                  />
+                </div>
+              </Panel>
+            </>
+          )}
+        </Group>
+      </div>
+    );
+  }
+
+  // ── PDF 模式 ──
   if (status === 'loading') {
     return (
       <div

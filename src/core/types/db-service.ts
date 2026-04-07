@@ -63,10 +63,25 @@ export interface IDbService {
   syncConcepts(concepts: ConceptDefinition[], strategy: 'merge' | 'replace', isBreakingMap?: Record<string, boolean>): SyncConceptsResult;
   mergeConcepts(keepConceptId: ConceptId, mergeConceptId: ConceptId, conflictResolution?: ConflictResolution): MergeConceptsResult;
   splitConcept(originalConceptId: ConceptId, newConceptA: ConceptDefinition, newConceptB: ConceptDefinition): SplitConceptResult;
+  completeSplit(originalConceptId: ConceptId, assignments: Array<{ paperId: PaperId; targetConceptId: ConceptId }>): GcConceptChangeResult;
   gcConceptChange(conceptId: ConceptId, changeType: 'definition_refined' | 'deprecated' | 'deleted', isBreaking?: boolean): GcConceptChangeResult;
   getConcept(id: ConceptId): ConceptDefinition | null;
   getAllConcepts(includeDeprecated?: boolean): ConceptDefinition[];
+  getActiveConcepts(): ConceptDefinition[];
+  previewConceptChangeImpact(conceptId: ConceptId): import('../database/dao/concepts').ChangeImpactReport;
+  computeConceptHealth(conceptId: ConceptId): import('../database/dao/concepts').ConceptHealthResult;
   syncConceptsFromYaml(yamlConcepts: ConceptDefinition[]): import('../config/hot-reload/concept-sync').SyncReport;
+
+  // ─── 基底分析（级联提纯阶段一） ───
+  upsertAnalysisBase(paperId: PaperId, data: { claims: string[]; methodTags: string[]; keyTerms: string[]; contributionSummary: string | null }): void;
+  getAnalysisBase(paperId: PaperId): import('../database/dao/analysis-base').PaperAnalysisBase | null;
+  hasAnalysisBase(paperId: PaperId): boolean;
+
+  // ─── 关键词候选 ───
+  addOrMergeKeywordCandidate(conceptId: ConceptId, term: string, paperId: string, confidence: number): void;
+  getKeywordCandidates(conceptId: ConceptId, status?: string): import('../database/dao/keyword-candidates').KeywordCandidateRow[];
+  acceptKeywordCandidate(candidateId: number): string;
+  rejectKeywordCandidate(candidateId: number): void;
 
   // ─── 映射 ───
   mapPaperConcept(mapping: ConceptMapping): void;
@@ -286,9 +301,15 @@ const _dbServiceMethodMap: Record<keyof IDbService, true> = {
   getCitationsTo: true, deleteCitation: true,
   // 概念
   addConcept: true, updateConcept: true, deprecateConcept: true,
-  syncConcepts: true, mergeConcepts: true, splitConcept: true,
+  syncConcepts: true, mergeConcepts: true, splitConcept: true, completeSplit: true,
   gcConceptChange: true, getConcept: true, getAllConcepts: true,
+  getActiveConcepts: true, previewConceptChangeImpact: true, computeConceptHealth: true,
   syncConceptsFromYaml: true,
+  // 基底分析
+  upsertAnalysisBase: true, getAnalysisBase: true, hasAnalysisBase: true,
+  // 关键词候选
+  addOrMergeKeywordCandidate: true, getKeywordCandidates: true,
+  acceptKeywordCandidate: true, rejectKeywordCandidate: true,
   // 映射
   mapPaperConcept: true, mapPaperConceptBatch: true, updateMapping: true,
   getMappingsByPaper: true, getMappingsByConcept: true, getMapping: true,
