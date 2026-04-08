@@ -207,10 +207,9 @@ function typeToJsonSchema(
         if (modifiers & ts.ModifierFlags.Private || modifiers & ts.ModifierFlags.Protected) continue;
       }
 
-      const propType = checker.getTypeOfSymbolAtLocation(
-        prop,
-        prop.valueDeclaration ?? prop.declarations?.[0]!,
-      );
+      const propNode = prop.valueDeclaration ?? prop.declarations?.[0];
+      if (!propNode) continue;
+      const propType = checker.getTypeOfSymbolAtLocation(prop, propNode);
       properties[prop.name] = typeToJsonSchema(propType, checker, depth + 1);
 
       if (!(prop.flags & ts.SymbolFlags.Optional)) {
@@ -333,10 +332,10 @@ function extractServiceMethods(
 
       // Parameters
       const params = sig.parameters.map((param) => {
-        const paramType = checker.getTypeOfSymbolAtLocation(
-          param,
-          param.valueDeclaration ?? param.declarations?.[0]!,
-        );
+        const paramNode = param.valueDeclaration ?? param.declarations?.[0];
+        const paramType = paramNode
+          ? checker.getTypeOfSymbolAtLocation(param, paramNode)
+          : checker.getAnyType();
         const paramDecl = param.valueDeclaration as ts.ParameterDeclaration | undefined;
         const isOptional = paramDecl ? !!paramDecl.questionToken || !!paramDecl.initializer : false;
 
@@ -547,10 +546,12 @@ function main(): void {
       JSON.stringify(toolDefs, null, 2),
     );
 
+    // eslint-disable-next-line no-console
     console.log(`Generated ${toolDefs.length} tool definitions → generated/tool-definitions.json`);
 
     // 按模块统计
     for (const [mod, methods] of methodsByModule) {
+      // eslint-disable-next-line no-console
       console.log(`  ${mod}: ${methods.length} methods (${MODULE_SERVICE_MAP[mod]})`);
     }
   }
@@ -565,32 +566,40 @@ function main(): void {
 
     if (diff.missingInHandwritten.length > 0) {
       hasIssues = true;
+      // eslint-disable-next-line no-console
       console.log(`\n⚠ Service 方法未在 tool-definitions.ts 中注册 (${diff.missingInHandwritten.length}):`);
       for (const name of diff.missingInHandwritten) {
+        // eslint-disable-next-line no-console
         console.log(`  + ${name}`);
       }
     }
 
     if (diff.missingInGenerated.length > 0) {
       hasIssues = true;
+      // eslint-disable-next-line no-console
       console.log(`\n⚠ tool-definitions.ts 中的工具未在 Service 类中找到 (${diff.missingInGenerated.length}):`);
       for (const name of diff.missingInGenerated) {
+        // eslint-disable-next-line no-console
         console.log(`  - ${name}`);
       }
     }
 
     if (diff.signatureMismatches.length > 0) {
       hasIssues = true;
+      // eslint-disable-next-line no-console
       console.log(`\n⚠ 签名不一致 (${diff.signatureMismatches.length}):`);
       for (const m of diff.signatureMismatches) {
+        // eslint-disable-next-line no-console
         console.log(`  ≠ ${m.toolName}.${m.field}: AST=[${m.generated}] vs hand=[${m.handwritten}]`);
       }
     }
 
     if (!hasIssues) {
+      // eslint-disable-next-line no-console
       console.log('\n✓ AST 反射结果与 tool-definitions.ts 完全一致');
     }
   } else {
+    // eslint-disable-next-line no-console
     console.log('\n⚠ 无法加载 tool-definitions.ts 进行校验（跳过 diff）');
   }
 }

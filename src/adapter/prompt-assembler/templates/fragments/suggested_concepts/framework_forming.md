@@ -4,8 +4,8 @@ The researcher has begun developing a working vocabulary, but it is still evolvi
 
 As you analyze the paper, discover what it says independently first. Then, where natural connections exist, relate your findings back to the provided vocabulary.
 
-If you encounter significant terms or constructs not covered by the current vocabulary, surface them in `suggested_new_concepts` with equal prominence:
-- `term`: The concept name as used in the paper.
+If you encounter significant terms or constructs not covered by the current vocabulary, surface them in `suggested_new_concepts` with equal prominence. All text fields must follow the output language setting:
+- `term`: The concept name (in the output language).
 - `frequency_in_paper`: Approximate occurrence count.
 - `reason`: Why this concept might be worth considering.
 - `closest_existing`: Which existing concept is most closely related, if any.

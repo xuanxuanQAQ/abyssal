@@ -36,6 +36,7 @@ import { ProjectSetupWizard } from './wizard/ProjectSetupWizard';
 import { useProjectSetup } from './wizard/useProjectSetup';
 import { DbChangeListener } from '../core/ipc/useDbChangeListener';
 import { getAPI } from '../core/ipc/bridge';
+import { isShutdownError } from '../core/errors/types';
 import { setAuthorDisplayThreshold } from '../core/hooks/useAuthorDisplay';
 
 /** Toast 全局样式 — 模块级常量避免每次渲染重建 */
@@ -100,7 +101,7 @@ function AppShell() {
       if (data?.personalization?.authorDisplayThreshold != null) {
         setAuthorDisplayThreshold(data.personalization.authorDisplayThreshold);
       }
-    }).catch((err) => { console.warn('[AppShell] Failed to load settings:', err); });
+    }).catch((err) => { if (!isShutdownError(err)) console.warn('[AppShell] Failed to load settings:', err); });
   }, []);
 
   // Ctrl+Shift+N 快捷键打开 MemoQuickInput

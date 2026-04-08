@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAPI } from '../bridge';
 import type {
-  DraftOutline,
   DraftPatch,
   DraftSummary,
   SectionOrder,

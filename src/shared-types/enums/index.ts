@@ -9,7 +9,8 @@ export type AnalysisStatus =
   | 'in_progress'
   | 'completed'
   | 'needs_review'
-  | 'failed';
+  | 'failed'
+  | 'skipped';
 
 /** 全文获取状态 */
 export type FulltextStatus =

@@ -25,6 +25,7 @@ import type {
   AdapterCallParams,
 } from './llm-client';
 import type { ResolvedReasoning } from './model-router';
+import type { Logger } from '../../core/infra/logger';
 import { classifyCreateError, mapFinishReason, safeParseJson } from './shared';
 
 // ─── Reasoning level → budget_tokens mapping ───
@@ -44,9 +45,11 @@ function resolveClaudeThinkingBudget(reasoning: ResolvedReasoning): number {
 
 export class ClaudeAdapter implements LlmAdapter {
   private readonly client: Anthropic;
+  private readonly logger: Logger;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, logger: Logger) {
     this.client = new Anthropic({ apiKey });
+    this.logger = logger;
   }
 
   // ─── complete (§2.2-2.3) ───
@@ -129,12 +132,28 @@ export class ClaudeAdapter implements LlmAdapter {
       requestParams['tools'] = params.tools.map(toClaudeTool);
     }
 
+    const streamStart = Date.now();
+    this.logger.debug('[ClaudeAdapter] completeStream: creating stream request', {
+      model: params.model,
+      hasReasoning: !!params.reasoning,
+      thinkingBudget,
+      maxTokens: requestParams['max_tokens'],
+    });
+
     let stream;
     try {
       stream = this.client.messages.stream(
         requestParams as unknown as Anthropic.MessageCreateParamsStreaming,
       );
+      this.logger.debug('[ClaudeAdapter] completeStream: stream object created', {
+        model: params.model,
+        createLatencyMs: Date.now() - streamStart,
+      });
     } catch (err) {
+      this.logger.error('[ClaudeAdapter] completeStream: create() threw', err as Error, {
+        model: params.model,
+        elapsedMs: Date.now() - streamStart,
+      });
       if (params.signal?.aborted) {
         yield { type: 'error', code: 'ABORTED', message: 'Request cancelled' };
       } else {
@@ -158,9 +177,19 @@ export class ClaudeAdapter implements LlmAdapter {
     const toolJsonBuffers = new Map<number, { id: string; name: string; json: string }>();
     // Track which indices are thinking blocks (to silently accumulate)
     const thinkingIndices = new Set<number>();
+    let adapterEventCount = 0;
 
     try {
       for await (const event of stream) {
+        adapterEventCount++;
+        if (adapterEventCount === 1) {
+          this.logger.debug('[ClaudeAdapter] completeStream: first event from SDK', {
+            model: params.model,
+            latencyMs: Date.now() - streamStart,
+            eventType: (event as unknown as Record<string, unknown>)['type'],
+          });
+          yield { type: 'connected' as const };
+        }
         const type = (event as unknown as Record<string, unknown>)['type'] as string;
 
         if (type === 'content_block_start') {
@@ -224,6 +253,15 @@ export class ClaudeAdapter implements LlmAdapter {
             };
           } catch { /* use accumulated */ }
 
+          this.logger.info('[ClaudeAdapter] completeStream: stream iteration done', {
+            model: params.model,
+            totalEvents: adapterEventCount,
+            totalElapsedMs: Date.now() - streamStart,
+            textLength: fullText.length,
+            thinkingLength: thinkingText.length,
+            finishReason,
+          });
+
           yield {
             type: 'message_end',
             text: fullText,
@@ -234,6 +272,11 @@ export class ClaudeAdapter implements LlmAdapter {
         }
       }
     } catch (err) {
+      this.logger.error('[ClaudeAdapter] completeStream: iteration error', err as Error, {
+        model: params.model,
+        eventsBeforeError: adapterEventCount,
+        elapsedMs: Date.now() - streamStart,
+      });
       if (params.signal?.aborted) {
         yield { type: 'error', code: 'ABORTED', message: 'Request cancelled' };
       } else {

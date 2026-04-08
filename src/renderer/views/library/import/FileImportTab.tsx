@@ -10,7 +10,6 @@ import { Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getAPI } from '../../../core/ipc/bridge';
 import { useQueryClient } from '@tanstack/react-query';
-import { ImportPreview } from './ImportPreview';
 
 interface FileImportTabProps {
   onClose: () => void;

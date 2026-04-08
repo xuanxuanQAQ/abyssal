@@ -1,10 +1,11 @@
 ## Language Requirements
 
-**CRITICAL LANGUAGE ISOLATION:** The ENTIRE YAML frontmatter block (including all keys, enum values, and ALL text inside `evidence.en` fields) MUST BE STRICTLY IN ENGLISH. The `evidence.original` field uses the paper's source language. Only the final Markdown body text BELOW the closing `---` marker should be written in {output_language}. Violating this boundary will cause system parsing failures.
+**Output language: {output_language}**
 
-- YAML frontmatter field names and enum values: always English.
-- YAML string values (evidence.en, claims, reasons): always English.
-- `evidence.original`: In the paper's source language (may be non-English).
-- Markdown body (analysis text): write in {output_language}.
-- Concept names in Markdown body: use bilingual format "{name_zh} ({name_en})".
-- When writing in Chinese about English-language papers, preserve key technical terms in English with Chinese annotation on first occurrence. Example: "可供性 (affordance) 理论..."
+- JSON field names and enum values (relation, paper_type, etc.): always English.
+- `evidence.en`: always English.
+- `evidence.original`: in the paper's source language.
+- `concept_mappings.concept_id`: always use the exact ID from the concept framework.
+- `summary` and `analysis_markdown`: MUST be in {output_language}.
+- **`suggested_new_concepts`**: ALL text fields (`term`, `reason`, `suggested_definition`, `suggested_keywords`) MUST be in {output_language}. If the paper is Chinese, write Chinese terms; if the paper is English but the output language is Chinese, translate the terms into Chinese and include the English original in parentheses.
+- When {output_language} is Chinese and the paper is in English, preserve key technical terms in English with Chinese annotation. Example: "可供性 (affordance)".

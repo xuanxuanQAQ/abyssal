@@ -35,11 +35,6 @@ export interface ModelRouterConfig {
   lowCostModel: string;
 }
 
-const DEFAULT_CONFIG: ModelRouterConfig = {
-  frontierModel: 'claude-opus-4',
-  lowCostModel: 'deepseek-chat',
-};
-
 // ─── Paper features for routing ───
 
 export interface PaperFeatures {

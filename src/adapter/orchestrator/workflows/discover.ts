@@ -22,7 +22,6 @@ import type { SearchService } from '../../../core/search';
 import type { LlmClient } from '../../llm-client/llm-client';
 import type { Logger } from '../../../core/infra/logger';
 import type { PaperMetadata } from '../../../core/types/paper';
-import type { PaperId } from '../../../core/types/common';
 import { CircuitBreaker } from '../error-classifier';
 import { withRetry, classifyError } from '../error-classifier';
 import { createConcurrencyGuard } from '../concurrency-guard';
@@ -462,7 +461,7 @@ async function batchScreen(
   batch: Candidate[],
   llmClient: LlmClient,
   services: DiscoverServices,
-  logger: Logger,
+  _logger: Logger,
 ): Promise<Array<{ score: number; reason: string }>> {
   const projectDesc = services.config.project.description ?? '';
 

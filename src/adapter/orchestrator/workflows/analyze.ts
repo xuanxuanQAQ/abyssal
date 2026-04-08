@@ -29,6 +29,7 @@ import * as path from 'node:path';
 
 import type { WorkflowOptions, WorkflowRunnerContext } from '../workflow-runner';
 import type { LlmClient } from '../../llm-client/llm-client';
+import { streamingComplete } from './streaming-llm-helper';
 import type { ContextBudgetManager, FrameworkState } from '../../context-budget/context-budget-manager';
 import type { Logger } from '../../../core/infra/logger';
 import { PaperNotFoundError } from '../../../core/types/errors';
@@ -58,7 +59,7 @@ import {
   type SubsetSelectorDb,
 } from '../../prompt-assembler/concept-subset-selector';
 import { buildMaturityInstructions } from './concept-evolution/maturity-evaluator';
-import { aggregateSuggestions, type SuggestionDb, type PushNotifier } from './suggested-concepts/suggestion-aggregator';
+import { aggregateSuggestions, type PushNotifier } from './suggested-concepts/suggestion-aggregator';
 import {
   ANALYZE_STRUCTURED_RESPONSE_FORMAT,
   parseStructuredAnalyzeOutput,
@@ -165,7 +166,7 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     let paperIds = options.paperIds;
     if (!paperIds || paperIds.length === 0) {
       const result = await dbProxy.queryPapers({
-        analysisStatus: ['not_started', 'failed', 'needs_review'],
+        analysisStatus: ['not_started', 'failed', 'needs_review', 'skipped'],
         fulltextStatus: ['available'],
         limit: 1000,
       });
@@ -202,8 +203,8 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
     });
 
     // Resolve seed types for model routing
-    let seedPaperIds = new Set<string>();
-    let axiomPaperIds = new Set<string>();
+    const seedPaperIds = new Set<string>();
+    const axiomPaperIds = new Set<string>();
     if (dbProxy.getSeeds) {
       try {
         const seeds = await dbProxy.getSeeds();
@@ -415,7 +416,17 @@ export function createAnalyzeWorkflow(services: AnalyzeServices) {
       failed: runner.progress.failedItems,
       skipped: runner.progress.skippedItems,
       upgradeQueueSize: upgradeQueue.length,
+      frameworkState,
+      totalConceptsInFramework: conceptsForSubset.length,
     });
+
+    // Diagnostic: if batch completed but no papers produced mappings, surface cause
+    if (completedPaperIds.length > 0 && conceptsForSubset.length === 0) {
+      logger.warn(`[analyze] Batch completed ${completedPaperIds.length} papers but framework has 0 concepts — no concept mappings were produced. Add concepts to enable mapping.`);
+    }
+    if (isZeroConcepts && completedPaperIds.length > 0) {
+      logger.warn(`[analyze] frameworkState='zero_concepts' — all papers analyzed in generic mode (concept discovery only, no mappings). Adopt suggested concepts to enable concept mapping in future runs.`);
+    }
 
     // ── Post-batch: deferred relation computation ──
     // Relations are computed after ALL papers are analyzed, not per-paper.
@@ -534,6 +545,10 @@ async function analyzeSinglePaper(
   const paper = await dbProxy.getPaper(paperId);
   if (!paper) throw new PaperNotFoundError({ message: `Paper not found: ${paperId}` });
 
+  // Report human-readable label for UI
+  const paperTitle = (paper['title'] as string) ?? paperId;
+  runner.reportProgress({ currentItemLabel: paperTitle.length > 60 ? paperTitle.slice(0, 57) + '...' : paperTitle });
+
   const analysisStatus = paper['analysisStatus'] as string | undefined;
   if (analysisStatus === 'completed' && !ctx.force) {
     runner.reportSkipped(paperId);
@@ -562,6 +577,19 @@ async function analyzeSinglePaper(
   const previousAnalysisStatus = normalizeAnalysisStatusForResume(analysisStatus);
   await dbProxy.updatePaper(paperId, { analysisStatus: 'in_progress' });
 
+  // ── Substep tracking for UI timeline ──
+  const ANALYZE_SUBSTEPS = ['preparing_context', 'budgeting', 'prompting', 'analyzing', 'parsing', 'writing'] as const;
+  type AnalyzeSubstepName = typeof ANALYZE_SUBSTEPS[number];
+  const substepStatus = new Map<string, 'pending' | 'running' | 'success' | 'failed' | 'skipped'>(
+    ANALYZE_SUBSTEPS.map((s) => [s, 'pending']),
+  );
+  const updateSubstep = (name: AnalyzeSubstepName, status: 'running' | 'success' | 'failed' | 'skipped') => {
+    substepStatus.set(name, status);
+    runner.reportProgress({
+      substeps: ANALYZE_SUBSTEPS.map((s) => ({ name: s, status: substepStatus.get(s) ?? 'pending' })),
+    });
+  };
+
   try {
 
   // 读取全文：优先 texts/{id}.txt，回退到 DB 记录的 textPath / fulltextPath
@@ -586,22 +614,29 @@ async function analyzeSinglePaper(
     logger.warn(`Paper ${paperId}: no text content found`, { tried: textCandidates });
   }
 
-  const paperTitle = (paper['title'] as string) ?? '';
+  const paperTitleResolved = (paper['title'] as string) || paperTitle;
   const paperType = (paper['paperType'] as string) ?? 'unknown';
-  const relevance = (paper['relevance'] as string) ?? 'medium';
+  const rawRelevance = paper['relevance'] as string | null | undefined;
+  const relevance = rawRelevance ?? 'medium';
+
+  if (!rawRelevance) {
+    logger.warn(`[analyze] Paper ${paperId}: relevance field is NULL, defaulting to 'medium' → will route to intermediate analysis (no concept mappings). Set relevance='high' for full concept mapping.`);
+  }
 
   logger.debug(`[analyze] Paper ${paperId}: starting`, {
-    paperTitle: paperTitle.slice(0, 80),
+    paperTitle: paperTitleResolved.slice(0, 80),
     paperType,
     relevance,
+    relevanceWasNull: !rawRelevance,
     fulltextLength: fullText.length,
     isZeroConcepts: ctx.isZeroConcepts,
+    totalConceptsInFramework: ctx.conceptsForSubset.length,
   });
 
   // ══ §1.3: Mode dispatch ══
   if (ctx.isZeroConcepts) {
     // ── Generic analysis mode (§5) ──
-    logger.debug(`[analyze] Paper ${paperId}: mode=generic (zero concepts)`);
+    logger.info(`[analyze] Paper ${paperId}: mode=generic (zero concepts) — concept_mappings will be empty by design. Add concepts to your framework to enable mapping.`);
     runner.reportProgress({ currentStage: 'generic_analysis' });
 
     const memos = await collectMemos(dbProxy, paperId);
@@ -625,13 +660,14 @@ async function analyzeSinglePaper(
     }
 
     const genericResult = await runGenericAnalysis(
-      paperId, paperTitle, paperType, fullText,
+      paperId, paperTitleResolved, paperType, fullText,
       rawAnnotations as Array<Record<string, unknown>>,
       memos, allocation, llmClient, logger, workspacePath,
       'analyze.generic',
       ctx.modelRouterConfig.frontierModel,
       ctx.outputLanguage,
       runner.signal,
+      runner,
     );
 
     if (!genericResult.success) {
@@ -640,8 +676,14 @@ async function analyzeSinglePaper(
     }
 
     // Write suggestions via aggregator (guarded by autoSuggestConcepts config)
+    logger.info(`[analyze] Paper ${paperId}: generic analysis produced ${genericResult.suggestedConcepts.length} concept suggestions`, {
+      terms: genericResult.suggestedConcepts.map((s) => s.term),
+      autoSuggestConcepts: ctx.autoSuggestConcepts,
+    });
     if (ctx.autoSuggestConcepts) {
       await writeSuggestions(genericResult.suggestedConcepts, paperId, dbProxy, ctx.pushNotifier, logger, ctx.autoSuggestThreshold);
+    } else {
+      logger.warn(`[analyze] Paper ${paperId}: autoSuggestConcepts is DISABLED — suggestions will NOT be written to DB`);
     }
 
     writeAnalysisArtifact(
@@ -715,20 +757,23 @@ async function analyzeSinglePaper(
   });
 
   if (route.mode === 'skip') {
+    logger.info(`[analyze] Paper ${paperId}: SKIPPED (relevance=${relevance}) — no concept mappings will be produced. Change relevance to 'high' to enable full analysis.`);
     runner.reportSkipped(paperId);
-    await dbProxy.updatePaper(paperId, { analysisStatus: 'completed' });
+    await dbProxy.updatePaper(paperId, { analysisStatus: 'skipped' });
     return { status: 'skipped' };
   }
 
   if (route.mode === 'intermediate') {
     // ── Intermediate analysis (§2.2) ──
+    logger.info(`[analyze] Paper ${paperId}: INTERMEDIATE mode (relevance=${relevance}) — no concept mappings in this mode. Only metadata extraction. If recommendDeepAnalysis=true, will upgrade to full.`);
     runner.reportProgress({ currentStage: 'intermediate_analysis' });
 
     const intermediateResult = await runIntermediateAnalysis(
-      paperId, fullText, paperTitle, llmClient, logger, workspacePath,
+      paperId, fullText, paperTitleResolved, llmClient, logger, workspacePath,
       route.workflowId ?? 'analyze.intermediate',
       routeModel ?? ctx.modelRouterConfig.lowCostModel,
       runner.signal,
+      runner,
     );
 
     if (intermediateResult) {
@@ -786,9 +831,10 @@ async function analyzeSinglePaper(
 
   // ══ Full analysis mode ══
   runner.reportProgress({ currentStage: 'preparing_context' });
+  updateSubstep('preparing_context', 'running');
 
   // ── Step 2: Concept framework with async 6D selection (§3) ──
-  const paperCtx = { id: paperId, title: paperTitle, abstract: (paper['abstract'] as string) ?? '' };
+  const paperCtx = { id: paperId, title: paperTitleResolved, abstract: (paper['abstract'] as string) ?? '' };
 
   const subsetResult = await filterConceptSubsetAsync(
     ctx.conceptsForSubset, paperCtx, ctx.subsetDb, ctx.embedder,
@@ -797,6 +843,9 @@ async function analyzeSinglePaper(
     id: c.id, nameEn: c.nameEn, nameZh: c.nameZh,
     definition: c.definition, searchKeywords: c.searchKeywords, maturity: c.maturity,
   }));
+  if (conceptSubset.length === 0) {
+    logger.warn(`[analyze] Paper ${paperId}: concept subset is EMPTY (${ctx.conceptsForSubset.length} total concepts, 0 selected). LLM will have no concepts to map against — concept_mappings will likely be empty.`);
+  }
   logger.debug(`[analyze] Paper ${paperId}: concept subset selected`, {
     totalConcepts: ctx.conceptsForSubset.length,
     selectedConcepts: conceptSubset.length,
@@ -813,7 +862,7 @@ async function analyzeSinglePaper(
   let ragQualityReport: { coverage: string; retryCount: number; gaps: string[] } | null = null;
   if (ctx.ragService) {
     try {
-      const query = `${paperTitle} ${(paper['abstract'] as string ?? '').slice(0, 300)}`;
+      const query = `${paperTitleResolved} ${(paper['abstract'] as string ?? '').slice(0, 300)}`;
       const ragResult = await ctx.ragService.retrieve(query, { paperId, topK: 10 });
       // Filter out self-references
       ragPassages = ragResult.passages.filter((p) => p.paperId !== paperId);
@@ -838,7 +887,9 @@ async function analyzeSinglePaper(
   const annotationText = formatAnnotations(annotationsForFormat);
 
   // ── Step 6: CBM decision ──
+  updateSubstep('preparing_context', 'success');
   runner.reportProgress({ currentStage: 'budgeting' });
+  updateSubstep('budgeting', 'running');
 
   // Compute excluded concept names for compact display in the prompt
   const selectedIds = new Set(conceptSubset.map((c) => c.id));
@@ -891,7 +942,9 @@ async function analyzeSinglePaper(
   });
 
   // ── Step 7: Prompt assembly (§4 maturity-aware) ──
+  updateSubstep('budgeting', 'success');
   runner.reportProgress({ currentStage: 'prompting' });
+  updateSubstep('prompting', 'running');
 
   const tokenCounter = { count: (text: string) => countTokens(text) };
   const assembler = createPromptAssembler(tokenCounter, logger);
@@ -902,7 +955,7 @@ async function analyzeSinglePaper(
     frameworkState: ctx.frameworkState,
     paperId,
     paperType,
-    paperTitle,
+    paperTitle: paperTitleResolved,
     conceptFramework: conceptSubset.map((c) => ({
       id: c.id, nameEn: c.nameEn, nameZh: c.nameZh,
       definition: c.definition, searchKeywords: c.searchKeywords, maturity: c.maturity,
@@ -944,7 +997,9 @@ async function analyzeSinglePaper(
   }
 
   // ── Step 8: LLM call ──
+  updateSubstep('prompting', 'success');
   runner.reportProgress({ currentStage: 'analyzing' });
+  updateSubstep('analyzing', 'running');
 
   const systemTokens = countTokens(assembled.systemPrompt);
   const userTokens = countTokens(assembled.userMessage);
@@ -957,14 +1012,14 @@ async function analyzeSinglePaper(
   });
 
   const llmStartMs = Date.now();
-  const result = await llmClient.complete({
+  const result = await streamingComplete(llmClient, {
     systemPrompt: assembled.systemPrompt,
     messages: [{ role: 'user', content: assembled.userMessage }],
     workflowId: route.workflowId ?? 'analyze.full',
     model: routeModel ?? ctx.modelRouterConfig.frontierModel,
     responseFormat: ANALYZE_STRUCTURED_RESPONSE_FORMAT,
     signal: runner.signal,
-  });
+  }, runner);
   const llmLatencyMs = Date.now() - llmStartMs;
 
   logger.info(`[analyze] Paper ${paperId}: LLM responded`, {
@@ -976,7 +1031,9 @@ async function analyzeSinglePaper(
   });
 
   // ── Step 9: Output parsing with validation ──
+  updateSubstep('analyzing', 'success');
   runner.reportProgress({ currentStage: 'parsing' });
+  updateSubstep('parsing', 'running');
 
   const validated = parseStructuredAnalyzeOutput(result.text, {
     paperId,
@@ -991,6 +1048,7 @@ async function analyzeSinglePaper(
     },
     conceptLookup: ctx.conceptsForPrompt.length > 0 ? {
       exists: (cid: string) => ctx.conceptsForPrompt.some((c) => c.id === cid),
+      allIds: new Set(ctx.conceptsForPrompt.map((c) => c.id)),
     } : undefined,
   }, logger);
 
@@ -1003,9 +1061,13 @@ async function analyzeSinglePaper(
     return { status: 'failed', stage: 'parsing', message: 'Analyze output parse failed' };
   }
 
+  if (validated.conceptMappings.length === 0 && conceptSubset.length > 0) {
+    logger.warn(`[analyze] Paper ${paperId}: LLM returned 0 concept mappings despite ${conceptSubset.length} concepts in prompt. Possible causes: paper irrelevant to all concepts, or LLM did not follow mapping instructions. Check analysis artifact for details.`);
+  }
   logger.debug(`[analyze] Paper ${paperId}: parse succeeded`, {
     conceptMappings: validated.conceptMappings.length,
     suggestedConcepts: validated.suggestedConcepts.length,
+    divertedToSuggestions: validated.warnings.filter((w) => w.includes('diverted')).length,
     warningCount: validated.warnings.length,
     bodyLength: validated.body.length,
   });
@@ -1023,7 +1085,9 @@ async function analyzeSinglePaper(
   }
 
   // ── Step 10: Result write (transactional) ──
+  updateSubstep('parsing', 'success');
   runner.reportProgress({ currentStage: 'writing' });
+  updateSubstep('writing', 'running');
 
   // §3 Fix: Check concept staleness before writing results
   if (validated.conceptMappings.length > 0) {
@@ -1120,6 +1184,7 @@ async function analyzeSinglePaper(
   // Relations are NOT computed per-paper — O(N²) cost with hot concepts.
   // Instead, analyzed paper IDs are collected and relations are computed
   // in a single post-batch pass (see workflow entry function).
+  updateSubstep('writing', 'success');
   return { status: 'completed' };
   } catch (error) {
     if (isAbortError(error, runner.signal)) {
@@ -1232,7 +1297,7 @@ async function writeSuggestions(
 ): Promise<void> {
   if (suggestions.length === 0) return;
 
-  logger.debug(`[analyze] Paper ${paperId}: writing ${suggestions.length} concept suggestions`, {
+  logger.info(`[analyze] Paper ${paperId}: writing ${suggestions.length} concept suggestions to DB`, {
     terms: suggestions.map((s) => s.term),
   });
 
@@ -1242,15 +1307,17 @@ async function writeSuggestions(
   if (dbProxy.getSuggestedConceptByTerm) {
     try {
       const result = await aggregateSuggestions(suggestions, paperId, dbProxy as any, pushNotifier, threshold);
-      logger.debug(`[analyze] Paper ${paperId}: suggestion aggregation done`, {
+      logger.info(`[analyze] Paper ${paperId}: suggestion aggregation done`, {
         new: result.newSuggestions,
         updated: result.updatedSuggestions,
         notifications: result.notificationsSent,
       });
       return;
     } catch (err) {
-      logger.debug(`Suggestion aggregator failed for paper ${paperId}, falling back to simple write`, { error: (err as Error).message });
+      logger.warn(`[analyze] Paper ${paperId}: suggestion aggregator failed, falling back to simple write`, { error: (err as Error).message, stack: (err as Error).stack });
     }
+  } else {
+    logger.warn(`[analyze] Paper ${paperId}: getSuggestedConceptByTerm not available on dbProxy — using fallback write path`);
   }
 
   // Fallback: simple write via addSuggestedConcept
@@ -1265,8 +1332,9 @@ async function writeSuggestions(
         suggestedDefinition: suggestion.suggestedDefinition,
         suggestedKeywords: suggestion.suggestedKeywords,
       });
+      logger.info(`[analyze] Paper ${paperId}: suggestion "${suggestion.term}" written via fallback`);
     } catch (err) {
-      logger.warn(`Paper ${paperId}: suggestion write failed for "${suggestion.term}"`, { error: (err as Error).message });
+      logger.warn(`[analyze] Paper ${paperId}: suggestion write FAILED for "${suggestion.term}"`, { error: (err as Error).message });
     }
   }
 }

@@ -32,6 +32,7 @@ export async function initSession(
 ): Promise<void> {
   if (session) return;
 
+  // eslint-disable-next-line no-console
   console.log(`[DLA-Engine] Loading ONNX model from ${modelPath} (EP: ${executionProvider})`);
   const ortModule = await getOrt();
 
@@ -49,6 +50,7 @@ export async function initSession(
     enableCpuMemArena: true,
     enableMemPattern: true,
   });
+  // eslint-disable-next-line no-console
   console.log(`[DLA-Engine] Model loaded in ${Date.now() - t0}ms`);
 }
 
@@ -83,7 +85,7 @@ export async function detectPage(
   try {
     results = await session.run({ images: inputTensor });
   } catch (err) {
-    throw new Error(`ONNX inference failed for page ${pageIndex}: ${(err as Error).message}`);
+    throw new Error(`ONNX inference failed for page ${pageIndex}: ${(err as Error).message}`, { cause: err });
   }
   const inferenceMs = Date.now() - startMs;
 
@@ -116,6 +118,7 @@ export async function detectPage(
 /** Release ONNX session resources */
 export async function destroySession(): Promise<void> {
   if (session) {
+    // eslint-disable-next-line no-console
     console.log('[DLA-Engine] Releasing ONNX session');
     session.release?.();
     session = null;

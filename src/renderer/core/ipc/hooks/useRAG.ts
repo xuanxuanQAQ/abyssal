@@ -39,6 +39,7 @@ export function useWritingContext(request: WritingContextRequest | null) {
   return useQuery({
     queryKey: buildWritingContextQueryKey(request),
     queryFn: async () => {
+      // eslint-disable-next-line no-console
       console.debug('[useWritingContext] fetching', request);
       try {
         return await getAPI().rag.getWritingContext(request!);

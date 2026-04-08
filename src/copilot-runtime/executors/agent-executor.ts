@@ -4,7 +4,7 @@
  * Implements the unified executor interface for tool-use conversation loops.
  */
 
-import type { LlmClient, StreamChunk } from '../../adapter/llm-client/llm-client';
+import type { LlmClient } from '../../adapter/llm-client/llm-client';
 import type { CapabilityRegistry } from '../../adapter/capabilities';
 import type { ResearchSession } from '../../core/session/research-session';
 import type { EventBus } from '../../core/event-bus';
@@ -14,7 +14,6 @@ import { routeToolFamilies, buildToolRouteInstruction } from '../../adapter/orch
 import type { ToolRouteFamily } from '../../adapter/capabilities/types';
 import type {
   CopilotOperation,
-  ContextSnapshot,
   ExecutionStep,
 } from '../types';
 import type { OperationEventEmitter } from '../event-emitter';
@@ -177,9 +176,6 @@ export class AgentExecutor {
 
       let roundText = '';
       const roundToolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-      let currentToolId = '';
-      let currentToolName = '';
-      let currentToolInput = '';
 
       for await (const chunk of stream) {
         if (signal?.aborted) break;
@@ -204,13 +200,7 @@ export class AgentExecutor {
             break;
 
           case 'tool_use_start':
-            currentToolId = chunk.id;
-            currentToolName = chunk.name;
-            currentToolInput = '';
-            break;
-
           case 'tool_use_delta':
-            currentToolInput += chunk.delta;
             break;
 
           case 'tool_use_end':

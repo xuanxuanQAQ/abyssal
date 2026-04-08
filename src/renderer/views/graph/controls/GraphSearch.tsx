@@ -2,7 +2,6 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next';
 import { Search } from 'lucide-react';
 import type Graph from 'graphology';
-import { useAppStore } from '../../../core/store';
 import { resolveNodeType, resolveNodeLabel } from '../resolveNode';
 
 export interface GraphSearchProps {

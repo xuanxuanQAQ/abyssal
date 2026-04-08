@@ -40,6 +40,7 @@ export {
 export {
   loadTemplate,
   selectAnalyzeTemplate,
+  buildJsonExample,
   buildYamlExample,
   type TemplateId,
 } from '../prompt-assembler/template-loader';

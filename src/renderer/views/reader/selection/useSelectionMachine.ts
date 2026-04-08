@@ -27,7 +27,6 @@ import {
 } from './dragEnvelope';
 import {
   isInsideTextLayer,
-  findPageNumberFromNode,
   buildTextSnapshot,
   type TextSnapshot,
 } from './documentSelection';

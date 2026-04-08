@@ -298,7 +298,7 @@ function mergeWithSpanning(
   spanning: TypedBlock[],
 ): TypedBlock[] {
   const result: TypedBlock[] = [];
-  let li = 0, ri = 0, si = 0;
+  let si = 0;
 
   // Read left column first, then right, but insert spanning blocks
   // at their correct vertical positions
@@ -383,7 +383,7 @@ const SECTION_KEYWORD_MAP: Array<[RegExp, SectionLabel]> = [
 const REFERENCE_RE = /references?|bibliography|参考文献|works?\s+cited/i;
 
 /** Detect heading depth from numbering: "3" → 1, "3.1" → 2, "3.1.2" → 3, "IV" → 1 */
-const NUMBERED_PREFIX_RE = /^(\d+(?:\.\d+)*|[IVXLC]+)[\.\s)\-:]\s*/i;
+const NUMBERED_PREFIX_RE = /^(\d+(?:\.\d+)*|[IVXLC]+)[.\s)\-:]\s*/i;
 
 function detectHeadingDepth(text: string): number {
   const m = NUMBERED_PREFIX_RE.exec(text.trim());
@@ -399,7 +399,7 @@ function detectHeadingDepth(text: string): number {
 function classifySectionTitle(text: string): SectionLabel {
   const trimmed = text.trim();
   // Strip leading section numbers
-  const cleaned = trimmed.replace(/^(?:\d+(?:\.\d+)*|[IVXLC]+)[\.\s)\-:]\s*/i, '');
+  const cleaned = trimmed.replace(/^(?:\d+(?:\.\d+)*|[IVXLC]+)[.\s)\-:]\s*/i, '');
   for (const [re, label] of SECTION_KEYWORD_MAP) {
     if (re.test(cleaned)) return label;
   }

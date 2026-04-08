@@ -67,6 +67,10 @@ export interface PipelineProgressEvent {
   error?: { code: string; message: string };
   /** 当前论文的子步骤进度（如 acquire cascade 各数据源状态） */
   substeps?: SubstepInfo[];
+  /** 预估剩余时间（毫秒），completedItems >= 3 后可用 */
+  estimatedRemainingMs?: number | null;
+  /** 当前正在处理的条目标识（如论文标题/概念名称） */
+  currentItemLabel?: string;
 }
 
 export interface StreamChunkEvent {

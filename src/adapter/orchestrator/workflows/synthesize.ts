@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { WorkflowOptions, WorkflowRunnerContext } from '../workflow-runner';
 import type { LlmClient } from '../../llm-client/llm-client';
+import { streamingComplete } from './streaming-llm-helper';
 import type { ContextBudgetManager } from '../../context-budget/context-budget-manager';
 import type { Logger } from '../../../core/infra/logger';
 import type { RankedChunk } from '../../../core/types/chunk';
@@ -35,7 +36,7 @@ import {
 import { countTokens } from '../../llm-client/token-counter';
 import { correctiveRagLoop, type LlmCallFn } from './corrective-rag/corrective-rag-loop';
 import { hasEvidenceDeficiency, defaultPassReport, type QualityReport } from './corrective-rag/quality-report';
-import { validateCitations, extractCitedPaperIds } from './citation/citation-validator';
+import { validateCitations } from './citation/citation-validator';
 import { preformatCitations, type CitationFormatter } from './citation/citation-preformatter';
 import { classifyError } from '../error-classifier';
 import { resolveCurrentRagService } from './rag-service-resolver';
@@ -123,6 +124,19 @@ async function synthesizeConcept(
   const cragWorkflowId = SYNTHESIZE_STAGE_WORKFLOWS.crag;
   const draftModel = llmClient.resolveModel(draftWorkflowId);
 
+  // ── Substep tracking for UI timeline ──
+  const SYNTH_SUBSTEPS = ['collecting_notes', 'retrieving', 'crag_evaluation', 'budgeting', 'synthesizing', 'citations', 'writing'] as const;
+  type SynthSubstep = typeof SYNTH_SUBSTEPS[number];
+  const substepStatus = new Map<string, 'pending' | 'running' | 'success' | 'failed' | 'skipped'>(
+    SYNTH_SUBSTEPS.map((s) => [s, 'pending']),
+  );
+  const updateSubstep = (name: SynthSubstep, status: 'running' | 'success' | 'failed' | 'skipped') => {
+    substepStatus.set(name, status);
+    runner.reportProgress({
+      substeps: SYNTH_SUBSTEPS.map((s) => ({ name: s, status: substepStatus.get(s) ?? 'pending' })),
+    });
+  };
+
   // ══ Step 1: Concept & mappings (§2.2) ══
   const concept = await dbProxy.getConcept(conceptId);
   if (!concept) { runner.reportSkipped(conceptId); return; }
@@ -133,6 +147,10 @@ async function synthesizeConcept(
     runner.reportSkipped(conceptId);
     return;
   }
+
+  // Report human-readable concept name for UI
+  const conceptLabel = (concept['nameEn'] as string) ?? (concept['nameZh'] as string) ?? conceptId;
+  runner.reportProgress({ currentItemLabel: conceptLabel });
 
   const mappings = await dbProxy.getMappingsByConcept(conceptId);
   const filteredMappings = mappings.filter((m) => {
@@ -152,6 +170,7 @@ async function synthesizeConcept(
 
   // ══ Step 2: Memos & notes ══
   runner.reportProgress({ currentStage: 'collecting_notes' });
+  updateSubstep('collecting_notes', 'running');
   const memos = await dbProxy.getMemosByEntity('concept', conceptId);
   const memosForPrompt: MemoForFormat[] = memos.map((m) => ({
     text: (m['text'] as string) ?? '',
@@ -161,7 +180,9 @@ async function synthesizeConcept(
   }));
 
   // ══ Step 3: Broad Context RAG retrieval ══
+  updateSubstep('collecting_notes', 'success');
   runner.reportProgress({ currentStage: 'retrieving' });
+  updateSubstep('retrieving', 'running');
   let ragChunks: RankedChunk[] = [];
   let qualityReport: QualityReport = defaultPassReport();
 
@@ -188,7 +209,9 @@ async function synthesizeConcept(
 
   // ══ Step 4: Corrective RAG loop (§1) ══
   if (ctx.enableCorrectiveRag && ragChunks.length > 0 && ctx.ragService) {
+    updateSubstep('retrieving', 'success');
     runner.reportProgress({ currentStage: 'crag_evaluation' });
+    updateSubstep('crag_evaluation', 'running');
 
     const llmCallFn: LlmCallFn = async (sys, user) => {
       const r = await llmClient.complete({
@@ -254,10 +277,12 @@ async function synthesizeConcept(
   }
 
   // ══ Step 6: CBM budget allocation ══
+  updateSubstep('crag_evaluation', 'success');
   runner.reportProgress({ currentStage: 'budgeting' });
+  updateSubstep('budgeting', 'running');
   const memoText = memosForPrompt.map((m) => m.text).join('\n');
 
-  const allocation = contextBudgetManager.allocate({
+  const _allocation = contextBudgetManager.allocate({
     taskType: 'synthesize',
     model: draftModel,
     modelContextWindow: llmClient.getContextWindow(draftWorkflowId),
@@ -303,15 +328,19 @@ async function synthesizeConcept(
   ].filter(Boolean).join('\n\n---\n\n');
 
   // ══ Step 8: LLM call ══
+  updateSubstep('budgeting', 'success');
   runner.reportProgress({ currentStage: 'synthesizing' });
-  const result = await llmClient.complete({
+  updateSubstep('synthesizing', 'running');
+  const result = await streamingComplete(llmClient, {
     systemPrompt,
     messages: [{ role: 'user', content: userContent }],
     workflowId: draftWorkflowId,
-  });
+  }, runner);
 
   // ══ Step 9: Citation validation + preformatting (§2.5) ══
+  updateSubstep('synthesizing', 'success');
   runner.reportProgress({ currentStage: 'citations' });
+  updateSubstep('citations', 'running');
   const validated = validateCitations(result.text, knownPaperIds);
 
   if (validated.invalidCount > 0) {
@@ -347,7 +376,9 @@ async function synthesizeConcept(
   const preformatted = preformatCitations(validated.text, cslFormatter);
 
   // ══ Step 10: Draft write (idempotent overwrite) ══
+  updateSubstep('citations', 'success');
   runner.reportProgress({ currentStage: 'writing' });
+  updateSubstep('writing', 'running');
   const draftDir = path.join(workspacePath, 'drafts');
   fs.mkdirSync(draftDir, { recursive: true });
 
@@ -361,6 +392,7 @@ async function synthesizeConcept(
     const reportPath = path.join(draftDir, `${conceptId}.quality.json`);
     fs.writeFileSync(reportPath, JSON.stringify(qualityReport, null, 2), 'utf-8');
   }
+  updateSubstep('writing', 'success');
 }
 
 // ─── Helpers ───

@@ -63,7 +63,7 @@ export interface AcquisitionStats {
 
 export function createAcquireWorkflow(services: AcquireServices) {
   return async (options: WorkflowOptions, runner: WorkflowRunnerContext): Promise<void> => {
-    const { dbProxy, acquireService, logger, workspacePath } = services;
+    const { dbProxy, acquireService: _acquireService, logger, workspacePath: _workspacePath } = services;
     const breaker = new CircuitBreaker(10);
     const guard = createConcurrencyGuard('acquire', options.concurrency);
 

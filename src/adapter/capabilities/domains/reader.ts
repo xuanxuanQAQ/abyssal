@@ -5,7 +5,7 @@
  * create annotations, extract claims.
  */
 
-import type { Capability, OperationContext, OperationResult } from '../types';
+import type { Capability } from '../types';
 
 export function createReaderCapability(): Capability {
   return {

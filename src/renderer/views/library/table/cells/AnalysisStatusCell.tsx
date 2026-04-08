@@ -8,6 +8,7 @@ const STATUS_CONFIG: Record<AnalysisStatus, { tooltip: string; tone: StatusIndic
   not_started: { tooltip: '未分析', tone: 'neutral' },
   needs_review: { tooltip: '需要人工审阅', tone: 'warning', glyph: 'alert' },
   failed: { tooltip: '分析失败', tone: 'danger', glyph: 'alert' },
+  skipped: { tooltip: '已跳过', tone: 'neutral' },
 };
 
 interface AnalysisStatusCellProps {

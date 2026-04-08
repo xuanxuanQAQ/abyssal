@@ -13,7 +13,6 @@
 import OpenAI from 'openai';
 import type {
   Message,
-  ContentBlock,
   CompletionResult,
   StreamChunk,
   ToolDefinition,
@@ -26,6 +25,7 @@ import type {
 } from './llm-client';
 import { getModelContextWindow, isAlwaysReasoningModel } from './model-router';
 import { countTokens } from './token-counter';
+import type { Logger } from '../../core/infra/logger';
 import { classifyCreateError, mapFinishReason, safeParseJson, type StructuredOutputTier } from './shared';
 
 // ─── Backend configuration ───
@@ -34,6 +34,7 @@ export interface OpenAIBackendConfig {
   baseURL?: string;
   apiKey: string;
   provider: string; // 'openai' | 'deepseek' | 'gemini' | 'siliconflow' | 'doubao' | 'kimi' | 'vllm'
+  logger?: Logger;
 }
 
 // ─── OpenAI adapter ───
@@ -41,9 +42,11 @@ export interface OpenAIBackendConfig {
 export class OpenAIAdapter implements LlmAdapter {
   private readonly client: OpenAI;
   private readonly provider: string;
+  private readonly logger: Logger;
 
   constructor(config: OpenAIBackendConfig) {
     this.provider = config.provider;
+    this.logger = config.logger ?? { debug() {}, info() {}, warn() {}, error() {} };
     this.client = new OpenAI({
       apiKey: config.apiKey || 'not-needed', // local OpenAI-compatible adapters may not need a key
       baseURL: config.baseURL,
@@ -75,13 +78,36 @@ export class OpenAIAdapter implements LlmAdapter {
     request['stream'] = true;
     request['stream_options'] = { include_usage: true };
 
+    const baseURL = this.client.baseURL;
+    const streamStart = Date.now();
+    this.logger.debug('[OpenAIAdapter] completeStream: creating stream request', {
+      provider: this.provider,
+      baseURL,
+      model: params.model,
+      tier,
+      hasReasoning: !!params.reasoning,
+      hasResponseFormat: !!params.responseFormat,
+      maxTokens: request['max_tokens'],
+    });
+
     let stream;
     try {
       stream = await this.client.chat.completions.create(
         request as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
         params.signal ? { signal: params.signal } : undefined,
       );
+      this.logger.debug('[OpenAIAdapter] completeStream: stream object created', {
+        provider: this.provider,
+        model: params.model,
+        createLatencyMs: Date.now() - streamStart,
+      });
     } catch (err) {
+      this.logger.error('[OpenAIAdapter] completeStream: create() threw', err as Error, {
+        provider: this.provider,
+        model: params.model,
+        baseURL,
+        elapsedMs: Date.now() - streamStart,
+      });
       if (params.signal?.aborted) {
         yield { type: 'error', code: 'ABORTED', message: 'Request cancelled' };
       } else {
@@ -100,9 +126,22 @@ export class OpenAIAdapter implements LlmAdapter {
     let finishReason: FinishReason = 'end_turn';
     let hasRealToolCalls = false;
     const toolJsonBuffers = new Map<number, { id: string; name: string; json: string }>();
+    let adapterChunkCount = 0;
 
     try {
       for await (const chunk of stream) {
+        adapterChunkCount++;
+        if (adapterChunkCount === 1) {
+          this.logger.debug('[OpenAIAdapter] completeStream: first raw chunk from SDK', {
+            provider: this.provider,
+            model: params.model,
+            latencyMs: Date.now() - streamStart,
+            chunkId: chunk.id,
+            hasChoices: !!chunk.choices?.length,
+          });
+          // Signal that the API connection is alive — LlmClient switches to a longer first-token timeout
+          yield { type: 'connected' as const };
+        }
         const choice = chunk.choices?.[0];
         if (!choice) {
           // Usage-only chunk (final)
@@ -185,8 +224,23 @@ export class OpenAIAdapter implements LlmAdapter {
         finishReason = 'end_turn';
       }
 
+      this.logger.info('[OpenAIAdapter] completeStream: stream iteration done', {
+        provider: this.provider,
+        model: params.model,
+        totalChunks: adapterChunkCount,
+        totalElapsedMs: Date.now() - streamStart,
+        textLength: fullText.length,
+        reasoningLength: reasoningText.length,
+        finishReason,
+      });
       yield { type: 'message_end', text: fullText, usage, finishReason, reasoning: reasoningText || null };
     } catch (err) {
+      this.logger.error('[OpenAIAdapter] completeStream: iteration error', err as Error, {
+        provider: this.provider,
+        model: params.model,
+        chunksBeforeError: adapterChunkCount,
+        elapsedMs: Date.now() - streamStart,
+      });
       if (params.signal?.aborted) {
         yield { type: 'error', code: 'ABORTED', message: 'Request cancelled' };
       } else {
@@ -484,19 +538,6 @@ function isSyntheticTool(name: string): boolean {
 }
 
 /**
- * Detect Doubao Seed models that support native json_schema (≥ 1.6).
- * Model names: doubao-seed-1.6, doubao-seed-1.8, doubao-seed-2.0,
- *              doubao-seed-2-0-pro-260215, etc.
- */
-function isDoubao16Plus(model: string): boolean {
-  const match = model.match(/doubao-seed-(\d+)[.\-](\d+)/);
-  if (!match) return false;
-  const major = parseInt(match[1]!, 10);
-  const minor = parseInt(match[2]!, 10);
-  return major > 1 || (major === 1 && minor >= 6);
-}
-
-/**
  * Resolve the optimal structured output tier for a model/provider.
  *
  * Tier 1 (native):            gpt-4o, gpt-4o-mini, gemini
@@ -511,6 +552,9 @@ function resolveStructuredOutputTier(model: string, provider: string): Structure
   // Tier 1: native json_schema via response_format
   if (provider === 'openai' && !isAlwaysReasoningModel(model)) return 'native';
   if (provider === 'gemini') return 'native';
+
+  // Tier 3 early: doubao/kimi don't support function calling — schema hint only
+  if (provider === 'doubao' || provider === 'kimi') return 'json_object_prompt';
 
   // Tier 2: strict function calling (constrained decoding via tool shim)
   if (isAlwaysReasoningModel(model)) return 'tool_shim'; // o3, o4

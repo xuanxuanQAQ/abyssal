@@ -1,5 +1,3 @@
-import type { AbyssalConfig } from '../types/config';
-
 // ═══ LogLevel ═══
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
@@ -92,9 +90,7 @@ export class FileLogger implements Logger {
     this.logDir = logDir;
     this.minLevel = LEVEL_SEVERITY[level];
     this._mirrorToConsole = mirrorToConsole;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     this._fs = require('node:fs');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     this._path = require('node:path');
     try {
       this._fs.mkdirSync(this.logDir, { recursive: true });
@@ -140,10 +136,12 @@ export class FileLogger implements Logger {
 
     // Mirror to console in dev mode so logs are visible in DevTools / terminal
     if (this._mirrorToConsole) {
+      /* eslint-disable no-console */
       const consoleFn = level === 'error' ? console.error
         : level === 'warn' ? console.warn
         : level === 'debug' ? console.debug
         : console.log;
+      /* eslint-enable no-console */
       const errStr = error ? ` [${error.name}: ${error.message}]` : '';
       const ctxStr = ctx && Object.keys(ctx).length > 0 ? ' ' + JSON.stringify(ctx) : '';
       consoleFn(`[${level.toUpperCase()}] ${msg}${errStr}${ctxStr}`);

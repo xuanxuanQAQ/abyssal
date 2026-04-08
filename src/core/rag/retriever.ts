@@ -4,13 +4,11 @@
 import type Database from 'better-sqlite3';
 import type { RankedChunk, ChunkSource, SectionType } from '../types/chunk';
 import type { RetrievalRequest, RetrievalResult, RetrievalQualityReport } from '../types/retrieval';
-import type { ConceptId, PaperId, MemoId, ChunkId } from '../types/common';
+import type { PaperId } from '../types/common';
 import type { RagConfig } from '../types/config';
 import type { DatabaseService } from '../database';
 import type { Logger } from '../infra/logger';
 import { l2DistanceToScore, l2Distance } from '../infra/vector-math';
-import { estimateMemoTokens } from '../infra/token-counter';
-
 import type { Embedder } from './embedder';
 import type { Reranker } from './reranker';
 import { expandQuery } from './query-intelligence';

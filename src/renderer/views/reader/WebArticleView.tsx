@@ -14,11 +14,11 @@
 import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import Markdown from 'react-markdown';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Highlighter, StickyNote, Tag, ChevronDown, Hand } from 'lucide-react';
 import { useWebArticle } from './hooks/useWebArticle';
 import { useReaderStore } from '../../core/store/useReaderStore';
 import { emitUserAction } from '../../core/hooks/useEventBridge';
-import { SelectionToolbar } from './annotations/SelectionToolbar';
+import { ColorPicker } from './annotations/ColorPicker';
 import { NotePopover } from './annotations/NotePopover';
 import { ConceptSelector } from './annotations/ConceptSelector';
 import { CreateConceptDialog } from '../analysis/tabs/concepts/CreateConceptDialog';
@@ -91,12 +91,27 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
 
   // ── 标注相关 ──
   const highlightColor = useReaderStore((s) => s.highlightColor);
+  const activeAnnotationTool = useReaderStore((s) => s.activeAnnotationTool);
+  const setActiveAnnotationTool = useReaderStore((s) => s.setActiveAnnotationTool);
   const { data: annotations = [] } = useAnnotations(paperId);
   const annotationCRUD = useAnnotationCRUD(paperId);
   const { data: conceptsData } = useConceptList();
   const concepts: Concept[] = conceptsData ?? [];
 
-  const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const colorPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showColorPicker) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
+        setShowColorPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showColorPicker]);
+
   const [pendingNote, setPendingNote] = useState<PendingAnnotation | null>(null);
   const [pendingConcept, setPendingConcept] = useState<PendingAnnotation | null>(null);
   const [showCreateConcept, setShowCreateConcept] = useState(false);
@@ -107,7 +122,6 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
   const dismissSelection = useCallback(() => {
     window.getSelection()?.removeAllRanges();
     setHighlightRects(clearRects);
-    setToolbarPos(null);
     selectedTextRef.current = '';
     useReaderStore.getState().setQuotedSelection(null);
   }, []);
@@ -125,7 +139,6 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
       const node = sel.anchorNode;
       if (node && contentRef.current.contains(node)) {
         setHighlightRects(clearRects);
-        setToolbarPos(null);
         selectedTextRef.current = '';
         useReaderStore.getState().setQuotedSelection(null);
       }
@@ -143,15 +156,6 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
       const rects = captureSelectionRects(range, contentRef.current);
       setHighlightRects(rects);
       selectedTextRef.current = text;
-
-      // 工具栏定位：选区第一个矩形的上方居中
-      const firstClientRect = range.getClientRects()[0];
-      if (firstClientRect) {
-        setToolbarPos({
-          x: firstClientRect.left + firstClientRect.width / 2,
-          y: firstClientRect.top - 8,
-        });
-      }
 
       useReaderStore.getState().setQuotedSelection({ text, page: 1 });
       emitUserAction({
@@ -185,25 +189,6 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
   }, []);
 
-  // 工具栏跟随滚动
-  useEffect(() => {
-    if (!toolbarPos || !scrollRef.current) return;
-    const container = scrollRef.current;
-    const handleScroll = () => {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-        setToolbarPos(null);
-        return;
-      }
-      const firstRect = sel.getRangeAt(0).getClientRects()[0];
-      if (firstRect) {
-        setToolbarPos({ x: firstRect.left + firstRect.width / 2, y: firstRect.top - 8 });
-      }
-    };
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [toolbarPos]);
-
   // 外部清除同步
   useEffect(() => {
     const unsub = useReaderStore.subscribe(
@@ -211,7 +196,6 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
       (qs) => {
         if (qs === null) {
           setHighlightRects(clearRects);
-          setToolbarPos(null);
           selectedTextRef.current = '';
         }
       },
@@ -232,27 +216,65 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
     [annotationCRUD, dismissSelection],
   );
 
-  const handleNote = useCallback(() => {
-    if (!contentRef.current || !toolbarPos) return;
+  const handleNote = useCallback((anchor: { x: number; y: number }) => {
+    if (!contentRef.current) return;
     const pos = buildAnnotationPosition(contentRef.current);
     const text = selectedTextRef.current;
     if (!pos || !text) return;
-    setPendingNote({ position: pos, selectedText: text, anchor: toolbarPos });
+    setPendingNote({ position: pos, selectedText: text, anchor });
     dismissSelection();
-  }, [toolbarPos, dismissSelection]);
+  }, [dismissSelection]);
 
-  const handleConceptTag = useCallback(() => {
-    if (!contentRef.current || !toolbarPos) return;
+  const handleConceptTag = useCallback((anchor: { x: number; y: number }) => {
+    if (!contentRef.current) return;
     const pos = buildAnnotationPosition(contentRef.current);
     const text = selectedTextRef.current;
     if (!pos || !text) return;
-    setPendingConcept({ position: pos, selectedText: text, anchor: toolbarPos });
+    setPendingConcept({ position: pos, selectedText: text, anchor });
     dismissSelection();
-  }, [toolbarPos, dismissSelection]);
+  }, [dismissSelection]);
 
   const handleColorChange = useCallback(
     (color: HighlightColor) => useReaderStore.getState().setHighlightColor(color),
     [],
+  );
+
+  // ── Acrobat-style: auto-apply annotation on mouseup when a tool is active ──
+  useEffect(() => {
+    const handleMouseUp = () => {
+      const tool = useReaderStore.getState().activeAnnotationTool;
+      const color = useReaderStore.getState().highlightColor;
+      if (tool !== 'textHighlight' && tool !== 'textNote' && tool !== 'textConceptTag') return;
+      if (!contentRef.current) return;
+
+      const pos = buildAnnotationPosition(contentRef.current);
+      const text = selectedTextRef.current;
+      if (!pos || !text) return;
+
+      if (tool === 'textHighlight') {
+        annotationCRUD.createHighlight(1, pos, text, color);
+        dismissSelection();
+      } else if (tool === 'textNote') {
+        const rect = contentRef.current.getBoundingClientRect();
+        setPendingNote({ position: pos, selectedText: text, anchor: { x: rect.left + rect.width / 2, y: rect.top + 48 } });
+        dismissSelection();
+      } else if (tool === 'textConceptTag') {
+        const rect = contentRef.current.getBoundingClientRect();
+        setPendingConcept({ position: pos, selectedText: text, anchor: { x: rect.left + rect.width / 2, y: rect.top + 48 } });
+        dismissSelection();
+      }
+    };
+
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => document.removeEventListener('mouseup', handleMouseUp);
+  }, [annotationCRUD, dismissSelection]);
+
+  // ── Tool toggle (like PDF toolbar) ──
+  const toggleTool = useCallback(
+    (tool: 'hand' | 'textHighlight' | 'textNote' | 'textConceptTag') => {
+      setActiveAnnotationTool(activeAnnotationTool === tool ? null : tool);
+    },
+    [activeAnnotationTool, setActiveAnnotationTool],
   );
 
   // ── Markdown 渲染隔离 ──
@@ -296,6 +318,15 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
       td: ({ children }: any) => (
         <td style={{ border: '1px solid var(--border-subtle)', padding: '6px 10px' }}>{children}</td>
       ),
+      img: ({ src, alt }: any) => (
+        <img
+          src={src}
+          alt={alt ?? ''}
+          style={{ maxWidth: '100%', height: 'auto', display: 'block', margin: '1em auto', borderRadius: 4 }}
+          loading="lazy"
+          onError={(e: React.SyntheticEvent<HTMLImageElement>) => { e.currentTarget.style.display = 'none'; }}
+        />
+      ),
       hr: () => (
         <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '1.5em 0' }} />
       ),
@@ -334,11 +365,156 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
   const venue = (paper as any)?.venue ?? (paper as any)?.publisher;
   if (venue) metaItems.push(venue);
 
-  const showToolbar = highlightRects.length > 0;
+  const hasSelection = highlightRects.length > 0 && activeAnnotationTool === null;
+
+  const ACTIVE_BG = 'var(--accent-color, #2563eb)';
+  const ACTIVE_COLOR = '#fff';
+  const btnBase: React.CSSProperties = {
+    height: 28, width: 28, padding: 0,
+    borderRadius: 'var(--radius-sm)', border: 'none',
+    background: 'transparent', color: 'var(--text-primary)',
+    cursor: 'pointer', display: 'inline-flex',
+    alignItems: 'center', justifyContent: 'center',
+    transition: 'background 0.15s, color 0.15s',
+  };
+  const toolBtnStyle = (tool: string): React.CSSProperties => ({
+    ...btnBase,
+    background: activeAnnotationTool === tool ? ACTIVE_BG : 'transparent',
+    color: activeAnnotationTool === tool ? ACTIVE_COLOR : 'var(--text-primary)',
+    borderRadius: 6,
+  });
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <style>{`.web-article-content ::selection { background: transparent; color: inherit; }`}</style>
+
+      {/* ── Fixed top annotation toolbar (always visible, like PDF ToolbarStrip) ── */}
+      <div
+        style={{
+          height: 36,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '0 8px',
+          background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border-subtle)',
+          fontSize: 'var(--text-xs)',
+          flexShrink: 0,
+        }}
+        onMouseDown={(e) => {
+          // Prevent toolbar clicks from stealing selection
+          if ((e.target as HTMLElement).tagName !== 'INPUT') e.preventDefault();
+        }}
+      >
+        {/* ── Tool toggle buttons (Acrobat-style) ── */}
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 2,
+            padding: '0 2px', borderRadius: 8,
+            background: 'var(--bg-surface-low, transparent)',
+          }}
+        >
+          <button
+            type="button"
+            style={toolBtnStyle('hand')}
+            onClick={() => toggleTool('hand')}
+            title={t('reader.toolbar.hand', '抓手工具')}
+          >
+            <Hand size={15} />
+          </button>
+
+          <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 2px' }} />
+
+          <button
+            type="button"
+            style={toolBtnStyle('textHighlight')}
+            onClick={() => toggleTool('textHighlight')}
+            title={t('reader.toolbar.textHighlight', '高亮')}
+          >
+            <Highlighter size={15} />
+          </button>
+          <button
+            type="button"
+            style={toolBtnStyle('textNote')}
+            onClick={() => toggleTool('textNote')}
+            title={t('reader.toolbar.textNote', '笔记')}
+          >
+            <StickyNote size={15} />
+          </button>
+          <button
+            type="button"
+            style={toolBtnStyle('textConceptTag')}
+            onClick={() => toggleTool('textConceptTag')}
+            title={t('reader.toolbar.conceptTag', '概念标签')}
+          >
+            <Tag size={15} />
+          </button>
+        </div>
+
+        {/* ── Selection quick-actions (visible when text selected w/o tool mode) ── */}
+        {hasSelection && (
+          <>
+            <div style={{ width: 1, height: 16, background: 'var(--border-default)', margin: '0 4px' }} />
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 2,
+                padding: '0 4px', borderRadius: 8,
+                background: 'var(--accent-color-muted, rgba(37,99,235,0.08))',
+              }}
+            >
+              {/* Highlight with color indicator */}
+              <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                <button
+                  type="button"
+                  style={{ ...btnBase, flexDirection: 'column', gap: 0, padding: '2px 4px' }}
+                  onClick={() => handleHighlight(highlightColor)}
+                  title={t('reader.toolbar.textHighlight', '高亮')}
+                >
+                  <Highlighter size={14} />
+                  <div style={{ width: 14, height: 2, backgroundColor: HIGHLIGHT_COLOR_MAP[highlightColor], borderRadius: 1 }} />
+                </button>
+                <button
+                  type="button"
+                  style={{ ...btnBase, padding: '0 2px', width: 'auto' }}
+                  onClick={() => setShowColorPicker((p) => !p)}
+                >
+                  <ChevronDown size={10} />
+                </button>
+                {showColorPicker && (
+                  <div ref={colorPickerRef} style={{
+                    position: 'absolute', top: '100%', left: 0, marginTop: 4, padding: 6,
+                    backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 26,
+                  }}>
+                    <ColorPicker value={highlightColor} onChange={(color) => { handleColorChange(color); setShowColorPicker(false); }} />
+                  </div>
+                )}
+              </div>
+              {/* Note */}
+              <button
+                type="button"
+                style={{ ...btnBase, gap: 3, width: 'auto', padding: '0 6px', fontSize: 'var(--text-xs)' }}
+                onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); handleNote({ x: r.left + r.width / 2, y: r.bottom }); }}
+                title={t('reader.toolbar.textNote', '笔记')}
+              >
+                <StickyNote size={14} />
+                <span>{t('reader.toolbar.textNote', '笔记')}</span>
+              </button>
+              {/* Concept tag */}
+              <button
+                type="button"
+                style={{ ...btnBase, gap: 3, width: 'auto', padding: '0 6px', fontSize: 'var(--text-xs)' }}
+                onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); handleConceptTag({ x: r.left + r.width / 2, y: r.bottom }); }}
+                title={t('reader.toolbar.conceptTag', '概念标签')}
+              >
+                <Tag size={14} />
+                <span>{t('reader.toolbar.conceptTag', '概念')}</span>
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
       <div ref={scrollRef} style={{ flex: 1, overflow: 'auto' }}>
         <div
           ref={contentRef}
@@ -421,18 +597,6 @@ export function WebArticleView({ paperId, paper }: WebArticleViewProps) {
           {markdownElement}
         </div>
       </div>
-
-      {/* ── 选区工具栏 ── */}
-      {showToolbar && (
-        <SelectionToolbar
-          position={toolbarPos}
-          highlightColor={highlightColor}
-          onHighlight={handleHighlight}
-          onNote={handleNote}
-          onConceptTag={handleConceptTag}
-          onColorChange={handleColorChange}
-        />
-      )}
 
       {/* ── 笔记弹窗 ── */}
       {pendingNote && (

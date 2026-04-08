@@ -210,7 +210,7 @@ export function getOrCreateCopilotRuntime(ctx: AppContext): CopilotRuntime {
       },
     },
     editor: {
-      reconcile: async (patch) => {
+      reconcile: async (_patch) => {
         // In Electron main process, reconciliation is delegated to renderer
         // For now, optimistic reconciliation — always pass
         return { ok: true };

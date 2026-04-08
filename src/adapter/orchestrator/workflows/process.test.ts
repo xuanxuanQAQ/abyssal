@@ -74,11 +74,15 @@ function makeRunnerContext(): WorkflowRunnerContext {
     qualityWarnings: [],
     substeps: [],
     estimatedRemainingMs: null,
+    currentItemLabel: null,
   };
 
   return {
     signal: new AbortController().signal,
     progress,
+    workflowId: 'test-workflow-id',
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    pushStreamChunk: vi.fn(),
     reportProgress: vi.fn(),
     reportComplete: vi.fn(),
     reportFailed: vi.fn(),

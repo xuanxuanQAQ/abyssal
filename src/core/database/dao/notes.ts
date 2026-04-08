@@ -5,7 +5,7 @@
 // 文件系统不再参与笔记存储。
 
 import type Database from 'better-sqlite3';
-import type { NoteId, PaperId, ConceptId, MemoId } from '../../types/common';
+import type { NoteId, ConceptId, MemoId } from '../../types/common';
 import type { ResearchNote } from '../../types/note';
 import type { TextChunk } from '../../types/chunk';
 import { normalizeNoteFilePath } from '../note-file-path';

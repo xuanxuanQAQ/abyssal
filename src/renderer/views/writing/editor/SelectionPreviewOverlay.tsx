@@ -103,7 +103,7 @@ const rejectButtonStyle: React.CSSProperties = {
   fontSize: '12px',
 };
 
-const disabledButtonStyle: React.CSSProperties = {
+const _disabledButtonStyle: React.CSSProperties = {
   ...rejectButtonStyle,
   opacity: 0.4,
   cursor: 'default',

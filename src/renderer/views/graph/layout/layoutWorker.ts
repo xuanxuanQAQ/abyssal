@@ -6,7 +6,6 @@
  */
 
 import Graph from 'graphology';
-import { inferSettings } from 'graphology-layout-forceatlas2';
 
 // @ts-expect-error graphology-layout-forceatlas2/iterate lacks type declarations
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment

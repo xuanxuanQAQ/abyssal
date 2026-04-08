@@ -83,6 +83,7 @@ const secondaryButtonStyle: React.CSSProperties = {
   color: 'var(--text-secondary)',
   cursor: 'pointer',
   fontSize: 'var(--text-sm)',
+  transition: 'transform 150ms ease, box-shadow 150ms ease, background-color 150ms ease, border-color 150ms ease',
 };
 
 const primaryButtonStyle: React.CSSProperties = {
@@ -244,20 +245,20 @@ export function useAppDialog() {
                 </div>
 
                 <div style={footerStyle}>
-                  <button type="button" style={secondaryButtonStyle} data-dialog-action="cancel" onClick={() => closeDialog()}>
+                  <button type="button" className="app-dialog-btn app-dialog-btn--secondary" style={secondaryButtonStyle} data-dialog-action="cancel" onClick={() => closeDialog()}>
                     {cancelLabel}
                   </button>
-                  <button type="submit" style={toneStyle} data-dialog-action="confirm">
+                  <button type="submit" className={`app-dialog-btn app-dialog-btn--${request.options.confirmTone === 'danger' ? 'danger' : 'primary'}`} style={toneStyle} data-dialog-action="confirm">
                     {confirmLabel}
                   </button>
                 </div>
               </form>
             ) : (
               <div style={footerStyle}>
-                <button type="button" style={secondaryButtonStyle} data-dialog-action="cancel" onClick={() => closeDialog(false)}>
+                <button type="button" className="app-dialog-btn app-dialog-btn--secondary" style={secondaryButtonStyle} data-dialog-action="cancel" onClick={() => closeDialog(false)}>
                   {cancelLabel}
                 </button>
-                <button type="button" style={toneStyle} data-dialog-action="confirm" onClick={() => closeDialog(true)}>
+                <button type="button" className={`app-dialog-btn app-dialog-btn--${request.options.confirmTone === 'danger' ? 'danger' : 'primary'}`} style={toneStyle} data-dialog-action="confirm" onClick={() => closeDialog(true)}>
                   {confirmLabel}
                 </button>
               </div>

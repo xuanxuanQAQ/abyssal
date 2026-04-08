@@ -4,7 +4,6 @@ import { ConsoleLogger, FileLogger, type Logger, type LogLevel } from '../core/i
 import { createDatabaseService, type DatabaseService } from '../core/database';
 import { createRagService, type RagService } from '../core/rag';
 import { getWorkspacePaths } from '../core/workspace';
-import type { AbyssalConfig } from '../core/types/config';
 import type {
   RagInitPayload,
   RagLifecycleRequest,
@@ -26,7 +25,6 @@ let configProvider: ConfigProvider | null = null;
 let embedFn: ReactiveEmbedFunction | null = null;
 let dbService: DatabaseService | null = null;
 let ragService: RagService | null = null;
-let workspaceRoot: string | null = null;
 
 function send(message: RagLifecycleResponse | RagResponse): void {
   proc.send?.(message);
@@ -75,7 +73,6 @@ function ensureRagService(): RagService {
 function initializeRuntime(payload: RagInitPayload): RagRuntimeState {
   disposeRuntime();
 
-  workspaceRoot = payload.workspaceRoot;
   logger = createLogger(payload.workspaceRoot, payload.logLevel ?? 'info');
   configProvider = new ConfigProvider(payload.config);
   embedFn = createEmbedFunction({ configProvider, logger });

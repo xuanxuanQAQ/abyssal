@@ -46,29 +46,6 @@ export function countWords(text: string): number {
  */
 export function useWordCount(getText: () => string): number {
   const [wordCount, setWordCount] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const update = useCallback(() => {
-    // Cancel any pending debounce
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-    }
-
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      const text = getText();
-      setWordCount(countWords(text));
-    }, DEBOUNCE_MS);
-  }, [getText]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-      }
-    };
-  }, []);
 
   // Expose update as a side effect: callers invoke `update()` in onUpdate.
   // Also perform an initial count.

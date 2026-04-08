@@ -2,8 +2,8 @@
 
 As you analyze the paper, you may notice theoretical constructs, frameworks, or recurring terms that are not represented in the concept vocabulary provided. If so, you are welcome to surface them in `suggested_new_concepts` — but treat this as a secondary observation, not a primary task.
 
-Discover what the paper says on its own terms first. If something genuinely novel emerges, describe it:
-- `term`: The term as used in the paper (lowercase_with_underscores)
+Discover what the paper says on its own terms first. If something genuinely novel emerges, describe it. All text fields below must follow the output language setting:
+- `term`: The concept name (in the output language)
 - `frequency_in_paper`: How many times this term appears prominently
 - `closest_existing`: The most similar concept ID from the vocabulary, or `null`
 - `reason`: Why this term might be worth the researcher's consideration

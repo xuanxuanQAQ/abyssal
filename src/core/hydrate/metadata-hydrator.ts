@@ -5,7 +5,7 @@
 import type { PaperMetadata } from '../types/paper';
 import type { PdfEmbeddedMetadata, FirstPageMetadata } from '../process';
 import type { Logger } from '../infra/logger';
-import type { LlmCallFn, LlmExtractedMetadata } from './llm-metadata-extractor';
+import type { LlmCallFn } from './llm-metadata-extractor';
 import { extractMetadataWithLlm } from './llm-metadata-extractor';
 
 // ─── 搜索服务接口（依赖注入，避免循环依赖） ───
@@ -236,9 +236,8 @@ export async function hydratePaperMetadata(
   }
 
   // ── Source 3: LLM extraction from first page ──
-  let llmMeta: LlmExtractedMetadata | null = null;
   if (deps.config.enableLlmExtraction && deps.llmCall && firstPage?.firstPageText) {
-    llmMeta = await extractMetadataWithLlm(firstPage.firstPageText, deps.llmCall, logger);
+    const llmMeta = await extractMetadataWithLlm(firstPage.firstPageText, deps.llmCall, logger);
     fill('title', llmMeta.title, 'llm_extraction');
     fill('authors', llmMeta.authors, 'llm_extraction');
     fill('year', llmMeta.year, 'llm_extraction');

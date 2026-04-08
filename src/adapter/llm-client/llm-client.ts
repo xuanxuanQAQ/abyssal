@@ -26,7 +26,6 @@ import {
   getModelContextWindow,
   inferProviderForModel,
   isAvailableRoute,
-  resolveReasoningConfig,
 } from './model-router';
 import { ClaudeAdapter } from './claude-adapter';
 import { OpenAIAdapter } from './openai-adapter';
@@ -92,6 +91,7 @@ export interface CompletionResult {
 export type StreamChunk =
   | { type: 'text_delta'; delta: string }
   | { type: 'thinking_delta'; delta: string }
+  | { type: 'connected' }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_use_delta'; delta: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
@@ -223,13 +223,14 @@ export class LlmClient implements VisionCapable {
     this.localAdapterConfigs = new Map();
 
     if (keys.anthropicApiKey) {
-      this.adapters.set('anthropic', new ClaudeAdapter(keys.anthropicApiKey));
+      this.adapters.set('anthropic', new ClaudeAdapter(keys.anthropicApiKey, this.logger));
     }
 
     if (keys.openaiApiKey) {
       this.adapters.set('openai', new OpenAIAdapter({
         apiKey: keys.openaiApiKey,
         provider: 'openai',
+        logger: this.logger,
       }));
     }
 
@@ -238,6 +239,7 @@ export class LlmClient implements VisionCapable {
         apiKey: keys.geminiApiKey,
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
         provider: 'gemini',
+        logger: this.logger,
       }));
     }
 
@@ -246,6 +248,7 @@ export class LlmClient implements VisionCapable {
         apiKey: keys.deepseekApiKey,
         baseURL: 'https://api.deepseek.com/v1',
         provider: 'deepseek',
+        logger: this.logger,
       }));
     }
 
@@ -254,6 +257,7 @@ export class LlmClient implements VisionCapable {
         apiKey: keys.siliconflowApiKey,
         baseURL: 'https://api.siliconflow.cn/v1',
         provider: 'siliconflow',
+        logger: this.logger,
       }));
     }
 
@@ -262,6 +266,7 @@ export class LlmClient implements VisionCapable {
         apiKey: keys.doubaoApiKey,
         baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
         provider: 'doubao',
+        logger: this.logger,
       }));
     }
 
@@ -270,6 +275,7 @@ export class LlmClient implements VisionCapable {
         apiKey: keys.kimiApiKey,
         baseURL: 'https://api.moonshot.cn/v1',
         provider: 'kimi',
+        logger: this.logger,
       }));
     }
 
@@ -318,19 +324,42 @@ export class LlmClient implements VisionCapable {
     const adapter = this.getAdapter(route);
     const startTime = Date.now();
 
+    this.logger.info('[completeStream] Starting', {
+      model: route.model,
+      provider: route.provider,
+      workflowId: params.workflowId ?? null,
+      reasoning: route.reasoning ?? null,
+      hasSignal: !!params.signal,
+      systemPromptLen: params.systemPrompt.length,
+      messageCount: params.messages.length,
+    });
+
     const adapterParams = this.buildAdapterParams(route, params);
     const stream = adapter.completeStream(adapterParams);
 
+    this.logger.debug('[completeStream] Adapter stream created, waiting for first chunk', {
+      model: route.model,
+      provider: route.provider,
+    });
+
     // Proactive timeouts via Promise.race (§5.5)
-    const FIRST_TOKEN_TIMEOUT = 30_000;
-    const INTER_TOKEN_TIMEOUT = 10_000;
+    // Three phases: CONNECT → wait for API to respond, FIRST_TOKEN → wait for content, INTER_TOKEN → between tokens
+    const CONNECT_TIMEOUT = 30_000;
+    const FIRST_TOKEN_TIMEOUT = 120_000;  // Models like doubao-seed may think internally for >30s
+    const INTER_TOKEN_TIMEOUT = 30_000;  // API may pause between content and final usage/finish chunks
 
     const iterator = (stream as AsyncIterable<StreamChunk>)[Symbol.asyncIterator]();
+    let connected = false;
     let firstTokenReceived = false;
+    let chunkCount = 0;
 
     try {
       while (true) {
-        const timeoutMs = firstTokenReceived ? INTER_TOKEN_TIMEOUT : FIRST_TOKEN_TIMEOUT;
+        const timeoutMs = firstTokenReceived
+          ? INTER_TOKEN_TIMEOUT
+          : connected
+            ? FIRST_TOKEN_TIMEOUT
+            : CONNECT_TIMEOUT;
 
         let timerId!: ReturnType<typeof setTimeout>;
         const timeoutP = new Promise<null>(r => { timerId = setTimeout(() => r(null), timeoutMs); });
@@ -341,24 +370,80 @@ export class LlmClient implements VisionCapable {
         ]);
 
         if (result === null) {
+          const elapsed = Date.now() - startTime;
+          const code = firstTokenReceived
+            ? 'INTER_TOKEN_TIMEOUT'
+            : connected
+              ? 'FIRST_TOKEN_TIMEOUT'
+              : 'CONNECT_TIMEOUT';
+          this.logger.error(`[completeStream] Timeout: ${code}`, undefined, {
+            model: route.model,
+            provider: route.provider,
+            workflowId: params.workflowId ?? null,
+            elapsedMs: elapsed,
+            timeoutMs,
+            connected,
+            firstTokenReceived,
+            chunksReceived: chunkCount,
+          });
           yield {
             type: 'error',
-            code: firstTokenReceived ? 'INTER_TOKEN_TIMEOUT' : 'FIRST_TOKEN_TIMEOUT',
-            message: firstTokenReceived
-              ? `No output for ${INTER_TOKEN_TIMEOUT / 1000}s`
-              : `No response within ${FIRST_TOKEN_TIMEOUT / 1000}s`,
+            code,
+            message: `No ${connected ? 'content' : 'response'} within ${timeoutMs / 1000}s`,
           };
           return;
         }
 
         if (result.done) break;
         const chunk = result.value;
+        chunkCount++;
 
-        if (!firstTokenReceived && (chunk.type === 'text_delta' || chunk.type === 'tool_use_start')) {
+        // 'connected' — adapter confirmed API responded, switch to longer first-token timeout
+        if (chunk.type === 'connected') {
+          if (!connected) {
+            connected = true;
+            this.logger.info('[completeStream] Connected — API responded, waiting for first content token', {
+              model: route.model,
+              provider: route.provider,
+              elapsedMs: Date.now() - startTime,
+            });
+          }
+          continue; // Don't yield internal signal to consumers
+        }
+
+        if (!firstTokenReceived && (chunk.type === 'text_delta' || chunk.type === 'tool_use_start' || chunk.type === 'thinking_delta')) {
+          const ttft = Date.now() - startTime;
+          this.logger.info('[completeStream] First token received', {
+            model: route.model,
+            provider: route.provider,
+            chunkType: chunk.type,
+            ttftMs: ttft,
+          });
+          connected = true;
           firstTokenReceived = true;
         }
 
+        // Log adapter-level errors that arrive as chunks (not timeouts)
+        if (chunk.type === 'error') {
+          this.logger.error('[completeStream] Adapter error chunk', undefined, {
+            model: route.model,
+            provider: route.provider,
+            code: chunk.code,
+            message: chunk.message,
+            elapsedMs: Date.now() - startTime,
+            chunksReceived: chunkCount,
+          });
+        }
+
         if (chunk.type === 'message_end') {
+          this.logger.info('[completeStream] Stream complete', {
+            model: route.model,
+            provider: route.provider,
+            totalChunks: chunkCount,
+            elapsedMs: Date.now() - startTime,
+            usage: chunk.usage,
+            finishReason: chunk.finishReason,
+          });
           this.recordCost(route, chunk.usage, Date.now() - startTime, params.workflowId);
         }
 
@@ -611,7 +696,7 @@ export class LlmClient implements VisionCapable {
       // Lazy-instantiate local adapters on first use
       const localConfig = this.localAdapterConfigs.get(route.provider);
       if (localConfig) {
-        adapter = new OpenAIAdapter(localConfig);
+        adapter = new OpenAIAdapter({ ...localConfig, logger: this.logger });
         this.adapters.set(route.provider, adapter);
       } else {
         throw new Error(

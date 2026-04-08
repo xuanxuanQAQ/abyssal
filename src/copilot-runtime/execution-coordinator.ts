@@ -14,19 +14,16 @@ import type {
   CopilotOperation,
   CopilotOperationEnvelope,
   CopilotExecuteResult,
-  ContextSnapshot,
   ExecutionPlan,
-  ExecutionStep,
   OutputTarget,
   EditorPatch,
   ClarificationRequest,
   ClarificationOption,
   ResumeOperationRequest,
-  OperationRecipe,
   DegradationRecord,
   JSONContent,
 } from './types';
-import type { IntentRouter, IntentClassification } from './intent-router';
+import type { IntentRouter } from './intent-router';
 import type { ContextSnapshotBuilder } from './context-builder';
 import type { RecipeRegistry } from './recipe-registry';
 import type { OperationEventEmitter } from './event-emitter';
@@ -35,7 +32,7 @@ import type { CopilotSessionManager } from './session-manager';
 import { IdempotencyGuard } from './idempotency-guard';
 import type { ConfirmationEvaluator } from './confirmation';
 import type { FailurePolicyEvaluator } from './failure-policy';
-import type { AgentExecutor, AgentExecutorResult } from './executors/agent-executor';
+import type { AgentExecutor } from './executors/agent-executor';
 import type { RetrievalExecutor, RetrievalExecutorResult } from './executors/retrieval-executor';
 import type { EditorExecutor } from './executors/editor-executor';
 import type { WorkflowExecutor } from './executors/workflow-executor';
@@ -732,7 +729,7 @@ export class ExecutionCoordinator {
   private textToPatch(
     text: string,
     target: OutputTarget,
-    operation: CopilotOperation,
+    _operation: CopilotOperation,
   ): EditorPatch | null {
     const content: JSONContent = {
       type: 'doc',

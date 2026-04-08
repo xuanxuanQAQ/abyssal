@@ -36,8 +36,8 @@ function makeServices(overrides: Partial<AnalyzeServices> = {}): AnalyzeServices
       getStats: vi.fn().mockResolvedValue({ concepts: { total: 0, tentative: 0, working: 0, established: 0 } }),
       completeAnalysis: vi.fn().mockResolvedValue(undefined),
     } as unknown as AnalyzeServices['dbProxy'],
-    llmClient: {
-      complete: vi.fn().mockResolvedValue({
+    llmClient: (() => {
+      const defaultResponse = {
         text: JSON.stringify({
           summary: 'Analysis summary',
           analysis_markdown: 'Analysis body.',
@@ -53,13 +53,33 @@ function makeServices(overrides: Partial<AnalyzeServices> = {}): AnalyzeServices
             },
           ],
         }),
+        model: 'claude-sonnet-4',
         usage: { inputTokens: 1000, outputTokens: 500 },
         reasoning: null,
-      }),
-      countTokens: vi.fn().mockReturnValue(100),
-      getContextWindow: vi.fn().mockReturnValue(200_000),
-      resolveModel: vi.fn((workflowId?: string) => workflowId === 'analyze.intermediate' ? 'deepseek-chat' : 'claude-sonnet-4'),
-    } as unknown as AnalyzeServices['llmClient'],
+      };
+      const completeFn = vi.fn().mockResolvedValue(defaultResponse);
+      return {
+        complete: completeFn,
+        // completeStream delegates to complete() so existing assertions on
+        // llmClient.complete (called/calledWith) continue to work.
+        completeStream: vi.fn().mockImplementation((params: unknown) => {
+          const resultPromise = completeFn(params);
+          return (async function* () {
+            const result = await resultPromise;
+            yield { type: 'text_delta' as const, delta: result.text };
+            yield {
+              type: 'message_end' as const,
+              usage: result.usage,
+              finishReason: 'end_turn' as const,
+              reasoning: result.reasoning ?? null,
+            };
+          })();
+        }),
+        countTokens: vi.fn().mockReturnValue(100),
+        getContextWindow: vi.fn().mockReturnValue(200_000),
+        resolveModel: vi.fn((workflowId?: string) => workflowId === 'analyze.intermediate' ? 'deepseek-chat' : 'claude-sonnet-4'),
+      };
+    })() as unknown as AnalyzeServices['llmClient'],
     contextBudgetManager: {
       allocate: vi.fn().mockReturnValue({
         strategy: 'focused',
@@ -89,11 +109,14 @@ function makeRunnerContext(signal: AbortSignal = new AbortController().signal): 
   const progress: WorkflowProgress = {
     totalItems: 0, completedItems: 0, failedItems: 0, skippedItems: 0,
     currentItem: null, currentStage: null, errors: [], qualityWarnings: [], substeps: [],
-    estimatedRemainingMs: null,
+    estimatedRemainingMs: null, currentItemLabel: null,
   };
   return {
     signal,
     progress,
+    workflowId: 'test-workflow-id',
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    pushStreamChunk: vi.fn(),
     reportProgress: vi.fn(),
     reportComplete: vi.fn(),
     reportFailed: vi.fn(),
@@ -130,7 +153,7 @@ describe('analyze workflow', () => {
 
     expect(services.dbProxy.updatePaper).toHaveBeenCalledWith('stale-paper', { analysisStatus: 'not_started' });
     expect(services.dbProxy.queryPapers).toHaveBeenNthCalledWith(2, {
-      analysisStatus: ['not_started', 'failed', 'needs_review'],
+      analysisStatus: ['not_started', 'failed', 'needs_review', 'skipped'],
       fulltextStatus: ['available'],
       limit: 1000,
     });

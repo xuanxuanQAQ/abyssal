@@ -28,7 +28,12 @@ import {
   Sigma,
   AtSign,
   ImagePlus,
+  PenLine,
+  Expand,
+  Shrink,
+  ArrowRight,
 } from 'lucide-react';
+import type { CopilotIntent } from '../../../../copilot-runtime/types';
 
 // ── Types ──
 
@@ -195,6 +200,12 @@ export function EditorToolbar({
     }
     setLinkEditOpen(false);
   }, [editor, linkValue, runToolbarCommand]);
+
+  const dispatchIntent = useCallback((intent: CopilotIntent) => {
+    window.dispatchEvent(new CustomEvent('ai:writingIntent', { detail: { intent } }));
+  }, []);
+
+  const hasSelection = editor ? !editor.state.selection.empty : false;
 
   return (
     <div role="toolbar" aria-label="Editor toolbar" style={toolbarStyle} data-writing-toolbar="true">
@@ -381,6 +392,36 @@ export function EditorToolbar({
           <Separator />
         </>
       )}
+
+      {/* ── AI actions ── */}
+      <ToolbarButton
+        icon={<PenLine size={ICON_SIZE} />}
+        title={t('writing.editor.rewrite', { defaultValue: '改写' })}
+        active={false}
+        disabled={disabled || !hasSelection}
+        onClick={() => dispatchIntent('rewrite-selection')}
+      />
+      <ToolbarButton
+        icon={<Expand size={ICON_SIZE} />}
+        title={t('writing.editor.expand', { defaultValue: '扩展' })}
+        active={false}
+        disabled={disabled || !hasSelection}
+        onClick={() => dispatchIntent('expand-selection')}
+      />
+      <ToolbarButton
+        icon={<Shrink size={ICON_SIZE} />}
+        title={t('writing.editor.compress', { defaultValue: '压缩' })}
+        active={false}
+        disabled={disabled || !hasSelection}
+        onClick={() => dispatchIntent('compress-selection')}
+      />
+      <ToolbarButton
+        icon={<ArrowRight size={ICON_SIZE} />}
+        title={t('writing.editor.continueWriting', { defaultValue: '续写' })}
+        active={false}
+        disabled={disabled}
+        onClick={() => dispatchIntent('continue-writing')}
+      />
     </div>
   );
 }

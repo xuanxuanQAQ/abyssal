@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import {
   Download, ExternalLink, GripVertical, Globe, BookOpen, RefreshCw,
-  Shield, Loader2, Check, X, AlertTriangle,
+  Shield, Loader2, Check,
 } from 'lucide-react';
 import type { SettingsData } from '../../../../shared-types/models';
 import type { UpdateSectionFn } from '../types';
@@ -346,6 +346,7 @@ function ChinaInstitutionalSection({ acquire, onUpdate }: {
   const [loginLoading, setLoginLoading] = useState<string | null>(null);
   const [verifyState, setVerifyState] = useState<Record<string, 'loading' | 'valid' | 'expired' | null>>({});
   const [loginResult, setLoginResult] = useState<{ publisher: string; success: boolean; cookieCount: number } | null>(null);
+  void loginResult; // tracked for future UI display
 
   const api = getAPI();
 

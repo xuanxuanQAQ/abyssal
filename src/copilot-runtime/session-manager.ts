@@ -9,7 +9,6 @@ import type {
   CopilotSessionState,
   CopilotSessionSummary,
   CopilotOperationEvent,
-  ContextSnapshot,
   ClarificationRequest,
   CopilotOperation,
   OperationStatusSnapshot,

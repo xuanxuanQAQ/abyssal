@@ -33,7 +33,7 @@ export function useLayerFilter(
     // -------------------------------------------------------------------
     // Edge filtering
     // -------------------------------------------------------------------
-    graph.forEachEdge((_edge, attrs, _source, _target, _sa, _ta, undirected) => {
+    graph.forEachEdge((_edge, attrs, _source, _target, _sa, _ta, _undirected) => {
       const layer = (attrs.layer ?? attrs.edgeType) as string | undefined;
       const weight = (attrs.weight ?? 1) as number;
 

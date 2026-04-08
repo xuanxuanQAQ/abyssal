@@ -115,7 +115,7 @@ export class EditorExecutor {
         patch,
         reconciliation,
       };
-    } catch (err) {
+    } catch {
       // Transaction failed
       return {
         applied: false,

@@ -22,7 +22,7 @@ const hiddenStyle: React.CSSProperties = {
   borderWidth: 0,
 };
 
-export function HiddenTable({ conceptNames, paperLabels, cells, numPapers, numConcepts }: HiddenTableProps) {
+export function HiddenTable({ conceptNames, paperLabels, cells, numPapers, numConcepts: _numConcepts }: HiddenTableProps) {
   // Build a lookup for cells: "conceptIndex:paperIndex" -> HeatmapCell
   const cellMap = useMemo(() => {
     const map = new Map<string, HeatmapCell>();

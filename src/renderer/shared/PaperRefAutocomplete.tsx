@@ -11,7 +11,7 @@
  * See spec: section 8.4
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FileText } from 'lucide-react';
 import { useAuthorDisplayThreshold } from '../core/hooks/useAuthorDisplay';
 import { getAPI } from '../core/ipc/bridge';

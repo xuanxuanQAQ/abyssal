@@ -8,7 +8,7 @@
 
 import type Database from 'better-sqlite3';
 import type { ChunkId, PaperId } from '../../types/common';
-import type { TextChunk, ChunkSource } from '../../types/chunk';
+import type { TextChunk } from '../../types/chunk';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
 import { embeddingToBuffer, validateAndNormalize } from '../vector-ops';

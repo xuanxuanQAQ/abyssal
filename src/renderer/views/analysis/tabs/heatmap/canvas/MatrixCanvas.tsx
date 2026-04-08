@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import type { HeatmapCell } from '../../../../../../shared-types/models';
-import type { AdjudicationStatus, RelationType } from '../../../../../../shared-types/enums';
+import type { AdjudicationStatus } from '../../../../../../shared-types/enums';
 import { cellKey } from '../../../shared/cellKey';
 import {
   CELL_WIDTH,

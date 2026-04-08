@@ -1,7 +1,7 @@
 // ═══ 论文-概念映射 CRUD ═══
 
 import type Database from 'better-sqlite3';
-import type { PaperId, ConceptId, AnnotationId } from '../../types/common';
+import type { PaperId, ConceptId } from '../../types/common';
 import type { ConceptMapping, RelationType, BilingualEvidence } from '../../types/mapping';
 import { fromRow, now } from '../row-mapper';
 import { writeTransaction } from '../transaction-utils';
@@ -299,7 +299,6 @@ export function getConceptStats(
     .prepare('SELECT relation, confidence, reviewed FROM paper_concept_map WHERE concept_id = ?')
     .all(conceptId) as Array<{ relation: string; confidence: number; reviewed: number }>;
 
-  const paperIds = new Set<string>();
   const relationDist: Record<string, number> = {};
   let totalConfidence = 0;
   let reviewedCount = 0;

@@ -69,7 +69,7 @@ export function VirtualizedBody({
       const currentIndex = rows.findIndex((r) => r.original.id === selectedPaperId);
       if (currentIndex === -1) return;
 
-      let targetIndex = currentIndex;
+      let targetIndex: number;
 
       switch (e.key) {
         case 'ArrowDown':

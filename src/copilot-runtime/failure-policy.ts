@@ -9,7 +9,6 @@
 
 import type {
   FailureStage,
-  DegradationMode,
   FailurePolicy,
   DegradationRecord,
 } from './types';

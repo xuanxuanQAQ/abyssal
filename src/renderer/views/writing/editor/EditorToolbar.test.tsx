@@ -35,6 +35,7 @@ function createMockEditor() {
     can: vi.fn(() => ({ chain: vi.fn(() => chain) })),
     chain: vi.fn(() => chain),
     getAttributes: vi.fn(() => ({})),
+    state: { selection: { empty: true } },
   } as unknown as Editor;
 }
 

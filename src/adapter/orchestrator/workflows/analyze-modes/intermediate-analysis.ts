@@ -12,6 +12,8 @@
  * See spec: §2.2
  */
 import type { LlmClient } from '../../../llm-client/llm-client';
+import type { WorkflowRunnerContext } from '../../workflow-runner';
+import { streamingComplete } from '../streaming-llm-helper';
 import type { Logger } from '../../../../core/infra/logger';
 import { extractBalancedJson } from '../../utils';
 
@@ -40,19 +42,51 @@ export interface IntermediateResult {
 
 const INTERMEDIATE_SYSTEM_PROMPT = `You are an academic paper screener. Extract structured metadata from the paper below.
 
-Output a JSON object (NOT YAML) with exactly these fields:
-{
-  "paper_type": "journal" | "conference" | "theoretical" | "review" | "preprint" | "unknown",
-  "core_claims": [
-    {"claim": "brief description", "evidence_type": "empirical|theoretical|methodological", "strength": "strong|moderate|weak"}
-  ],
-  "method_summary": "one paragraph describing methodology",
-  "key_concepts": ["concept1", "concept2", ...],
-  "potential_relevance": 0.0 to 1.0,
-  "recommend_deep_analysis": true | false
-}
+Output a JSON object with exactly these fields:
+- paper_type: one of "journal", "conference", "theoretical", "review", "preprint", "unknown"
+- core_claims: array of {claim, evidence_type, strength}
+- method_summary: one paragraph describing methodology
+- key_concepts: array of concept name strings
+- potential_relevance: float from 0.0 to 1.0
+- recommend_deep_analysis: true or false
 
 Be concise. Focus on extracting factual information, not interpretation.`;
+
+// ─── Structured response format for intermediate analysis ───
+
+export const INTERMEDIATE_RESPONSE_FORMAT = {
+  type: 'json_schema' as const,
+  name: 'intermediate_output',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      paper_type: { type: 'string' },
+      core_claims: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            claim: { type: 'string' },
+            evidence_type: { type: 'string' },
+            strength: { type: 'string' },
+          },
+          required: ['claim', 'evidence_type', 'strength'],
+        },
+      },
+      method_summary: { type: 'string' },
+      key_concepts: {
+        type: 'array',
+        items: { type: 'string' },
+      },
+      potential_relevance: { type: 'number' },
+      recommend_deep_analysis: { type: 'boolean' },
+    },
+    required: ['paper_type', 'core_claims', 'method_summary', 'key_concepts', 'potential_relevance', 'recommend_deep_analysis'],
+  },
+};
 
 // ─── Execute intermediate analysis ───
 
@@ -66,6 +100,7 @@ export async function runIntermediateAnalysis(
   workflowId = 'analyze.intermediate',
   explicitModel?: string,
   signal?: AbortSignal,
+  runner?: WorkflowRunnerContext,
 ): Promise<IntermediateResult | null> {
   // Truncate text for low-cost model (typically smaller context window).
   // Use ~15k chars as rough target but avoid cutting mid-sentence.
@@ -86,16 +121,20 @@ export async function runIntermediateAnalysis(
   });
 
   const llmStart = Date.now();
-  const result = await llmClient.complete({
+  const llmParams = {
     systemPrompt: INTERMEDIATE_SYSTEM_PROMPT,
     messages: [{
-      role: 'user',
+      role: 'user' as const,
       content: `Paper title: ${paperTitle}\n\n${truncatedText}`,
     }],
     workflowId,
+    responseFormat: INTERMEDIATE_RESPONSE_FORMAT,
     ...(explicitModel && { model: explicitModel }),
     ...(signal && { signal }),
-  });
+  };
+  const result = runner
+    ? await streamingComplete(llmClient, llmParams, runner)
+    : await llmClient.complete(llmParams);
   const llmMs = Date.now() - llmStart;
 
   logger.debug(`[intermediate] Paper ${paperId}: LLM responded`, {

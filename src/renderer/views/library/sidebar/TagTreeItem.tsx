@@ -9,7 +9,6 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Tag as TagIcon } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { useAppStore } from '../../../core/store';
-import { useUpdatePaper } from '../../../core/ipc/hooks/usePapers';
 import type { Tag } from '../../../../shared-types/models';
 
 interface TagTreeItemProps {

@@ -54,6 +54,7 @@ export function useOcrLines(opts: UseOcrLinesOptions): Map<number, OcrLineDTO[]>
         grouped.set(page.pageIndex, page.lines);
       }
 
+      // eslint-disable-next-line no-console
       console.log(`[OCR-Hook] Loaded OCR lines for ${grouped.size} pages in current document`);
       setOcrLineMap(grouped);
     };

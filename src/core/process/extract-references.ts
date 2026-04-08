@@ -9,7 +9,7 @@ import type { DocumentStructure } from '../dla/types';
 
 // 允许可选的章节编号前缀：
 //   "7. References", "V. REFERENCES", "第五章 参考文献", "5 参考文献"
-const SECTION_NUM_PREFIX = /^(?:(?:\d+|[IVXLC]+)[\.\s)\-:]\s*|(?:第.{1,3}[章节]\s*)|(?:chapter\s+\d+[\.\s:]\s*))?/i;
+const SECTION_NUM_PREFIX = /^(?:(?:\d+|[IVXLC]+)[.\s)\-:]\s*|(?:第.{1,3}[章节]\s*)|(?:chapter\s+\d+[.\s:]\s*))?/i;
 const REFERENCES_KEYWORD_RE = /(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
 const REFERENCES_HEAD_RE = new RegExp(
   SECTION_NUM_PREFIX.source + REFERENCES_KEYWORD_RE.source,

@@ -3,7 +3,6 @@
 // 在 workspace/ 目录创建 .lock 文件，写入 PID + 启动时间。
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { DatabaseError } from '../types/errors';
 
 export interface LockInfo {

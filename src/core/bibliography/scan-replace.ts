@@ -17,9 +17,6 @@ const CITE_BRACKET_RE = /\[([^\]]*@[a-f0-9]{12}[^\]]*)\]/g;
 /** 从括号内容提取单个引用项 */
 const CITE_ITEM_RE = /@([a-f0-9]{12})(?:,\s*([^\];]+))?/g;
 
-/** 简化版：仅匹配 [@id]（向后兼容 + LaTeX/Pandoc 导出用） */
-const CITE_RE = /@([a-f0-9]{12})/g;
-
 // ─── §7.2 scanAndReplace ───
 
 export function scanAndReplace(

@@ -254,12 +254,11 @@ body {
 
 .app-shell {
   display: grid;
-  grid-template-rows: var(--titlebar-height) 1fr auto var(--statusbar-height);
+  grid-template-rows: var(--titlebar-height) 1fr var(--statusbar-height);
   grid-template-columns: var(--navrail-width) 1fr;
   grid-template-areas:
     'titlebar    titlebar'
     'navrail     workspace'
-    'bottompanel bottompanel'
     'statusbar   statusbar';
   height: 100vh;
   overflow: hidden;
@@ -283,8 +282,29 @@ body {
 }
 
 .app-shell__bottompanel {
-  grid-area: bottompanel;
+  position: fixed;
+  left: calc(var(--navrail-width) + 8px);
+  bottom: calc(var(--statusbar-height) + 8px);
+  z-index: 25;
+  width: 420px;
+  max-height: 420px;
+  border-radius: 10px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
   overflow: hidden;
+  animation: slide-up-in 200ms ease-out;
+}
+
+@keyframes slide-up-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .app-shell__titlebar {
@@ -1177,6 +1197,103 @@ body.is-dragging [data-drag-inert] {
 .chat-bubble-retry-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 10px 20px rgba(239, 68, 68, 0.12);
+}
+
+.chat-bubble-retry-btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+/* Clarification option buttons */
+.chat-bubble-clarification-btn {
+  transition:
+    transform var(--duration-fast) var(--easing-default),
+    box-shadow var(--duration-fast) var(--easing-default),
+    background-color var(--duration-fast) var(--easing-default),
+    border-color var(--duration-fast) var(--easing-default),
+    color var(--duration-fast) var(--easing-default);
+}
+
+.chat-bubble-clarification-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-color) 14%, transparent);
+  border-color: var(--accent-color) !important;
+  color: var(--accent-color) !important;
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-base)) !important;
+}
+
+.chat-bubble-clarification-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
+  box-shadow: none;
+}
+
+.chat-bubble-clarification-btn--selected {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+
+/* Apply to Editor buttons */
+.chat-bubble-apply-btn {
+  transition:
+    transform var(--duration-fast) var(--easing-default),
+    box-shadow var(--duration-fast) var(--easing-default),
+    background-color var(--duration-fast) var(--easing-default),
+    border-color var(--duration-fast) var(--easing-default);
+}
+
+.chat-bubble-apply-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-color) 16%, transparent);
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-base)) !important;
+}
+
+.chat-bubble-apply-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+}
+
+.chat-bubble-apply-btn--applied {
+  opacity: 0.7;
+}
+
+/* App Dialog buttons */
+.app-dialog-btn {
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.app-dialog-btn--secondary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  background: var(--bg-hover) !important;
+}
+
+.app-dialog-btn--secondary:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+}
+
+.app-dialog-btn--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-color) 22%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-color) 26%, white 6%) 0%, color-mix(in srgb, var(--accent-color) 22%, var(--bg-surface) 78%) 100%) !important;
+}
+
+.app-dialog-btn--primary:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+}
+
+.app-dialog-btn--danger:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--danger) 22%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 24%, white 6%) 0%, color-mix(in srgb, var(--danger) 20%, var(--bg-surface) 80%) 100%) !important;
+}
+
+.app-dialog-btn--danger:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
 }
 
 /* ═══════════════════════════════════════════

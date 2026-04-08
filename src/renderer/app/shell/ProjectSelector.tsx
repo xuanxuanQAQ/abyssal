@@ -12,6 +12,7 @@ import { FolderOpen, Plus, ChevronDown } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { getAPI } from '../../core/ipc/bridge';
+import { isShutdownError } from '../../core/errors/types';
 import { resetAppStoreForProjectSwitch, useAppStore } from '../../core/store';
 import type { ProjectInfo } from '../../../shared-types/models';
 import { Z_INDEX } from '../../styles/zIndex';
@@ -29,7 +30,7 @@ export function ProjectSelector() {
       .app.getProjectInfo()
       .then(setCurrentProject)
       .catch((err: unknown) => {
-        console.warn('[ProjectSelector] Failed to load projects:', err);
+        if (!isShutdownError(err)) console.warn('[ProjectSelector] Failed to load projects:', err);
       });
   }, []);
 

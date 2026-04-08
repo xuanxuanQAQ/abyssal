@@ -126,11 +126,11 @@ describe('parseSuggestedConcepts', () => {
       expect(result[0]!.closestExisting).toBe('theory_of_mind');
     });
 
-    it('returns null for no match', () => {
+    it('preserves original string for no match', () => {
       const result = parseSuggestedConcepts([{
         term: 'foo', closest_existing: 'nonexistent',
       }], context);
-      expect(result[0]!.closestExisting).toBeNull();
+      expect(result[0]!.closestExisting).toBe('nonexistent');
     });
   });
 

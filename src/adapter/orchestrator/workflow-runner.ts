@@ -44,6 +44,8 @@ export interface WorkflowProgress {
   qualityWarnings: WorkflowQualityWarning[];
   /** 当前 item 的子步骤列表（如 acquire cascade 各数据源状态） */
   substeps: WorkflowSubstep[];
+  /** 人类可读的当前条目标识（如论文标题/概念名称），推送给前端显示 */
+  currentItemLabel: string | null;
 }
 
 export interface WorkflowQualityWarning {
@@ -129,12 +131,18 @@ export type WorkflowMiddleware = (
 export interface WorkflowRunnerContext {
   signal: AbortSignal;
   progress: WorkflowProgress;
-  reportProgress(update: Partial<Pick<WorkflowProgress, 'currentItem' | 'currentStage' | 'substeps'>>): void;
+  /** Unique workflow instance ID — use as taskId for stream chunks. */
+  workflowId: string;
+  reportProgress(update: Partial<Pick<WorkflowProgress, 'currentItem' | 'currentStage' | 'substeps' | 'currentItemLabel'>>): void;
   reportComplete(itemId: string): void;
   reportFailed(itemId: string, stage: string, error: Error): void;
   reportSkipped(itemId: string): void;
   reportQualityWarning(itemId: string, type: WorkflowQualityWarning['type'], message: string): void;
   setTotal(total: number): void;
+  /** Structured logger for workflow steps. */
+  logger: Logger;
+  /** Push a stream chunk to the renderer for live AI output preview. */
+  pushStreamChunk(chunk: string, isLast: boolean): void;
   /**
    * For acquire workflows: take the next paperId from the shared queue.
    * Returns null when the queue is empty AND no more items will arrive (workflow is draining).
@@ -228,6 +236,7 @@ export class WorkflowRunner {
       qualityWarnings: [],
       substeps: [],
       estimatedRemainingMs: null,
+      currentItemLabel: null,
     };
 
     const workflowStartTime = Date.now();
@@ -235,10 +244,16 @@ export class WorkflowRunner {
     const ctx: WorkflowRunnerContext = {
       signal: abortController.signal,
       progress,
+      workflowId: id,
+      logger: this.logger,
+      pushStreamChunk: (chunk: string, isLast: boolean) => {
+        this.pushManager?.pushStreamChunk(id, chunk, isLast);
+      },
       reportProgress: (update) => {
         if (update.currentItem !== undefined) progress.currentItem = update.currentItem;
         if (update.currentStage !== undefined) progress.currentStage = update.currentStage;
         if (update.substeps !== undefined) progress.substeps = update.substeps;
+        if (update.currentItemLabel !== undefined) progress.currentItemLabel = update.currentItemLabel;
         this.estimateRemaining(progress, workflowStartTime);
         this.pushProgress(id, type, progress);
       },
@@ -247,6 +262,7 @@ export class WorkflowRunner {
         progress.currentItem = null;
         progress.currentStage = null;
         progress.substeps = [];
+        progress.currentItemLabel = null;
         this.estimateRemaining(progress, workflowStartTime);
         this.pushProgress(id, type, progress);
         this.logger.debug(`Workflow ${type}: completed ${itemId}`, { workflowId: id });
@@ -264,6 +280,7 @@ export class WorkflowRunner {
         progress.currentItem = null;
         progress.currentStage = null;
         progress.substeps = [];
+        progress.currentItemLabel = null;
         this.pushProgress(id, type, progress);
         this.logger.warn(`Workflow ${type}: failed ${itemId} at ${stage}`, { error: error.message });
       },
@@ -483,6 +500,8 @@ export class WorkflowRunner {
       progress: { current: progress.completedItems, total: progress.totalItems },
       ...(error && { error }),
       ...(progress.substeps.length > 0 && { substeps: progress.substeps }),
+      ...(progress.estimatedRemainingMs != null && { estimatedRemainingMs: progress.estimatedRemainingMs }),
+      ...(progress.currentItemLabel && { currentItemLabel: progress.currentItemLabel }),
     });
   }
 }

@@ -16,11 +16,13 @@ export function useAcquireFulltext() {
 
   return useMutation({
     mutationFn: (paperId: string) => {
+      // eslint-disable-next-line no-console
       console.log('[useAcquireFulltext] Calling acquire:fulltext IPC', { paperId });
       return getAPI().acquire.fulltext(paperId);
     },
 
     onSuccess: (taskId, paperId) => {
+      // eslint-disable-next-line no-console
       console.log('[useAcquireFulltext] IPC returned taskId', { taskId, paperId });
       queryClient.invalidateQueries({ queryKey: ['papers', 'detail', paperId] });
       queryClient.invalidateQueries({ queryKey: ['papers', 'counts'] });

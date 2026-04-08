@@ -253,7 +253,7 @@ export function registerWorkspaceHandlers(ctx: AppContext): void {
     const newLockHandle = acquireLock(workspacePath);
 
     let newProxy: ReturnType<typeof createDbProxy> | null = null;
-    let newConfig = previousConfig;
+    let newConfig;
     try {
       const globalConfig = loadGlobalConfig(app.getPath('userData'));
       newConfig = ConfigLoader.loadFromWorkspace(workspacePath, globalConfig);

@@ -63,7 +63,7 @@ export const ANALYZE_STRUCTURED_RESPONSE_FORMAT = {
             },
             evidence: {
               type: 'object',
-              additionalProperties: true,
+              additionalProperties: false,
               properties: {
                 en: { type: 'string' },
                 original: { type: 'string' },
@@ -72,6 +72,7 @@ export const ANALYZE_STRUCTURED_RESPONSE_FORMAT = {
                 page: { type: ['number', 'null'] },
                 annotation_id: { type: ['string', 'null'] },
               },
+              required: ['en', 'original', 'original_lang', 'chunk_id', 'page', 'annotation_id'],
             },
           },
           required: ['concept_id', 'relation', 'confidence', 'evidence'],
@@ -140,12 +141,13 @@ export function parseStructuredAnalyzeOutput(
     Array.isArray(record['concept_mappings']) ? record['concept_mappings'] : [],
     context.conceptLookup,
   );
-  let suggestions = parseSuggestedConcepts(record['suggested_new_concepts'], {
+  const suggestions = parseSuggestedConcepts(record['suggested_new_concepts'], {
     knownConceptIds: context.knownConceptIds,
     getConceptName: context.getConceptName,
   });
 
   if (mappingResult.divertedToSuggestions.length > 0) {
+    logger?.warn?.(`[parse] Paper ${context.paperId}: ${mappingResult.divertedToSuggestions.length} concept mapping(s) diverted to suggestions due to unknown concept_id(s): ${mappingResult.divertedToSuggestions.map((d) => d.concept_id).join(', ')}`);
     const existingTerms = new Set(suggestions.map((suggestion) => suggestion.termNormalized));
     for (const diverted of mappingResult.divertedToSuggestions) {
       const termNormalized = diverted.concept_id.toLowerCase();

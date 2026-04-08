@@ -128,7 +128,7 @@ export function parseAndValidate(
   const suggestionCtx: SuggestionParseContext | undefined = context.knownConceptIds
     ? { knownConceptIds: context.knownConceptIds, getConceptName: context.getConceptName }
     : undefined;
-  let suggestions = parseSuggestedConcepts(rawSuggestions, suggestionCtx);
+  const suggestions = parseSuggestedConcepts(rawSuggestions, suggestionCtx);
 
   // Merge diverted unknown concept_ids into suggestions.
   // Unknown IDs are stripped from mappings to prevent FK constraint violations,
@@ -342,7 +342,7 @@ function tryCodeBlock(text: string): ParsedOutput | null {
 
 function tryJsonBlock(text: string): ParsedOutput | null {
   // Try json code block
-  let match = text.match(/```json\n([\s\S]*?)```/m);
+  const match = text.match(/```json\n([\s\S]*?)```/m);
   let jsonText: string | null = null;
   let matchedStr: string | null = null;
 

@@ -43,7 +43,7 @@ export function ApiKeysTab({ settings, onReload }: { settings: SettingsData; onR
   );
 }
 
-function ApiKeyRow({ name, field, provider, label, currentValue, isEmail, noBorder, onSaved }: {
+function ApiKeyRow({ name, field, provider, label: _label, currentValue, isEmail, noBorder, onSaved }: {
   name: string;
   field: string;
   provider: string;

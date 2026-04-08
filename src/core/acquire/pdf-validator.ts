@@ -3,7 +3,6 @@
 
 import * as fs from 'node:fs';
 import type { PdfValidation } from './types';
-import { PdfCorruptedError } from '../types/errors';
 
 // PDF 魔数: %PDF-
 // Adobe 规范允许 %PDF- 出现在前 1024 字节中的任意位置

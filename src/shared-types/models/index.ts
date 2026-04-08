@@ -755,6 +755,14 @@ export interface TaskUIState {
   progress: { current: number; total: number };
   /** 当前论文的子步骤进度（如 acquire cascade 各数据源状态） */
   substeps?: import('../ipc').SubstepInfo[];
+  /** 预估剩余时间（毫秒） */
+  estimatedRemainingMs?: number | null;
+  /** 当前正在处理的条目标识（如论文标题/概念名称） */
+  currentItemLabel?: string;
+  /** AI 生成的流式内容预览（最后 N 个字符） */
+  streamPreview?: string;
+  /** 任务开始时间戳（ms），用于显示已用时间 */
+  startedAt?: number;
 }
 
 export interface TaskHistoryEntry {

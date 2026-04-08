@@ -5,7 +5,7 @@
  * 操作：取消选择 / 设置相关性 / 获取全文 / 触发分析 / 导出 / 删除。
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { X, ChevronDown } from 'lucide-react';
@@ -13,7 +13,6 @@ import toast from 'react-hot-toast';
 import { useBatchUpdateRelevance, useBatchDeletePapers } from '../../../core/ipc/hooks/usePapers';
 import { useAcquireBatch } from '../../../core/ipc/hooks/useAcquire';
 import { useStartPipeline } from '../../../core/ipc/hooks/usePipeline';
-import { useAppStore } from '../../../core/store';
 import { useAppDialog } from '../../../shared/useAppDialog';
 import type { Paper } from '../../../../shared-types/models';
 import type { Relevance } from '../../../../shared-types/enums';
@@ -39,13 +38,7 @@ export function BatchActionBar({
   const batchDelete = useBatchDeletePapers();
   const acquireBatch = useAcquireBatch();
   const startPipeline = useStartPipeline();
-  const activeTasks = useAppStore((s) => s.activeTasks);
   const { confirm, dialog } = useAppDialog();
-
-  // 检查是否有正在运行的批量任务
-  const runningTasks = Object.values(activeTasks).filter(
-    (t) => t.status === 'running'
-  );
 
   const handleSetRelevance = (rel: Relevance) => {
     const ids = getSelectedIds();

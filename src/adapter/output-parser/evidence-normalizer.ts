@@ -53,17 +53,23 @@ export function normalizeEvidence(evidence: unknown): NormalizedEvidence {
     const en = asString(e['en'] ?? e['english'] ?? e['text'] ?? '').trim();
 
     // original field — priority: original > source > text > en backfill
-    let original = asString(e['original'] ?? e['source'] ?? e['text'] ?? '').trim();
+    const original = asString(e['original'] ?? e['source'] ?? e['text'] ?? '').trim();
 
     // original_lang — priority: original_lang > originalLang > lang > detect
     const originalLang = asString(
       e['original_lang'] ?? e['originalLang'] ?? e['lang'] ?? '',
     ).trim();
 
-    // Backfill: if en empty but original exists, or vice versa
-    const finalEn = en.length > 0 ? en : original;
+    // Backfill: if en empty but original exists, or vice versa.
+    // When backfilling en from a non-English original, keep it as-is rather than
+    // pretending it's English — downstream consumers can detect the mismatch.
     const finalOriginal = original.length > 0 ? original : en;
     const finalLang = originalLang.length > 0 ? originalLang : detectLanguage(finalOriginal);
+    // Only backfill en from original if the original is actually English;
+    // otherwise leave en empty so consumers know no translation was provided.
+    const finalEn = en.length > 0
+      ? en
+      : (finalLang === 'en' || finalLang === 'unknown') ? finalOriginal : '';
 
     return {
       en: finalEn,

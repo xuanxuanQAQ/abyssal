@@ -71,8 +71,15 @@ function domToMarkdown(root: Element): string {
         return;
 
       case 'p': {
-        const text = getTextContent(el);
-        if (text) lines.push('', text, '');
+        // 如果 <p> 包含 <img>，需要递归处理子节点以保留图片
+        if (el.querySelector('img')) {
+          lines.push('');
+          for (const child of Array.from(el.childNodes)) processNode(child);
+          lines.push('');
+        } else {
+          const text = getTextContent(el);
+          if (text) lines.push('', text, '');
+        }
         return;
       }
 
@@ -99,7 +106,18 @@ function domToMarkdown(root: Element): string {
       }
 
       case 'a': {
-        const href = el.getAttribute('href') ?? '';
+        let href = el.getAttribute('href') ?? '';
+        if (href.startsWith('//')) href = `https:${href}`;
+        // 链接包裹图片时，渲染图片而非链接文本
+        const img = el.querySelector('img');
+        if (img) {
+          let imgSrc = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-original') || '';
+          if (imgSrc.startsWith('//')) imgSrc = `https:${imgSrc}`;
+          if (imgSrc && !/^https?:/i.test(imgSrc) && !imgSrc.startsWith('data:')) imgSrc = '';
+          const alt = img.getAttribute('alt') ?? '';
+          if (imgSrc) lines.push(`![${alt}](${imgSrc})`);
+          return;
+        }
         const text = getTextContent(el);
         if (text && href) lines.push(`[${text}](${href})`);
         else if (text) lines.push(text);
@@ -107,8 +125,11 @@ function domToMarkdown(root: Element): string {
       }
 
       case 'img': {
-        const src = el.getAttribute('src') ?? '';
+        let src = el.getAttribute('src') || el.getAttribute('data-src') || el.getAttribute('data-original') || '';
         const alt = el.getAttribute('alt') ?? '';
+        // 协议相对 URL → https
+        if (src.startsWith('//')) src = `https:${src}`;
+        if (src && !/^https?:/i.test(src) && !src.startsWith('data:')) src = '';
         if (src) lines.push(`![${alt}](${src})`);
         return;
       }

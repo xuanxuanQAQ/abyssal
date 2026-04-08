@@ -59,7 +59,7 @@ export const ToolCallStep = React.memo(function ToolCallStep({
     }
   })();
 
-  const statusColor =
+  const _statusColor =
     toolCall.status === 'running'
       ? 'var(--accent-color)'
       : toolCall.status === 'error'

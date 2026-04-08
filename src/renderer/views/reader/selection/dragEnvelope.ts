@@ -172,7 +172,6 @@ export function blockOverlaps(
   const bTop = bbox.y;
   const bBottom = bbox.y + bbox.h;
   const bLeft = bbox.x;
-  const bRight = bbox.x + bbox.w;
   const bCenterX = bLeft + bbox.w / 2;
   // A block wider than half the page is considered cross-column
   const isCrossColBlock = bbox.w > COL_MID;

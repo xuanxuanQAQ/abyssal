@@ -11,7 +11,6 @@ const GRID_COLS = 4;
 const GRID_ROWS = 6;
 const LOW_DENSITY_THRESHOLD = 10; // chars/in²
 const LOW_AREA_RATIO_THRESHOLD = 0.30;
-const PATH_DENSITY_THRESHOLD = 50; // ops/in²
 
 // ─── mupdf.js 懒加载 ───
 

@@ -149,6 +149,7 @@ export class DbProxy {
       if (this.child.stdout) {
         this.child.stdout.on('data', (data: Buffer) => {
           const text = data.toString().trim();
+          // eslint-disable-next-line no-console
           if (text) console.log(`[db-subprocess] ${text}`);
         });
       }
@@ -260,6 +261,7 @@ export class DbProxy {
       const payload = this.initPayload;
       const attempt = this.restartTimestamps.length;
 
+      // eslint-disable-next-line no-console
       console.log(`[DbProxy] Scheduling restart attempt ${attempt}/${DbProxy.MAX_RESTARTS}...`);
 
       // 延迟 500ms 重启
@@ -268,6 +270,7 @@ export class DbProxy {
         try {
           await this.spawnChild();
           await this.sendLifecycle('init', payload);
+          // eslint-disable-next-line no-console
           console.log('[DbProxy] Subprocess restarted successfully');
           this.onHealthStatus?.('connected');
         } catch (restartErr) {

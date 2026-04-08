@@ -133,11 +133,11 @@ export function registerRagHandlers(ctx: AppContext): void {
       : requestArg;
 
     const sectionId = request.sectionId ?? '';
-    let queryText = '';
-    let conceptIds: ConceptId[] = [];
-    let paperIds: PaperId[] = [];
+    let queryText: string;
+    let conceptIds: ConceptId[];
+    let paperIds: PaperId[];
     let precedingSummary = '';
-    let followingSectionTitles: string[] = [];
+    let followingSectionTitles: string[];
 
     const liveDocument = request.documentJson
       ? parseArticleDocument(request.documentJson)
@@ -238,7 +238,7 @@ export function registerRagHandlers(ctx: AppContext): void {
           topK: 10,
         });
         chunks = retrieval.chunks;
-      } catch (retrieveErr) {
+      } catch {
         // Fallback to semantic search if retrieve path is unavailable.
         try {
           chunks = await rag.searchSemantic(queryText, 10, { paperIds: paperIds.length > 0 ? paperIds : undefined } as any);

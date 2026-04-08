@@ -8,7 +8,7 @@
  * - TODO: @dnd-kit DropTarget registration for cross-view drops from Library
  */
 
-import React, { useRef, useMemo, useCallback } from 'react';
+import React, { useRef, useCallback } from 'react';
 import { Tree } from 'react-arborist';
 import type { NodeRendererProps } from 'react-arborist';
 import { useTranslation } from 'react-i18next';

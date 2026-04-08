@@ -45,7 +45,6 @@ const FAST_PATH_PATTERNS: FastPathPattern[] = [
     doiPrefix: '10.1101',
     source: 'biorxiv',
     buildUrl: (doi) => {
-      const suffix = doi.replace(/^10\.1101\//, '');
       // medRxiv DOIs typically contain "medrxiv" or specific date ranges
       // bioRxiv: all 10.1101 DOIs go to bioRxiv first, which also hosts medRxiv
       // The URL pattern works for both — bioRxiv redirects medRxiv DOIs correctly

@@ -17,8 +17,6 @@ import {
   ChevronLeft,
   Check,
   Sparkles,
-  ArrowRight,
-  ArrowLeft,
 } from 'lucide-react';
 import { getAPI } from '../../../core/ipc/bridge';
 import { executeCopilotTextRequest } from '../../../panels/context/chat/copilotBridge';
@@ -267,7 +265,7 @@ export function ConceptSplitWizard({
     dispatch({ type: 'SET_ERROR', error: null });
 
     try {
-      const api = getAPI();
+      const _api = getAPI();
       // Use LLM to classify mappings based on semantic similarity to each draft's definition
       const prompt = `Given two new concept definitions:
 Concept A1: "${state.draft1.name}" - ${state.draft1.definition}

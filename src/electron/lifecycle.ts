@@ -13,7 +13,7 @@
  * See spec: section 8 — Graceful Exit
  */
 
-import { app, dialog, type BrowserWindow } from 'electron';
+import { dialog, type BrowserWindow } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AppContext } from './app-context';

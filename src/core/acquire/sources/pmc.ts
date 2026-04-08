@@ -194,7 +194,6 @@ async function extractPdfFromTarGz(
         } else if (state === 'collect') {
           // Collect only the actual file bytes (not padding)
           const dataRemaining = currentFileSize - collectedBytes;
-          const paddingRemaining = currentPaddedSize - collectedBytes;
 
           if (dataRemaining > 0) {
             const take = Math.min(dataRemaining, buf.length);

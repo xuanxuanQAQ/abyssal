@@ -274,7 +274,6 @@ export function typedHandler<C extends IpcChannel>(
     throw new Error(`Duplicate IPC handler: ${channel}`);
   }
   registeredChannels.add(channel);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ipcMain.handle(channel, wrapHandler(channel, logger, handlerFn as any, options));
 }
 

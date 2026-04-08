@@ -24,8 +24,8 @@ interface WritingSelectionPaneProps {
 export const WritingSelectionPane = React.memo(function WritingSelectionPane({
   articleId,
   sectionId,
-  from,
-  to,
+  from: _from,
+  to: _to,
   selectedText,
   draftId,
 }: WritingSelectionPaneProps) {

@@ -23,8 +23,7 @@ import * as path from 'node:path';
 
 import type { WorkflowOptions, WorkflowRunnerContext } from '../workflow-runner';
 import type { Logger } from '../../../core/infra/logger';
-import type { PaperMetadata } from '../../../core/types/paper';
-import { CircuitBreaker, classifyError } from '../error-classifier';
+import { CircuitBreaker } from '../error-classifier';
 import { createConcurrencyGuard } from '../concurrency-guard';
 
 // ─── Services ───

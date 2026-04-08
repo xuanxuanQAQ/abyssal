@@ -34,15 +34,6 @@ function rectsIntersect(a: PdfRect, b: PdfRect): boolean {
   return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 }
 
-// ─── RGB → CSS 颜色 ───
-
-function rgbToCss(rgb: [number, number, number]): string {
-  const r = Math.round(rgb[0] * 255).toString(16).padStart(2, '0');
-  const g = Math.round(rgb[1] * 255).toString(16).padStart(2, '0');
-  const b = Math.round(rgb[2] * 255).toString(16).padStart(2, '0');
-  return `#${r}${g}${b}`;
-}
-
 // ─── §6.1 readAnnotations ───
 
 export async function readAnnotations(

@@ -216,6 +216,7 @@ function ChatBubbleInner({ message, onRetry, onClarificationSelect, onApplyPatch
               return (
                 <button
                   key={option.id}
+                  className={`chat-bubble-clarification-btn${isSelected ? ' chat-bubble-clarification-btn--selected' : ''}`}
                   onClick={() => onClarificationSelect(message.id, option.id)}
                   disabled={disabled}
                   style={{
@@ -275,6 +276,7 @@ function ChatBubbleInner({ message, onRetry, onClarificationSelect, onApplyPatch
             {message.pendingEditorPatches.map((p: PendingEditorPatch) => (
               <button
                 key={p.id}
+                className={`chat-bubble-apply-btn${p.applied ? ' chat-bubble-apply-btn--applied' : ''}`}
                 disabled={p.applied}
                 onClick={() => onApplyPatch(message.id, p.id)}
                 style={{

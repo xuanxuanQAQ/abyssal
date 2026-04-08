@@ -13,7 +13,7 @@ interface ColumnResizeHandleProps {
   table: TanStackTable<Paper>;
 }
 
-export function ColumnResizeHandle({ header, table }: ColumnResizeHandleProps) {
+export function ColumnResizeHandle({ header, table: _table }: ColumnResizeHandleProps) {
   return (
     <div
       onMouseDown={header.getResizeHandler()}

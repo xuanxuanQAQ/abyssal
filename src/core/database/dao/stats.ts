@@ -21,6 +21,7 @@ export interface DatabaseStats {
     analysisCompleted: number;
     analysisNeedsReview: number;
     analysisFailed: number;
+    analysisSkipped: number;
     relevanceSeed: number;
     relevanceHigh: number;
     relevanceMedium: number;
@@ -76,6 +77,7 @@ export function getStats(db: Database.Database): DatabaseStats {
         SUM(CASE WHEN analysis_status = 'completed' THEN 1 ELSE 0 END) AS analysis_completed,
         SUM(CASE WHEN analysis_status = 'needs_review' THEN 1 ELSE 0 END) AS analysis_needs_review,
         SUM(CASE WHEN analysis_status = 'failed' THEN 1 ELSE 0 END) AS analysis_failed,
+        SUM(CASE WHEN analysis_status = 'skipped' THEN 1 ELSE 0 END) AS analysis_skipped,
         SUM(CASE WHEN relevance = 'seed' THEN 1 ELSE 0 END) AS relevance_seed,
         SUM(CASE WHEN relevance = 'high' THEN 1 ELSE 0 END) AS relevance_high,
         SUM(CASE WHEN relevance = 'medium' THEN 1 ELSE 0 END) AS relevance_medium,
@@ -166,6 +168,7 @@ export function getStats(db: Database.Database): DatabaseStats {
         analysisCompleted: paperRow['analysis_completed'] ?? 0,
         analysisNeedsReview: paperRow['analysis_needs_review'] ?? 0,
         analysisFailed: paperRow['analysis_failed'] ?? 0,
+        analysisSkipped: paperRow['analysis_skipped'] ?? 0,
         relevanceSeed: paperRow['relevance_seed'] ?? 0,
         relevanceHigh: paperRow['relevance_high'] ?? 0,
         relevanceMedium: paperRow['relevance_medium'] ?? 0,

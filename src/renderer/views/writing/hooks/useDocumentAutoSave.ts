@@ -39,7 +39,7 @@ export function useDocumentAutoSave({
     if (!draftId || savingRef.current) return;
 
     // Prefer live editor state; fall back to the snapshot taken at schedule time.
-    let docJson: JSONContent | null = null;
+    let docJson: JSONContent | null;
     if (editor && !editor.isDestroyed) {
       docJson = editor.getJSON() as JSONContent;
     } else {

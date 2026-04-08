@@ -29,12 +29,15 @@ export interface WorkflowProgressEvent {
   entityId?: string;
   error?: { code: string; message: string };
   substeps?: Array<{ name: string; status: string; detail?: string }>;
+  estimatedRemainingMs?: number | null;
+  currentItemLabel?: string;
 }
 
 // ─── Push channels ───
 
 export const PUSH_CHANNELS = {
   WORKFLOW_PROGRESS: 'push:workflowProgress',
+  STREAM_CHUNK: 'pipeline:streamChunk$event',
   DB_CHANGED: 'push:dbChanged',
   SETTINGS_CHANGED: 'push:settingsChanged',
   NOTIFICATION: 'push:notification',
@@ -67,6 +70,8 @@ export class PushManager {
   private _lastWorkflowPush = 0;
   private _pendingWorkflowEvent: WorkflowProgressEvent | null = null;
   private _workflowPushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Per-task stream chunk buffer for 100ms throttled batching */
+  private _streamChunkBuffers = new Map<string, { chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 
   /** Update the window reference (call after window creation or recreation) */
   setWindow(window: BrowserWindow | null): void {
@@ -257,6 +262,41 @@ export class PushManager {
     this.send('push:copilotSessionChanged', data);
   }
 
+  // ── stream-chunk (100ms throttle, batched per task) ──
+
+  /**
+   * Push a workflow stream chunk to the renderer.
+   * Chunks are batched per-task and flushed every 100ms to avoid flooding IPC.
+   * When isLast=true, the buffer is flushed immediately.
+   */
+  pushStreamChunk(taskId: string, chunk: string, isLast: boolean): void {
+    let buf = this._streamChunkBuffers.get(taskId);
+    if (!buf) {
+      buf = { chunks: [], timer: null };
+      this._streamChunkBuffers.set(taskId, buf);
+    }
+    buf.chunks.push(chunk);
+
+    if (isLast) {
+      // Flush immediately on last chunk
+      if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
+      this.send(PUSH_CHANNELS.STREAM_CHUNK, { taskId, chunk: buf.chunks.join(''), isLast: true });
+      this._streamChunkBuffers.delete(taskId);
+      return;
+    }
+
+    if (!buf.timer) {
+      buf.timer = setTimeout(() => {
+        const b = this._streamChunkBuffers.get(taskId);
+        if (b && b.chunks.length > 0) {
+          this.send(PUSH_CHANNELS.STREAM_CHUNK, { taskId, chunk: b.chunks.join(''), isLast: false });
+          b.chunks = [];
+        }
+        if (b) b.timer = null;
+      }, 100);
+    }
+  }
+
   // ── cleanup ──
 
   destroy(): void {
@@ -269,6 +309,10 @@ export class PushManager {
       this._workflowPushTimer = null;
       this._pendingWorkflowEvent = null;
     }
+    for (const buf of this._streamChunkBuffers.values()) {
+      if (buf.timer) clearTimeout(buf.timer);
+    }
+    this._streamChunkBuffers.clear();
     this._window = null;
   }
 }

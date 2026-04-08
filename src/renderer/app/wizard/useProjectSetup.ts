@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { getAPI } from '../../core/ipc/bridge';
+import { isShutdownError } from '../../core/errors/types';
 
 export function useProjectSetup() {
   const [showWizard, setShowWizard] = useState(false);
@@ -22,7 +23,7 @@ export function useProjectSetup() {
         setChecked(true);
       })
       .catch((err: unknown) => {
-        console.warn('[ProjectSetup] Failed to check projects:', err);
+        if (!isShutdownError(err)) console.warn('[ProjectSetup] Failed to check projects:', err);
         if (!cancelled) setChecked(true);
       });
     return () => {

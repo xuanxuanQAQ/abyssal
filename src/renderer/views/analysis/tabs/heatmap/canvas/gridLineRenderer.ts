@@ -1,4 +1,4 @@
-import { CELL_WIDTH, CELL_HEIGHT, CELL_GAP } from '../layout/layoutConstants';
+import { CELL_WIDTH, CELL_GAP } from '../layout/layoutConstants';
 
 export function drawGridLines(
   ctx: CanvasRenderingContext2D,

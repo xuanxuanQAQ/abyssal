@@ -15,7 +15,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import type { Transaction, EditorState } from '@tiptap/pm/state';
+import type { Transaction } from '@tiptap/pm/state';
 
 export type ParagraphMark = 'HUMAN-ORIGINAL' | 'AI-WRITTEN' | 'AI-REWRITTEN' | null;
 
@@ -146,7 +146,7 @@ function createDecorationPlugin(): Plugin {
 // ─── SplitBlock interceptor ───
 // Detect when a transaction splits a paragraph and reset the new paragraph's mark to null.
 
-function isSplitTransaction(tr: Transaction): boolean {
+function _isSplitTransaction(tr: Transaction): boolean {
   // A splitBlock transaction typically adds one step that splits a node.
   // We detect it by checking if the number of paragraphs increased by exactly one.
   if (!tr.docChanged) return false;

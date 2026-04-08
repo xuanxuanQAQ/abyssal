@@ -6,7 +6,7 @@
 import React, { useMemo } from 'react';
 import { useConceptFramework } from '../../../../core/ipc/hooks/useConcepts';
 import type { ConceptMapping } from '../../../../../shared-types/models';
-import type { AdjudicationStatus, RelationType } from '../../../../../shared-types/enums';
+import type { AdjudicationStatus } from '../../../../../shared-types/enums';
 import { RELATION_LABELS_ZH } from '../../shared/relationTheme';
 
 interface AdjudicationTimelineProps {

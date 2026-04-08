@@ -137,7 +137,9 @@ function resolveClosestExisting(
     }
   }
 
-  return null; // No match — don't set closest
+  // No match found — preserve the original string so downstream consumers
+  // (and the researcher) can still see what the LLM considered similar.
+  return closestField;
 }
 
 // ─── Helpers ───

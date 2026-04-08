@@ -96,61 +96,6 @@ function buildGhostDecorations(view: EditorView): DecorationSet {
   return DecorationSet.create(view.state.doc, decorations);
 }
 
-function createGhostSelectionPlugin(): Plugin {
-  return new Plugin({
-    key: ghostSelectionKey,
-
-    state: {
-      init(_, state) {
-        return DecorationSet.empty;
-      },
-
-      apply(tr, oldSet, _oldState, newState) {
-        // 每次 transaction 都重新计算（频率不高，因为离焦后编辑操作极少）
-        // 实际重建由 view.update 触发
-        return oldSet;
-      },
-    },
-
-    view(editorView) {
-      let currentDecos = buildGhostDecorations(editorView);
-
-      // 订阅 store 变化来更新装饰
-      const unsub = useEditorStore.subscribe(
-        (state) => ({
-          focused: state.editorFocused,
-          target: state.persistedWritingTarget,
-        }),
-        () => {
-          currentDecos = buildGhostDecorations(editorView);
-          editorView.dispatch(editorView.state.tr.setMeta(ghostSelectionKey, true));
-        },
-        { equalityFn: (a, b) => a.focused === b.focused && a.target === b.target },
-      );
-
-      return {
-        update(view) {
-          currentDecos = buildGhostDecorations(view);
-        },
-        destroy() {
-          unsub();
-        },
-      };
-    },
-
-    props: {
-      decorations(state) {
-        // 使用 view 回调更新的装饰
-        const editorView = (this as unknown as { spec: { view?: (v: EditorView) => Record<string, unknown> } }).spec;
-        // 由于 ProseMirror 的 plugin decorations 在 view.update 后会被重新取值，
-        // 我们利用 plugin state 机制 + meta 触发更新
-        const meta = state.tr?.getMeta?.(ghostSelectionKey);
-        // 实际的装饰在 view callback 中计算并缓存
-        return DecorationSet.empty;
-      },
-    },
-  });
-}
 
 /**
  * 独立重构：使用更可靠的 decorations 返回方式。

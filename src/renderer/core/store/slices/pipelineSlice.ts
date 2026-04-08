@@ -30,6 +30,7 @@ export interface PipelineSlice {
   taskPanelHeight: number;
 
   updateTask: (event: PipelineProgressEvent) => void;
+  updateStreamPreview: (taskId: string, chunk: string, isLast: boolean) => void;
   removeTask: (taskId: string) => void;
   pushTaskHistory: (entry: TaskHistoryEntry) => void;
   clearTaskHistory: () => void;
@@ -65,14 +66,36 @@ export const createPipelineSlice: StateCreator<
       ) {
         return;
       }
-      state.activeTasks[event.taskId] = {
+      const updated: TaskUIState = {
         taskId: event.taskId,
         workflow: event.workflow,
         status: event.status,
         currentStep: event.currentStep,
         progress: event.progress,
-        ...(event.substeps ? { substeps: event.substeps } : {}),
+        startedAt: existing?.startedAt ?? Date.now(),
       };
+      if (event.substeps) updated.substeps = event.substeps;
+      if (event.estimatedRemainingMs != null) updated.estimatedRemainingMs = event.estimatedRemainingMs;
+      if (event.currentItemLabel) updated.currentItemLabel = event.currentItemLabel;
+      if (existing?.streamPreview) updated.streamPreview = existing.streamPreview;
+      state.activeTasks[event.taskId] = updated;
+    }),
+
+  updateStreamPreview: (taskId, chunk, isLast) =>
+    set((state) => {
+      const task = state.activeTasks[taskId];
+      if (!task) return;
+      if (isLast) {
+        // Clear preview when stream ends
+        delete task.streamPreview;
+      } else {
+        const MAX_PREVIEW = 200;
+        const current = task.streamPreview ?? '';
+        const updated = current + chunk;
+        task.streamPreview = updated.length > MAX_PREVIEW
+          ? updated.slice(updated.length - MAX_PREVIEW)
+          : updated;
+      }
     }),
 
   removeTask: (taskId) =>

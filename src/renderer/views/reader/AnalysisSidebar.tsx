@@ -8,7 +8,7 @@
  * See spec: section 1.7
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import {
   FileText, Lightbulb, Highlighter, StickyNote, Link2,

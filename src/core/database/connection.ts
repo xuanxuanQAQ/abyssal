@@ -42,7 +42,6 @@ function resolveVecExtensionPath(): string {
   // 优先级 2：使用 sqlite-vec npm 包的官方路径解析
   // sqlite-vec 按平台拆包（sqlite-vec-windows-x64 等），通过 require.resolve 定位
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getLoadablePath } = require('sqlite-vec') as { getLoadablePath: () => string };
     const loadablePath = getLoadablePath();
     if (fs.existsSync(loadablePath)) return loadablePath;

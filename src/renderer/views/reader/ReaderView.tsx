@@ -8,7 +8,7 @@
  * 使用 react-resizable-panels 管理面板尺寸。
  */
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Panel, Group, Separator } from 'react-resizable-panels';
 import { useAppStore } from '../../core/store';
@@ -38,9 +38,6 @@ export function ReaderView() {
   const { data: annotations = [] } = useAnnotations(selectedPaperId);
 
   const scrollContainerRef = useRef<ScrollContainerHandle>(null);
-  const [flashingAnnotationId, setFlashingAnnotationId] = useState<
-    string | null
-  >(null);
 
   const renderThumbnail = useCallback(
     (canvas: HTMLCanvasElement, pageNumber: number): { promise: Promise<void>; cancel: () => void } => {
@@ -108,10 +105,8 @@ export function ReaderView() {
   }, []);
 
   const handleScrollToAnnotation = useCallback(
-    (page: number, annotationId: string) => {
+    (page: number, _annotationId: string) => {
       scrollContainerRef.current?.scrollToPage(page);
-      setFlashingAnnotationId(annotationId);
-      setTimeout(() => setFlashingAnnotationId(null), 1500);
     },
     [],
   );

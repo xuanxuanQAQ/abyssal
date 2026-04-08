@@ -4,7 +4,6 @@
 import type Database from 'better-sqlite3';
 import type { PaperId } from '../../types/common';
 import type { PaperRelation, RelationEdgeType } from '../../types/relation';
-import type { RelationType } from '../../types/mapping';
 import type {
   GraphData,
   GraphEdge as SharedGraphEdge,

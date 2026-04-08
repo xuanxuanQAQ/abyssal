@@ -129,6 +129,7 @@ export function registerPapersHandlers(ctx: AppContext): void {
         completed: p.analysisCompleted,
         needs_review: p.analysisNeedsReview,
         failed: p.analysisFailed,
+        skipped: p.analysisSkipped,
       },
       byFulltextStatus: {
         not_attempted: p.fulltextNotAttempted,

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronLeft,
@@ -10,12 +10,31 @@ import {
   StickyNote,
   Tag,
   Square,
+  ChevronDown,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useReaderStore } from '../../../core/store/useReaderStore';
+import { ColorPicker } from '../annotations/ColorPicker';
+import { HIGHLIGHT_COLOR_MAP } from '../shared/highlightColors';
 import type { ZoomActions } from '../hooks/useZoom';
+import type { HighlightColor } from '../../../../shared-types/enums';
 
 export interface ToolbarStripProps {
   zoomActions: ZoomActions;
+  /** Whether text is currently selected (and no annotation tool active) */
+  hasSelection?: boolean;
+  /** Current highlight color for selection actions */
+  selectionHighlightColor?: HighlightColor;
+  /** Apply highlight to current selection */
+  onSelectionHighlight?: (color: HighlightColor) => void;
+  /** Apply note to current selection; anchor = button position for popover */
+  onSelectionNote?: (anchor: { x: number; y: number }) => void;
+  /** Apply concept tag to current selection; anchor = button position for popover */
+  onSelectionConceptTag?: (anchor: { x: number; y: number }) => void;
+  /** Change the default highlight color */
+  onColorChange?: (color: HighlightColor) => void;
+  /** Number of auto-captured images in selection */
+  capturedImageCount?: number;
 }
 
 const ZOOM_PRESETS = [
@@ -31,7 +50,16 @@ const ZOOM_PRESETS = [
 const ACTIVE_BG = 'var(--accent-color, #2563eb)';
 const ACTIVE_COLOR = '#fff';
 
-function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
+function ToolbarStrip({
+  zoomActions,
+  hasSelection,
+  selectionHighlightColor,
+  onSelectionHighlight,
+  onSelectionNote,
+  onSelectionConceptTag,
+  onColorChange,
+  capturedImageCount,
+}: ToolbarStripProps) {
   const { t } = useTranslation();
   const currentPage = useReaderStore((s) => s.currentPage);
   const totalPages = useReaderStore((s) => s.totalPages);
@@ -43,6 +71,19 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
 
   const [pageInputValue, setPageInputValue] = useState(String(currentPage));
   const [isPageInputFocused, setIsPageInputFocused] = useState(false);
+  const [showSelectionColorPicker, setShowSelectionColorPicker] = useState(false);
+  const colorPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showSelectionColorPicker) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
+        setShowSelectionColorPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSelectionColorPicker]);
 
   React.useEffect(() => {
     if (!isPageInputFocused) {
@@ -296,6 +337,101 @@ function ToolbarStrip({ zoomActions }: ToolbarStripProps) {
           <Square size={15} />
         </button>
       </div>
+
+      {/* ── Selection quick-actions (visible when text selected w/o tool mode) ── */}
+      {hasSelection && selectionHighlightColor && (
+        <>
+          <div style={{ width: 1, height: 16, background: 'var(--border-default)', margin: '0 4px' }} />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              padding: '0 4px',
+              borderRadius: 8,
+              background: 'var(--accent-color-muted, rgba(37,99,235,0.08))',
+            }}
+          >
+            {/* Highlight with color indicator */}
+            <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+              <button
+                type="button"
+                style={{ ...btnBase, flexDirection: 'column', gap: 0, padding: '2px 4px' }}
+                onClick={() => onSelectionHighlight?.(selectionHighlightColor)}
+                title={t('reader.toolbar.textHighlight', '高亮')}
+              >
+                <Highlighter size={14} />
+                <div style={{ width: 14, height: 2, backgroundColor: HIGHLIGHT_COLOR_MAP[selectionHighlightColor], borderRadius: 1 }} />
+              </button>
+              <button
+                type="button"
+                style={{ ...btnBase, padding: '0 2px', width: 'auto' }}
+                onClick={() => setShowSelectionColorPicker((p) => !p)}
+              >
+                <ChevronDown size={10} />
+              </button>
+              {showSelectionColorPicker && (
+                <div
+                  ref={colorPickerRef}
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    marginTop: 4,
+                    padding: 6,
+                    backgroundColor: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-sm)',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    zIndex: 26,
+                  }}
+                >
+                  <ColorPicker
+                    value={selectionHighlightColor}
+                    onChange={(color) => {
+                      onColorChange?.(color);
+                      setShowSelectionColorPicker(false);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+            {/* Note */}
+            <button
+              type="button"
+              style={{ ...btnBase, gap: 3, width: 'auto', padding: '0 6px', fontSize: 'var(--text-xs)' }}
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                onSelectionNote?.({ x: r.left + r.width / 2, y: r.bottom });
+              }}
+              title={t('reader.toolbar.textNote', '笔记')}
+            >
+              <StickyNote size={14} />
+              <span>{t('reader.toolbar.textNote', '笔记')}</span>
+            </button>
+            {/* Concept tag */}
+            <button
+              type="button"
+              style={{ ...btnBase, gap: 3, width: 'auto', padding: '0 6px', fontSize: 'var(--text-xs)' }}
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                onSelectionConceptTag?.({ x: r.left + r.width / 2, y: r.bottom });
+              }}
+              title={t('reader.toolbar.conceptTag', '概念标签')}
+            >
+              <Tag size={14} />
+              <span>{t('reader.toolbar.conceptTag', '概念')}</span>
+            </button>
+            {/* Captured images */}
+            {(capturedImageCount ?? 0) > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '0 4px', color: 'rgba(139,92,246,0.9)', fontSize: 11, userSelect: 'none' }}>
+                <ImageIcon size={12} />
+                <span>{capturedImageCount}</span>
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -24,10 +24,6 @@ export interface RagPassage {
   date?: string;
 }
 
-interface TokenCounter {
-  count: (text: string) => number;
-}
-
 // ─── §6.2: Diversity-aware RAG truncation ───
 
 /**

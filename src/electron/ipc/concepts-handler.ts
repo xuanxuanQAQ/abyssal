@@ -14,7 +14,7 @@
 import type { AppContext } from '../app-context';
 import { typedHandler } from './register';
 import type { ConceptDefinition } from '../../core/types/concept';
-import { asConceptId, asPaperId } from '../../core/types/common';
+import { asConceptId } from '../../core/types/common';
 import type { UpdateConceptFields, ConflictResolution } from '../../core/database/dao/concepts';
 import type { ChangeImpactReport, ConceptHealthScore, PaperAnalysisBase } from '../../shared-types/models';
 import type { PaperId } from '../../core/types/common';

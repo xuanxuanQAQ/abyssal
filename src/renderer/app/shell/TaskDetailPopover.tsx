@@ -135,59 +135,76 @@ export function TaskDetailPopover({ children }: TaskDetailPopoverProps) {
             )}
 
             {runningTasks.map(([taskId, task]) => (
-              <div
-                key={taskId}
-                style={{
-                  padding: '6px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 'var(--text-sm)',
-                }}
-              >
-                {/* 工作流名称 */}
-                <span style={{ flex: 1, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {WORKFLOW_I18N_KEYS[task.workflow] ? t(WORKFLOW_I18N_KEYS[task.workflow]!) : task.workflow} — {task.currentStep || t('taskDetail.preparing')}
-                </span>
+              <div key={taskId} style={{ padding: '6px 12px', fontSize: 'var(--text-sm)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {/* 工作流名称 */}
+                  <span style={{ flex: 1, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {WORKFLOW_I18N_KEYS[task.workflow] ? t(WORKFLOW_I18N_KEYS[task.workflow]!) : task.workflow} — {task.currentStep ? t(`workflowMonitor.stages.${task.currentStep}`, { defaultValue: task.currentStep }) : t('taskDetail.preparing')}
+                  </span>
 
-                {/* 进度条 */}
-                <div
-                  role="progressbar"
-                  aria-valuenow={task.progress.current}
-                  aria-valuemax={task.progress.total}
-                  style={{
-                    width: 60,
-                    height: 4,
-                    borderRadius: 2,
-                    backgroundColor: 'var(--border-subtle)',
-                    overflow: 'hidden',
-                  }}
-                >
+                  {/* 进度条 */}
                   <div
+                    role="progressbar"
+                    aria-valuenow={task.progress.current}
+                    aria-valuemax={task.progress.total}
                     style={{
-                      width: `${task.progress.total > 0 ? (task.progress.current / task.progress.total) * 100 : 0}%`,
-                      height: '100%',
-                      backgroundColor: 'var(--accent-color)',
-                      transition: 'width var(--duration-fast)',
+                      width: 60,
+                      height: 4,
+                      borderRadius: 2,
+                      backgroundColor: 'var(--border-subtle)',
+                      overflow: 'hidden',
                     }}
-                  />
-                </div>
+                  >
+                    <div
+                      style={{
+                        width: `${task.progress.total > 0 ? (task.progress.current / task.progress.total) * 100 : 0}%`,
+                        height: '100%',
+                        backgroundColor: 'var(--accent-color)',
+                        transition: 'width var(--duration-fast)',
+                      }}
+                    />
+                  </div>
 
-                {/* 取消按钮 */}
-                <button
-                  onClick={() => handleCancelTask(taskId)}
-                  aria-label={t('common.cancel')}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: 'var(--text-muted)',
-                    padding: 2,
-                    fontSize: 'var(--text-xs)',
-                  }}
-                >
-                  <X size={12} />
-                </button>
+                  {/* 取消按钮 */}
+                  <button
+                    onClick={() => handleCancelTask(taskId)}
+                    aria-label={t('common.cancel')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--text-muted)',
+                      padding: 2,
+                      fontSize: 'var(--text-xs)',
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                {/* Current item + ETA */}
+                {(task.currentItemLabel || task.estimatedRemainingMs) && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, marginRight: 8 }}>
+                      {task.currentItemLabel ?? ''}
+                    </span>
+                    {task.estimatedRemainingMs != null && task.estimatedRemainingMs > 0 && (
+                      <span style={{ whiteSpace: 'nowrap', color: 'var(--accent-color)' }}>
+                        ~{Math.ceil(task.estimatedRemainingMs / 1000)}s
+                      </span>
+                    )}
+                  </div>
+                )}
+                {/* Stream preview snippet */}
+                {task.streamPreview && (
+                  <div style={{
+                    marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    fontFamily: 'var(--font-mono, monospace)', opacity: 0.7,
+                  }}>
+                    {task.streamPreview.slice(-80)}
+                    <span style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>|</span>
+                  </div>
+                )}
               </div>
             ))}
 

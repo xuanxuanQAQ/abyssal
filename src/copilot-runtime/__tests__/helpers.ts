@@ -54,7 +54,7 @@ export function makeRecipe(overrides?: Partial<OperationRecipe> & { matchReturn?
     priority: overrides?.priority ?? 5,
     specificity: overrides?.specificity ?? 5,
     matches: overrides?.matches ?? (() => matchReturn),
-    buildPlan: overrides?.buildPlan ?? (async (op) => makePlan(overrides?.id ?? `recipe-${seq}`)),
+    buildPlan: overrides?.buildPlan ?? (async (_op) => makePlan(overrides?.id ?? `recipe-${seq}`)),
   };
 }
 

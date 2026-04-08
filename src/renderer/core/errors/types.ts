@@ -29,6 +29,19 @@ export function classifyError(code: string): ErrorSeverity {
 /**
  * 判断一个未知错误是否为 AbyssalError 结构体
  */
+/**
+ * 判断是否为应用关闭期间的 IPC 错误（可安全忽略）
+ */
+export function isShutdownError(err: unknown): boolean {
+  if (err instanceof Error) {
+    return (err as unknown as Record<string, unknown>)['code'] === 'APP_SHUTTING_DOWN';
+  }
+  return false;
+}
+
+/**
+ * 判断一个未知错误是否为 AbyssalError 结构体
+ */
 export function isAbyssalError(err: unknown): err is AbyssalError {
   if (typeof err !== 'object' || err === null) return false;
   const obj = err as Record<string, unknown>;

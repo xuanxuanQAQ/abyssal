@@ -190,8 +190,10 @@ function normalizeConfidence(raw: unknown): number {
 
   if (typeof raw === 'number') {
     if (isNaN(raw) || !isFinite(raw)) return 0.50;
-    // §8.4: Percentage detection — value in (1, 100] treated as percentage
-    if (raw > 1 && raw <= 100) {
+    // §8.4: Percentage detection — value in [5, 100] treated as percentage.
+    // Values in (1, 5) are ambiguous (could be >1.0 confidence or a low percentage);
+    // clamp them to 1.0 to avoid misinterpreting e.g. 1.5 as 0.015.
+    if (raw >= 5 && raw <= 100) {
       return Math.round((raw / 100) * 100) / 100;
     }
     if (raw < 0) return 0.0;
@@ -250,31 +252,6 @@ export function detectLanguage(text: string): string {
   if (krChars > 0 && (krChars / text.length > 0.1 || krChars > 10)) return 'ko';
 
   return 'en';
-}
-
-// ─── Helpers ───
-
-function asString(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v == null) return '';
-  return String(v);
-}
-
-function asStringOrNull(v: unknown): string | null {
-  if (typeof v === 'string') {
-    const trimmed = v.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  return null;
-}
-
-function asNumberOrNull(v: unknown): number | null {
-  if (typeof v === 'number') return v;
-  if (typeof v === 'string') {
-    const n = parseFloat(v);
-    return isNaN(n) ? null : n;
-  }
-  return null;
 }
 
 // ─── §8.2: Levenshtein distance for concept_id typo suggestion ───

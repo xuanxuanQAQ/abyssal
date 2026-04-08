@@ -4,10 +4,6 @@
 
 import type {
   OperationRecipe,
-  CopilotOperation,
-  ContextSnapshot,
-  ExecutionPlan,
-  ExecutionStep,
 } from './types';
 
 // ─── Chat/Ask Recipe ───
@@ -18,7 +14,7 @@ export const askRecipe: OperationRecipe = {
   priority: 0,
   specificity: 0,
   matches: (op) => op.intent === 'ask',
-  buildPlan: async (op) => ({
+  buildPlan: async (_op) => ({
     recipeId: 'builtin:ask',
     target: { type: 'chat-message' },
     steps: [{ kind: 'llm_generate', mode: 'chat' }],

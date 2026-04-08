@@ -1,6 +1,6 @@
 import React from 'react';
 import type { HeatmapCell } from '../../../../../../shared-types/models';
-import type { RelationType, AdjudicationStatus } from '../../../../../../shared-types/enums';
+import type { RelationType } from '../../../../../../shared-types/enums';
 import { RELATION_LABELS_ZH, RELATION_COLORS } from '../../../shared/relationTheme';
 
 interface CellTooltipProps {

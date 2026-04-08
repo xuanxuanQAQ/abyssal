@@ -9,7 +9,6 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Library, CheckCircle, Clock, FileText } from 'lucide-react';
 import { usePaperList } from '../../../core/ipc/hooks/usePapers';
-import { useAppStore } from '../../../core/store';
 
 const scrollContainerStyle: React.CSSProperties = { overflowY: 'auto', height: '100%' };
 

@@ -15,7 +15,6 @@ import {
   Group,
   Separator,
   usePanelRef,
-  type PanelImperativeHandle,
 } from 'react-resizable-panels';
 import { TitleBar } from './TitleBar';
 import { NavRail } from './NavRail';
@@ -184,7 +183,7 @@ export function MainLayout() {
         </DndProvider>
       </div>
 
-      {/* Bottom panel — 任务活动面板 */}
+      {/* 浮动任务活动面板 */}
       {taskPanelOpen && (
         <div className="app-shell__bottompanel">
           <WorkflowMonitor />

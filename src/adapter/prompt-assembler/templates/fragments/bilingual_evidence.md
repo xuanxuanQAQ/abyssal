@@ -2,11 +2,15 @@
 
 For each concept_mapping, the `evidence` field must use the following structure:
 
-```yaml
-evidence:
-  en: "English expression of the evidence (used for cross-language alignment)"
-  original: "论文原文片段 (preserved in the original language for researcher verification)"
-  original_lang: "zh-CN"
+```json
+{
+  "en": "English expression of the evidence (used for cross-language alignment)",
+  "original": "论文原文片段 (preserved in the original language for researcher verification)",
+  "original_lang": "zh-CN",
+  "chunk_id": null,
+  "page": null,
+  "annotation_id": null
+}
 ```
 
 Rules:

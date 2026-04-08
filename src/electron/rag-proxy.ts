@@ -7,7 +7,6 @@ import type { RagDiagnosticsSummary, RagServiceLike } from '../core/rag';
 import type { RankedChunk, TextChunk } from '../core/types/chunk';
 import type { RetrievalRequest, RetrievalResult } from '../core/types/retrieval';
 import type { IndexResult } from '../core/rag';
-import type { LogLevel } from '../core/infra/logger';
 import type {
   RagInitPayload,
   RagLifecycleRequest,
@@ -151,6 +150,7 @@ class RagProcessProxy implements ManagedRagService {
       if (this.child.stdout) {
         this.child.stdout.on('data', (data: Buffer) => {
           const text = data.toString().trim();
+          // eslint-disable-next-line no-console
           if (text) console.log(`[rag-subprocess] ${text}`);
         });
       }

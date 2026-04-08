@@ -122,7 +122,7 @@ export function createDiscoveryCapability(): Capability {
               abstract: best['abstract'] ?? null,
               venue: best['venue'] ?? null,
               paperType: 'unknown',
-              source: 'auto_find',
+              source: backend,
             };
             const paperId = await ctx.services.addPaper(paper);
 

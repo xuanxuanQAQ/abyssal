@@ -410,7 +410,6 @@ function executeTsMigration(
   config: AbyssalConfig,
   skipVecExtension: boolean = false,
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const mod = require(script.tsPath!) as { migrate?: TsMigrateFn };
 
   if (typeof mod.migrate !== 'function') {

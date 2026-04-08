@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getAPI } from '../../../core/ipc/bridge';
 import { PDFDocumentManager } from '../core/pdfDocumentManager';
 import {

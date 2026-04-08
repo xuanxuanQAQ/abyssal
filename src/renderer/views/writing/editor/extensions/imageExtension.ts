@@ -8,7 +8,7 @@
  * - Figure numbering via label attribute (for cross-references)
  */
 
-import { Node, mergeAttributes, type CommandProps } from '@tiptap/core';
+import { Node, type CommandProps } from '@tiptap/core';
 import type { DOMOutputSpec } from '@tiptap/pm/model';
 
 declare module '@tiptap/core' {

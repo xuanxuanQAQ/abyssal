@@ -3,7 +3,7 @@
 
 import type { ApiKeysConfig } from '../types/config';
 import type { FieldDefinition } from './config-schema';
-import { CONFIG_FIELD_DEFS, coerceToSchemaType, getNestedValue } from './config-schema';
+import { CONFIG_FIELD_DEFS, coerceToSchemaType } from './config-schema';
 
 export type WarnFn = (message: string, ctx?: Record<string, unknown>) => void;
 

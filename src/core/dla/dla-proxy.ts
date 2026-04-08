@@ -13,7 +13,6 @@
  */
 
 import { fork, type ChildProcess } from 'node:child_process';
-import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
@@ -23,7 +22,6 @@ import type {
   DlaDetectResult,
   DlaDetectProgress,
   DlaDetectError,
-  DlaLifecycleResponse,
   ContentBlock,
 } from './types';
 import { isDlaLifecycleResponse } from './types';
@@ -79,6 +77,7 @@ export class DlaProxy extends EventEmitter {
     if (this._initialized || this._starting) return;
     this._starting = true;
 
+    // eslint-disable-next-line no-console
     console.log('[DLA-Proxy] Starting subprocess…', { modelPath: this.opts.modelPath });
     try {
       this.spawnChild();
@@ -87,6 +86,7 @@ export class DlaProxy extends EventEmitter {
         executionProvider: this.opts.executionProvider,
       });
       this._initialized = true;
+      // eslint-disable-next-line no-console
       console.log('[DLA-Proxy] Subprocess initialized successfully');
       this.emit('ready');
     } catch (err) {
@@ -124,6 +124,7 @@ export class DlaProxy extends EventEmitter {
     }
 
     const id = crypto.randomUUID();
+    // eslint-disable-next-line no-console
     console.log(`[DLA-Proxy] detect request ${id}: pages=[${pageIndices.join(',')}]`);
 
     return new Promise<void>((resolve, reject) => {
@@ -182,6 +183,7 @@ export class DlaProxy extends EventEmitter {
     switch (msg.type) {
       case 'detect:result': {
         const result = msg as DlaDetectResult;
+        // eslint-disable-next-line no-console
         console.log(`[DLA-Proxy] Page ${result.pageIndex} done: ${result.blocks.length} blocks in ${result.inferenceMs}ms`);
         this.emit('page', {
           pageIndex: result.pageIndex,
@@ -196,6 +198,7 @@ export class DlaProxy extends EventEmitter {
         this.emit('progress', { completed: progress.completed, total: progress.total });
         // If all pages done, signal completion
         if (progress.completed >= progress.total) {
+          // eslint-disable-next-line no-console
           console.log(`[DLA-Proxy] Detect batch ${msg.id} complete (${progress.total} pages)`);
           this.emit(`detect:done:${msg.id}`);
         }

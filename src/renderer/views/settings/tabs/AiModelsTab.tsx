@@ -4,7 +4,7 @@ import { Cpu, Zap, Shield } from 'lucide-react';
 import type { SettingsData } from '../../../../shared-types/models';
 import type { UpdateSectionFn } from '../types';
 import { PROVIDERS, PROVIDER_LABELS, MODELS_BY_PROVIDER, WORKFLOW_KEYS } from '../constants';
-import { Section, Row, Select, NumberInput, Toggle, SegmentedControl } from '../components/ui';
+import { Section, Row, Select, NumberInput, Toggle } from '../components/ui';
 
 export function AiModelsTab({ settings, onUpdate }: { settings: SettingsData; onUpdate: UpdateSectionFn }) {
   const { t } = useTranslation();
@@ -182,7 +182,7 @@ const REASONING_OPTIONS = [
   { value: 'high', labelKey: 'settings.aiModels.reasoningHigh' },
 ] as const;
 
-function WorkflowRow({ workflow, label, hint, isDefault, provider, model, onToggleDefault, onChangeProvider, onChangeModel, reasoningLevel, onChangeReasoning }: {
+function WorkflowRow({ workflow: _workflow, label, hint, isDefault, provider, model, onToggleDefault, onChangeProvider, onChangeModel, reasoningLevel, onChangeReasoning }: {
   workflow: string;
   label: string;
   hint?: string | undefined;

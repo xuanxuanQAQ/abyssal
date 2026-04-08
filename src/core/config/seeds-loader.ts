@@ -163,7 +163,7 @@ export async function resolveSeeds(
   const resolved: ResolvedSeed[] = [];
 
   for (const seed of seeds) {
-    let result: ResolvedSeed | null = null;
+    let result: ResolvedSeed | null;
 
     if (seed.doi && seed.doi.trim()) {
       result = await resolveByDoi(seed, searchModule);

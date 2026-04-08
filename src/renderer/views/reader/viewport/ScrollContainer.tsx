@@ -5,7 +5,6 @@ import React, {
   useMemo,
   forwardRef,
   useImperativeHandle,
-  useState,
 } from 'react';
 import { PageSlot } from './PageSlot';
 import type { PageMetadataMap } from '../core/pageMetadataPreloader';

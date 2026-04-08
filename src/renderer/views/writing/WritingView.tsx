@@ -76,16 +76,6 @@ const toolbarTopRowStyle: React.CSSProperties = {
   flexWrap: 'wrap',
 };
 
-const toolbarSelectStyle: React.CSSProperties = {
-  minWidth: 160,
-  padding: '4px 8px',
-  borderRadius: 6,
-  border: '1px solid var(--border-subtle)',
-  backgroundColor: 'var(--bg-surface)',
-  color: 'var(--text-primary)',
-  fontSize: '12px',
-};
-
 const secondaryButtonStyle: React.CSSProperties = {
   padding: '5px 10px',
   borderRadius: 6,

@@ -26,6 +26,7 @@ let initialized = false;
 
 function log(msg: string, data?: Record<string, unknown>): void {
   const payload = data ? ` ${JSON.stringify(data)}` : '';
+  // eslint-disable-next-line no-console
   console.log(`[DLA-Process] ${msg}${payload}`);
 }
 

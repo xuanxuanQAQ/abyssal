@@ -237,7 +237,6 @@ export async function runEmbeddingMigration(
       ).get(lastProcessedRowid) as { cnt: number }).cnt
     : 0;
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const batch = selectBatch.all(lastProcessedRowid, batchSize) as Array<{
       rowid: number;

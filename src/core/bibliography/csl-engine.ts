@@ -178,7 +178,6 @@ export class CslEngine {
     };
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const CSL = require('citeproc');
       this.engine = new CSL.Engine(sys, this.styleXml, this.defaultLocale) as typeof this.engine;
     } catch (err) {

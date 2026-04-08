@@ -63,10 +63,12 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
     if (!paperId || !enabled) return;
 
     const api = getAPI();
+    // eslint-disable-next-line no-console
     console.log('[DLA-Hook] Subscribing to dlaPageReady for current document');
     const unsub = api.on.dlaPageReady((event) => {
       if (event.paperId !== paperId) return;
 
+      // eslint-disable-next-line no-console
       console.log(`[DLA-Hook] Page ${event.pageIndex} ready: ${event.blocks.length} blocks`);
       setBlockMap((prev) => {
         const next = new Map(prev);
@@ -105,6 +107,7 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
 
       if (cancelled || loaded.size === 0) return;
 
+      // eslint-disable-next-line no-console
       console.log(`[DLA-Hook] Loaded ${loaded.size} pages from DB for current document`);
       setBlockMap(loaded);
     };
@@ -123,6 +126,7 @@ export function useLayoutBlocks(opts: UseLayoutBlocksOptions): Map<number, Conte
     }
 
     const api = getAPI();
+    // eslint-disable-next-line no-console
     console.log(`[DLA-Hook] Triggering full document analysis for current document (${totalPages} pages)`);
     api.dla.analyzeDocument(paperId, pdfPath, totalPages).then(() => {
       triggeredDocRef.current = paperId;

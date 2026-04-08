@@ -40,7 +40,7 @@ export interface BlockOverlayLayerProps {
 }
 
 const BlockOverlayLayer = React.memo(function BlockOverlayLayer(props: BlockOverlayLayerProps) {
-  const { pageNumber, cssWidth, cssHeight, blocks, onBlockSelect, onBlockHover } = props;
+  const { pageNumber: _pageNumber, cssWidth, cssHeight, blocks, onBlockSelect, onBlockHover } = props;
 
   const activeAnnotationTool = useReaderStore((s) => s.activeAnnotationTool);
   const isActive = activeAnnotationTool === 'smartSelect';

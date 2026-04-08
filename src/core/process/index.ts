@@ -4,7 +4,6 @@
 // 仅依赖 types/ 和 infra/token-counter，不依赖 database/rag/search/acquire。
 
 import type { AbyssalConfig } from '../types/config';
-import type { PaperId } from '../types/common';
 import type { VisionCapable } from '../types/common';
 import type { Logger } from '../infra/logger';
 import type {
@@ -14,15 +13,12 @@ import type {
   FigureBlock,
   PdfAnnotationRaw,
   StyledLine,
-  PdfEmbeddedMetadata,
-  FirstPageMetadata,
 } from './types';
 import type {
   TextChunk,
   SectionMap,
   SectionMapV2,
   SectionBoundaryList,
-  ChunkSource,
 } from '../types/chunk';
 
 import { extractText, terminateOcrWorker } from './extract-text';

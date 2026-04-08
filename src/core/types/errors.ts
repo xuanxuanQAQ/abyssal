@@ -527,7 +527,6 @@ export class ContentFilterError extends LlmClientError {
 
 // ═══ fromJSON 反序列化映射表 ═══
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const ERROR_CLASS_MAP: Record<string, new (opts: any) => AbyssalError> = {
   AbyssalError,
   NetworkError,

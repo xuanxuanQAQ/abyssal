@@ -478,7 +478,7 @@ export const mathBlockNode = TiptapNode.create({
           const nodeType = state.schema.nodes.mathBlock;
           if (!nodeType) return;
           const node = nodeType.create({ latex: '' });
-          const tr = state.tr.replaceWith(range.from, range.to, node);
+          state.tr.replaceWith(range.from, range.to, node);
         },
       }),
     ];

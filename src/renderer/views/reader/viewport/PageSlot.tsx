@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { CanvasLayer } from './layers/CanvasLayer';
 import { TextLayer } from './layers/TextLayer';
 import { OcrTextLayer } from './layers/OcrTextLayer';

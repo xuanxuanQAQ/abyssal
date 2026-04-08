@@ -50,6 +50,14 @@ export function addSuggestedConcept(
   const termNormalized = input.term.trim().toLowerCase();
   const mergedSuggestedKeywords = normalizeSuggestedKeywords(input.suggestedKeywords ?? null);
 
+  // Validate closest_existing_concept_id against FK constraint:
+  // if the referenced concept doesn't exist, set to null to avoid FK violation.
+  let closestConceptId = input.closestExistingConceptId ?? null;
+  if (closestConceptId) {
+    const exists = db.prepare('SELECT 1 FROM concepts WHERE id = ?').get(closestConceptId);
+    if (!exists) closestConceptId = null;
+  }
+
   // 检查是否已存在 pending 记录
   const existing = db
     .prepare(
@@ -84,7 +92,7 @@ export function addSuggestedConcept(
         input.reason, input.reason,
         input.suggestedDefinition ?? null,
         JSON.stringify(mergeSuggestedKeywords(existingKeywords, mergedSuggestedKeywords)),
-        input.closestExistingConceptId ?? null,
+        closestConceptId,
         input.closestExistingConceptSimilarity ?? null,
         timestamp,
         existingId,
@@ -110,7 +118,7 @@ export function addSuggestedConcept(
         input.reason, input.reason,
         input.suggestedDefinition ?? null,
         JSON.stringify(mergeSuggestedKeywords(existingKeywords, mergedSuggestedKeywords)),
-        input.closestExistingConceptId ?? null,
+        closestConceptId,
         input.closestExistingConceptSimilarity ?? null,
         timestamp,
         existingId,
@@ -134,7 +142,7 @@ export function addSuggestedConcept(
     termNormalized,
     input.frequencyInPaper,
     JSON.stringify([input.sourcePaperId]),
-    input.closestExistingConceptId ?? null,
+    closestConceptId,
     input.closestExistingConceptSimilarity ?? null,
     input.reason,
     input.suggestedDefinition ?? null,

@@ -188,7 +188,7 @@ async function step3_loadConfig(ctx: BootstrapContext): Promise<void> {
 
   try {
     ctx.config = ConfigLoader.loadFromWorkspace(ctx.args.workspace, ctx.globalConfig);
-  } catch (err) {
+  } catch {
     // Attempt recovery: rename corrupted config and retry
     try {
       const fs = require('node:fs') as typeof import('node:fs');
@@ -325,54 +325,6 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   });
   const processModule = createProcessService(config, null, logger);
   const searchModule = createSearchService(config, logger);
-
-  // ── Web Search Service (Tavily / SerpAPI / Bing) ──
-  const { createWebSearchService } = await import('../core/search/web-search');
-
-  /** 根据语言配置推导 Bing mkt 参数 */
-  function deriveBingMarket(cfg: AbyssalConfig): string {
-    const lang = cfg.language?.defaultOutputLanguage ?? 'en';
-    if (/^zh/i.test(lang)) return 'zh-CN';
-    if (/^ja/i.test(lang)) return 'ja-JP';
-    if (/^ko/i.test(lang)) return 'ko-KR';
-    if (/^de/i.test(lang)) return 'de-DE';
-    if (/^fr/i.test(lang)) return 'fr-FR';
-    if (/^es/i.test(lang)) return 'es-ES';
-    return 'en-US';
-  }
-
-  function buildWebSearchService(
-    cfg: AbyssalConfig,
-  ): import('../core/search/web-search').WebSearchService | null {
-    if (!cfg.webSearch?.enabled) return null;
-    if (!cfg.apiKeys.webSearchApiKey) return null;
-
-    try {
-      const svc = createWebSearchService(new HttpClient({ logger }), logger, {
-        backend: cfg.webSearch.backend ?? 'tavily',
-        apiKey: cfg.apiKeys.webSearchApiKey,
-        market: deriveBingMarket(cfg),
-      });
-      logger.info('WebSearchService initialized', { backend: cfg.webSearch.backend });
-      return svc;
-    } catch (err) {
-      logger.warn('Failed to create WebSearchService', { error: (err as Error).message });
-      return null;
-    }
-  }
-
-  function getWebSearchDisabledReason(): string {
-    const cfg = configProvider.config;
-    if (!cfg.webSearch?.enabled) {
-      return 'Web search is disabled. Enable it in Settings → Web Search.';
-    }
-    if (!cfg.apiKeys.webSearchApiKey) {
-      return 'Web search API key not configured. Add it in Settings → API Keys.';
-    }
-    return 'Web search service failed to initialize. Check logs for details.';
-  }
-
-  let webSearchService = buildWebSearchService(config);
 
   // ── Layer 2: Reranker (API backends) ──
   const reranker = new RerankerScheduler(configProvider, logger);
@@ -868,7 +820,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
         }
         // Fallback: use the sync dbService if dbProxy wraps it
         // The diagnostic queries are SELECT-only (safe for read access)
-        const result = await dbProxy.getStats(); // This confirms DB is accessible
+        await dbProxy.getStats(); // Confirms DB is accessible
         // TODO: Expose a rawQuery method on DbProxy for diagnostic SQL.
         // For now, diagnostic queries will return empty results.
         return [];

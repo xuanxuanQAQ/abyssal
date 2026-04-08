@@ -11,7 +11,7 @@ import { useMemoList } from '../../../core/ipc/hooks/useMemos';
 import { useNoteList } from '../../../core/ipc/hooks/useNotes';
 import { useAppStore } from '../../../core/store';
 import { cancelPendingContextReveal, previewContextSource } from '../engine/revealContextSource';
-import type { Memo, NoteMeta, MemoFilter, NoteFilter } from '../../../../shared-types/models';
+import type { MemoFilter, NoteFilter } from '../../../../shared-types/models';
 
 interface RelatedNotesProps {
   paperIds?: string[];

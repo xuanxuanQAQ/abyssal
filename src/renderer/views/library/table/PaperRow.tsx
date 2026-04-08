@@ -5,7 +5,7 @@
  * 渲染 11 列 Cell。展开时显示 abstract 区域。
  */
 
-import React, { memo, useRef, useEffect } from 'react';
+import React, { memo, useRef } from 'react';
 import { SelectCell } from './cells/SelectCell';
 import { RelevanceCell } from './cells/RelevanceCell';
 import { TitleCell } from './cells/TitleCell';

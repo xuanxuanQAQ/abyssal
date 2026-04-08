@@ -4,7 +4,6 @@
 import type { PaperMetadata, PaperType } from '../types/paper';
 import type { CitationDirection } from './types';
 import type { RateLimiter } from '../infra/rate-limiter';
-import { DEFAULT_BACKOFF_MS } from '../infra/rate-limiter';
 import type { HttpClient } from '../infra/http-client';
 import type { Logger } from '../infra/logger';
 import { PaperNotFoundError, ApiError, RateLimitedError } from '../types/errors';

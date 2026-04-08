@@ -1,49 +1,45 @@
 ## Output Format
 
-Output your analysis as a YAML frontmatter block (between --- markers) followed by a Markdown body.
+Output your analysis as a **JSON object**. Do NOT wrap it in markdown code fences or any other markup.
 
-### YAML Schema
+### JSON Schema
 
-```yaml
----
-paper_id: "{paper_id}"
-paper_type: "review"
-concept_mappings:
-  - concept_id: "concept_identifier"
-    relation: "supports" | "challenges" | "extends" | "operationalizes" | "irrelevant"
-    confidence: 0.75
-    evidence:
-      en: "English evidence text"
-      original: "Original language text"
-      original_lang: "en"
-  # ... one entry per concept in the framework
-suggested_new_concepts:
-  - term: "concept_name"
-    frequency_in_paper: 5
-    closest_existing: "related_concept_id"  # or null
-    reason: "Why this concept matters"
-review_scope:
-  topic: "What the review covers"
-  time_range: "2010-2024"
-  paper_count: 85
-taxonomy:
-  - category: "Category label"
-    description: "What this category encompasses"
-    representative_works:
-      - "Author (Year) — Title"
-consensus_findings:
-  - finding: "What the literature agrees on"
-    strength_of_evidence: "strong" | "moderate" | "weak"
-    n_supporting_studies: 12
-open_debates:
-  - topic: "Active disagreement"
-    position_a: "One side"
-    position_b: "Other side"
-identified_gaps:
-  - gap_description: "Underexplored research question"
-    relevance_to_framework: "How this gap relates to researcher's concepts"
-bibliography_mining:
-  - title: "Paper title worth tracking"
-    reason: "Why it's relevant"
----
+```json
+{
+  "summary": "200-300 word summary of the review",
+  "analysis_markdown": "Full analysis in Markdown format",
+  "concept_mappings": [
+    {
+      "concept_id": "concept_identifier",
+      "relation": "supports | challenges | extends | operationalizes | irrelevant",
+      "confidence": 0.75,
+      "evidence": {
+        "en": "English evidence text",
+        "original": "Original language text",
+        "original_lang": "en",
+        "chunk_id": null,
+        "page": null,
+        "annotation_id": null
+      }
+    }
+  ],
+  "suggested_new_concepts": [
+    {
+      "term": "concept_name",
+      "frequency_in_paper": 5,
+      "closest_existing": "related_concept_id or null",
+      "reason": "Why this concept matters",
+      "suggested_definition": null,
+      "suggested_keywords": null
+    }
+  ]
+}
 ```
+
+The `analysis_markdown` field should contain your detailed analysis with these sections:
+1. **Review Scope** — topic, time range, paper count
+2. **Taxonomy** — categories with descriptions and representative works
+3. **Consensus Findings** — what the literature agrees on, with strength of evidence
+4. **Open Debates** — active disagreements with opposing positions
+5. **Identified Gaps** — underexplored research questions and their relevance to the framework
+6. **Bibliography Mining** — notable papers worth tracking

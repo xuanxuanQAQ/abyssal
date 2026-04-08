@@ -24,6 +24,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { WorkflowOptions, WorkflowRunnerContext } from '../workflow-runner';
 import type { LlmClient } from '../../llm-client/llm-client';
+import { streamingComplete } from './streaming-llm-helper';
 import type { ContextBudgetManager } from '../../context-budget/context-budget-manager';
 import type { Logger } from '../../../core/infra/logger';
 import type { RankedChunk } from '../../../core/types/chunk';
@@ -35,7 +36,7 @@ import { validateCitations } from './citation/citation-validator';
 import { reverseExtractCitations } from './citation/citation-reverse-extractor';
 import { buildProtectionBlock, verifyProtection } from './paragraph-protection/protection-verifier';
 import { resetForNewVersion } from './paragraph-protection/edit-tracker';
-import { generateSectionSummary, formatPrecedingContext } from './section-summary/deterministic-summary';
+import { formatPrecedingContext } from './section-summary/deterministic-summary';
 import { buildDocumentProjection, parseArticleDocument } from '../../../shared/writing/documentOutline';
 import { resolveCurrentRagService } from './rag-service-resolver';
 
@@ -78,7 +79,7 @@ export interface ArticleServices {
 
 export function createArticleWorkflow(services: ArticleServices) {
   return async (options: WorkflowOptions, runner: WorkflowRunnerContext): Promise<void> => {
-    const { dbProxy, logger } = services;
+    const { dbProxy: _dbProxy, logger } = services;
     const outlineEntryId = options.outlineEntryId;
 
     if (!outlineEntryId) {
@@ -109,9 +110,22 @@ async function generateSection(
   const cragWorkflowId = ARTICLE_STAGE_WORKFLOWS.crag;
   const sectionModel = llmClient.resolveModel(sectionWorkflowId);
 
+  // ── Substep tracking for UI timeline ──
+  const ART_SUBSTEPS = ['collecting_notes', 'retrieving', 'crag_evaluation', 'budgeting', 'writing', 'citations'] as const;
+  type ArtSubstep = typeof ART_SUBSTEPS[number];
+  const substepStatus = new Map<string, 'pending' | 'running' | 'success' | 'failed' | 'skipped'>(
+    ART_SUBSTEPS.map((s) => [s, 'pending']),
+  );
+  const updateSubstep = (name: ArtSubstep, status: 'running' | 'success' | 'failed' | 'skipped') => {
+    substepStatus.set(name, status);
+    runner.reportProgress({
+      substeps: ART_SUBSTEPS.map((s) => ({ name: s, status: substepStatus.get(s) ?? 'pending' })),
+    });
+  };
+
   // ══ Step 1: Outline context read (§3.2) ══
-  let articleId = '';
-  let article: Record<string, unknown> | null = null;
+  let articleId: string;
+  let article: Record<string, unknown> | null;
   let current = {
     title: '',
     thesis: '',
@@ -121,7 +135,7 @@ async function generateSection(
     seq: 0,
   };
   let precedingWithContent: Array<{ title: string; seq: number; content: string }> = [];
-  let followingSections: Array<{ title: string; seq: number }> = [];
+  let followingSections: Array<{ title: string; seq: number }>;
   let currentDraftContent = '';
   let editedParagraphs: number[] = [];
   let routeWritingStyle: string | null = null;
@@ -236,7 +250,11 @@ async function generateSection(
   if (!article) throw new Error(`Article not found: ${articleId}`);
 
   // ══ Step 2: Memo + note collection with dedup (§3.3) ══
+  // Report section title for UI
+  runner.reportProgress({ currentItemLabel: current.title || outlineEntryId });
+
   runner.reportProgress({ currentStage: 'collecting_notes' });
+  updateSubstep('collecting_notes', 'running');
   const allMemos = new Map<string, Record<string, unknown>>();
 
   for (const conceptId of current.conceptIds) {
@@ -260,7 +278,9 @@ async function generateSection(
     }));
 
   // ══ Step 3: Multi-source retrieval (§3.4) ══
+  updateSubstep('collecting_notes', 'success');
   runner.reportProgress({ currentStage: 'retrieving' });
+  updateSubstep('retrieving', 'running');
 
   let ragChunks: RankedChunk[] = [];
   let synthesisFragments = '';
@@ -301,7 +321,9 @@ async function generateSection(
 
   // ══ Step 4: Corrective RAG loop ══
   if (services.enableCorrectiveRag !== false && ragChunks.length > 0 && ragService) {
+    updateSubstep('retrieving', 'success');
     runner.reportProgress({ currentStage: 'crag_evaluation' });
+    updateSubstep('crag_evaluation', 'running');
 
     const llmCallFn: LlmCallFn = async (sys, user) => {
       const r = await llmClient.complete({
@@ -336,12 +358,14 @@ async function generateSection(
   for (const c of ragChunks) { if (c.paperId) knownPaperIds.add(c.paperId); }
 
   // ══ Step 5: CBM 7-source budget allocation (§3.5) ══
+  updateSubstep('crag_evaluation', 'success');
   runner.reportProgress({ currentStage: 'budgeting' });
+  updateSubstep('budgeting', 'running');
   const memoText = memosForPrompt.map((m) => m.text).join('\n');
   const ragBlock = ragChunks.map((c) => `${c.displayTitle ?? ''}\n${c.text}`).join('\n\n');
   const precedingBlock = formatPrecedingContext(precedingWithContent, followingSections);
 
-  const allocation = contextBudgetManager.allocate({
+  const _allocation = contextBudgetManager.allocate({
     taskType: 'article',
     model: sectionModel,
     modelContextWindow: llmClient.getContextWindow(sectionWorkflowId),
@@ -396,15 +420,19 @@ async function generateSection(
   ].filter(Boolean).join('\n\n');
 
   // ══ Step 8: LLM call ══
+  updateSubstep('budgeting', 'success');
   runner.reportProgress({ currentStage: 'writing' });
+  updateSubstep('writing', 'running');
 
-  const result = await llmClient.complete({
+  const result = await streamingComplete(llmClient, {
     systemPrompt: fullSystemPrompt,
     messages: [{ role: 'user', content: userContent }],
     workflowId: sectionWorkflowId,
-  });
+  }, runner);
 
   // ══ Step 9: Citation validation ══
+  updateSubstep('writing', 'success');
+  updateSubstep('citations', 'running');
   const validated = validateCitations(result.text, knownPaperIds);
   if (validated.invalidCount > 0) {
     logger.warn(`Article section: ${validated.invalidCount} invalid citations`);
@@ -456,6 +484,8 @@ async function generateSection(
     );
   }
 
+  updateSubstep('citations', 'success');
+
   // ══ Step 13: Outline status update ══
   if (!draftId) {
     await dbProxy.updateOutlineEntry(outlineEntryId, { status: 'drafted' });
@@ -472,7 +502,7 @@ function buildArticleSystemPrompt(
   style: string,
   current: { title: string; thesis: string; writingInstruction: string; conceptIds: unknown[]; paperIds: unknown[] },
   precedingContext: string,
-  followingSections: Array<{ title: string; seq: number }>,
+  _followingSections: Array<{ title: string; seq: number }>,
 ): string {
   let prompt = `You are an academic writing assistant specializing in ${style.replace(/_/g, ' ')} writing.
 

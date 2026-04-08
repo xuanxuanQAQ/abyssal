@@ -18,7 +18,7 @@ import {
   loadTemplate,
   injectVariables,
   selectAnalyzeTemplate,
-  buildYamlExample,
+  buildJsonExample,
   type TemplateVariables,
   type TemplateId,
   type ArticleTemplateId,
@@ -45,9 +45,6 @@ import {
   type TokenCounter,
   type TrimBlock,
 } from './truncation-engine';
-
-// §8: Compact mode
-import { shouldUseCompactMode, compactConceptFormat, compactMemos, compactAnnotations } from './compact-mode';
 
 // ─── Types ───
 
@@ -441,7 +438,7 @@ export class PromptAssembler {
           .filter((b) => b.sourceType === 'concept_framework')
           .map((b) => b.content)
           .join('\n\n'),
-        yaml_example: buildYamlExample(paperId, frameworkState === 'zero_concepts'),
+        yaml_example: buildJsonExample(paperId, frameworkState === 'zero_concepts'),
         researcher_notes: absoluteBlocks
           .filter((b) => b.sourceType === 'researcher_memos')
           .map((b) => b.content)
@@ -587,7 +584,7 @@ export class PromptAssembler {
 
   private buildOutputInstructions(taskType: string, paperId: string): string {
     if (taskType === 'analyze') {
-      return ANALYZE_OUTPUT_INSTRUCTIONS + '\n\n' + buildYamlExample(paperId, false);
+      return ANALYZE_OUTPUT_INSTRUCTIONS + '\n\n' + buildJsonExample(paperId, false);
     }
     if (taskType === 'synthesize') {
       return SYNTHESIZE_OUTPUT_INSTRUCTIONS;
@@ -618,15 +615,15 @@ Your primary goals:
 2. Assess the methodology and evidence quality.
 3. **Identify up to 5 key concepts/terms** that appear central to this paper's theoretical or empirical contribution — IF the paper makes a distinct conceptual contribution. If the paper lacks strong conceptual focus, return fewer or none.
 
-Output these in the \`suggested_new_concepts\` field of the YAML frontmatter. For each suggestion, include:
-- term: the concept/term name
+Output these in the \`suggested_new_concepts\` field of the JSON output. All text values in suggested_new_concepts MUST follow the output language setting. For each suggestion, include:
+- term: the concept/term name (follow the output language setting)
 - frequency_in_paper: approximate number of occurrences
 - closest_existing: null (no existing concepts to compare)
 - reason: why this concept is worth tracking
 - suggested_definition: a concise working definition
 - suggested_keywords: 3-5 search keywords
 
-Do NOT output a concept_mappings field — there is no conceptual framework to map against.
+Set concept_mappings to an empty array [] — there is no conceptual framework to map against.
 Focus entirely on suggested_new_concepts.`;
 
 const SYNTHESIZE_PREAMBLE = `You are an expert research synthesizer. Your task is to produce a comprehensive synthesis of the research evidence for a specific concept, drawing from multiple analyzed papers.
@@ -641,21 +638,23 @@ Follow the writing style specified in the instructions. Integrate evidence natur
 
 const ANALYZE_OUTPUT_INSTRUCTIONS = `## Output Format
 
-Output your analysis as a YAML frontmatter block (between --- markers) followed by a Markdown body.
+Output your analysis as a **JSON object**. Do NOT wrap it in markdown code fences or any other markup.
 
-YAML schema:
-- paper_id: the paper identifier (string)
-- paper_type: one of "journal", "conference", "preprint", "theoretical", "review", "book", "chapter", "webpage", "unknown"
+JSON schema:
+- summary: a 200-300 word summary of the paper (string)
+- analysis_markdown: full analysis in Markdown format (string)
 - concept_mappings: array of objects, each with:
   - concept_id: the concept identifier from the framework
   - relation: one of "supports", "challenges", "extends", "operationalizes", "irrelevant"
   - confidence: a float between 0.0 and 1.0
-  - evidence: object with { en: string, original: string, original_lang: string }
+  - evidence: object with { en: string, original: string, original_lang: string, chunk_id: string|null, page: number|null, annotation_id: string|null }
 - suggested_new_concepts: array of objects, each with:
   - term: the concept/term name
   - frequency_in_paper: approximate count
   - closest_existing: nearest concept_id or null
-  - reason: why this concept is worth tracking`;
+  - reason: why this concept is worth tracking
+  - suggested_definition: a concise working definition or null
+  - suggested_keywords: array of keywords or null`;
 
 const SYNTHESIZE_OUTPUT_INSTRUCTIONS = `## Output Format
 

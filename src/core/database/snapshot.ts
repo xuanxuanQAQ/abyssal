@@ -48,7 +48,6 @@ async function compressFile(
   const writeStream = fs.createWriteStream(destPath);
   const compressor =
     algo === 'zstd'
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ? (zlib as any).createZstdCompress({ level: 6 })
       : zlib.createBrotliCompress({
           params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 6 },
@@ -69,7 +68,6 @@ async function decompressFile(
   const writeStream = fs.createWriteStream(destPath);
   const decompressor =
     algo === 'zstd'
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ? (zlib as any).createZstdDecompress()
       : zlib.createBrotliDecompress();
   await pipeline(readStream, decompressor, writeStream);

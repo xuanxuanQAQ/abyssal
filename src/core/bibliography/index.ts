@@ -30,13 +30,11 @@ import { parseReferences } from './parse-references';
 import { scanAndReplace, exportForLatex, exportForPandoc } from './scan-replace';
 import { generateBibtexKey } from './bibtex-key';
 import {
-  distributeCslFiles,
   listAvailableStyles,
   invalidateStylesCache,
   validateCslFile,
   renderDraftCitations,
   reRenderDraftCitations,
-  extractDraftCitationIds,
   type AvailableCslStyle,
 } from './csl-manager';
 

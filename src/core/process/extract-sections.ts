@@ -12,9 +12,7 @@ import type {
   SectionLabel,
   SectionType,
   SectionMap,
-  SectionEntry,
   SectionMapV2,
-  SectionBoundary,
   SectionBoundaryList,
 } from '../types/chunk';
 import type { StyledLine } from './types';
@@ -194,7 +192,7 @@ const LABEL_TO_TYPE: Record<SectionLabel, SectionType | null> = {
 // ─── §2.3 References 区域标志正则 ───
 
 // 允许可选的章节编号前缀（如 "7. References", "V. REFERENCES", "第五章 参考文献"）
-const REFERENCES_RE = /^(?:(?:\d+|[IVXLC]+)[\.\s)\-:]\s*|(?:第.{1,3}[章节]\s*)|(?:chapter\s+\d+[\.\s:]\s*))?(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
+const REFERENCES_RE = /^(?:(?:\d+|[IVXLC]+)[.\s)\-:]\s*|(?:第.{1,3}[章节]\s*)|(?:chapter\s+\d+[.\s:]\s*))?(?:references|bibliography|参考文献|works?\s+cited|references?\s+cited)\s*$/i;
 const APPENDIX_RE = /^(?:appendix|appendices|附录)\s*([A-Z]|\d+)?\.?\s*(.*)/i;
 
 // ─── 行号→字符偏移累计数组 ───
@@ -290,7 +288,7 @@ function extractAbstract(
     }
 
     // 行内 "Abstract." / "摘要："
-    const inlineMatch = /^(?:abstract|摘要|〔摘\s*要〕|摘\s*要)\s*[.—:：\-]?\s*/i.exec(normalizeDocumentLine(line));
+    const inlineMatch = /^(?:abstract|摘要|〔摘\s*要〕|摘\s*要)\s*[.—:：-]?\s*/i.exec(normalizeDocumentLine(line));
     if (inlineMatch) {
       const firstPart = line.slice(inlineMatch[0].length);
       const textLines: string[] = [firstPart];

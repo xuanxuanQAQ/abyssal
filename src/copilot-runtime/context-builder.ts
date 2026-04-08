@@ -22,7 +22,6 @@ import type {
   ArticleFocus,
   SelectionContext,
   WritingContextState,
-  EvidenceChunk,
 } from './types';
 import { estimateTokens } from '../core/infra/token-counter';
 

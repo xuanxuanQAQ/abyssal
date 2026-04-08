@@ -11,6 +11,8 @@
  */
 
 import type { LlmClient } from '../../../llm-client/llm-client';
+import type { WorkflowRunnerContext } from '../../workflow-runner';
+import { streamingComplete } from '../streaming-llm-helper';
 import type { Logger } from '../../../../core/infra/logger';
 import type { BudgetAllocation } from '../../../context-budget/context-budget-manager';
 import type { AnnotationForFormat } from '../../../prompt-assembler/section-formatter';
@@ -53,6 +55,7 @@ export async function runGenericAnalysis(
   explicitModel?: string,
   outputLanguage?: string,
   signal?: AbortSignal,
+  runner?: WorkflowRunnerContext,
 ): Promise<GenericAnalysisResult> {
   const tokenCounter = { count: (text: string) => countTokens(text) };
   const assembler = createPromptAssembler(tokenCounter, logger);
@@ -93,14 +96,17 @@ export async function runGenericAnalysis(
     userTokens: countTokens(assembled.userMessage),
   });
   const llmStart = Date.now();
-  const result = await llmClient.complete({
+  const llmParams = {
     systemPrompt: assembled.systemPrompt,
-    messages: [{ role: 'user', content: assembled.userMessage }],
+    messages: [{ role: 'user' as const, content: assembled.userMessage }],
     workflowId,
     responseFormat: ANALYZE_STRUCTURED_RESPONSE_FORMAT,
     ...(explicitModel && { model: explicitModel }),
     ...(signal && { signal }),
-  });
+  };
+  const result = runner
+    ? await streamingComplete(llmClient, llmParams, runner)
+    : await llmClient.complete(llmParams);
   logger.debug(`[generic] Paper ${paperId}: LLM responded`, {
     model: result.model,
     outputLength: result.text.length,

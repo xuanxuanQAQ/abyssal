@@ -161,48 +161,67 @@ export function injectVariables(template: string, variables: TemplateVariables):
   return result;
 }
 
-// ─── YAML example block (§10.2) ───
+// ─── JSON example block (§10.2) ───
 
 /**
- * Generate the YAML output format example that is appended to analyze templates.
+ * Generate the JSON output format example that is appended to analyze templates.
  * Adding an example significantly improves format compliance (~85% → ~95%+).
  *
- * When zeroConcepts is true, concept_mappings is omitted entirely from the
- * example to prevent LLM instruction hallucination — the model would otherwise
- * fabricate concept_ids that don't exist in any framework, triggering FK violations.
+ * When zeroConcepts is true, concept_mappings is always an empty array to
+ * prevent LLM instruction hallucination — the model would otherwise fabricate
+ * concept_ids that don't exist in any framework, triggering FK violations.
  */
-export function buildYamlExample(paperId: string, zeroConcepts: boolean = false): string {
+export function buildJsonExample(paperId: string, zeroConcepts: boolean = false): string {
   if (zeroConcepts) {
-    return `Here is an example of the expected YAML output format:
----
-paper_id: "${paperId}"
-paper_type: "journal"
-suggested_new_concepts:
-  - term: "example_term"
-    frequency_in_paper: 5
-    closest_existing: null
-    reason: "This term appears frequently..."
-    suggested_definition: "A concise working definition"
-    suggested_keywords: ["keyword1", "keyword2", "keyword3"]
----`;
+    return `Here is an example of the expected JSON output:
+{
+  "summary": "A concise summary of the paper...",
+  "analysis_markdown": "# Analysis\\n\\n...",
+  "concept_mappings": [],
+  "suggested_new_concepts": [
+    {
+      "term": "example_term",
+      "frequency_in_paper": 5,
+      "closest_existing": null,
+      "reason": "This term appears frequently...",
+      "suggested_definition": "A concise working definition",
+      "suggested_keywords": ["keyword1", "keyword2", "keyword3"]
+    }
+  ]
+}`;
   }
 
-  return `Here is an example of the expected YAML output format:
----
-paper_id: "${paperId}"
-paper_type: "journal"
-concept_mappings:
-  - concept_id: "example_concept"
-    relation: "supports"
-    confidence: 0.75
-    evidence:
-      en: "The paper provides evidence that..."
-      original: "论文提供了证据表明..."
-      original_lang: "zh-CN"
-suggested_new_concepts:
-  - term: "example_term"
-    frequency_in_paper: 5
-    closest_existing: "related_concept"
-    reason: "This term appears frequently..."
----`;
+  return `Here is an example of the expected JSON output:
+{
+  "summary": "A concise summary of the paper...",
+  "analysis_markdown": "# Analysis\\n\\n...",
+  "concept_mappings": [
+    {
+      "concept_id": "example_concept",
+      "relation": "supports",
+      "confidence": 0.75,
+      "evidence": {
+        "en": "The paper provides evidence that...",
+        "original": "论文提供了证据表明...",
+        "original_lang": "zh-CN",
+        "chunk_id": null,
+        "page": null,
+        "annotation_id": null
+      }
+    }
+  ],
+  "suggested_new_concepts": [
+    {
+      "term": "example_term",
+      "frequency_in_paper": 5,
+      "closest_existing": "related_concept",
+      "reason": "This term appears frequently...",
+      "suggested_definition": null,
+      "suggested_keywords": null
+    }
+  ]
+}`;
 }
+
+/** @deprecated Use buildJsonExample instead */
+export const buildYamlExample = buildJsonExample;

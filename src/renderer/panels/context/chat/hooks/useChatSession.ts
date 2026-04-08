@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { useChatStore } from '../../../../core/store/useChatStore';
 import { getAPI } from '../../../../core/ipc/bridge';
+import { isShutdownError } from '../../../../core/errors/types';
 import type { ChatMessage, ChatMessageRecord } from '../../../../../shared-types/models';
 
 const DEFAULT_SESSION_KEY = 'workspace';
@@ -64,6 +65,7 @@ export function messageToRecord(
 export function persistMessage(msg: ChatMessage, contextKey: string): void {
   const record = messageToRecord(msg, contextKey);
   getAPI().db.chat.saveMessage(record).catch((err: unknown) => {
+    if (isShutdownError(err)) return;
     console.error('[ChatSession] Failed to persist message:', err);
     toast.error('消息保存失败，聊天记录可能丢失', { id: 'chat-persist-error', duration: 3000 });
   });

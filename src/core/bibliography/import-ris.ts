@@ -3,7 +3,6 @@
 
 import type { PaperMetadata, PaperType } from '../types/paper';
 import type { ImportedEntry } from '../types/bibliography';
-import { RisParseError } from '../types/errors';
 import { generatePaperId, normalizeDoi } from '../search/paper-id';
 import { parseAuthorName } from '../search/author-name';
 

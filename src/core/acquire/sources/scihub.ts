@@ -5,7 +5,7 @@ import type { AcquireAttempt } from '../types';
 import type { HttpClient } from '../../infra/http-client';
 import { downloadPdf, deleteFileIfExists } from '../downloader';
 import { validatePdf } from '../pdf-validator';
-import { makeAttempt, makeFailedAttempt } from '../attempt-utils';
+import { makeAttempt } from '../attempt-utils';
 
 // ─── 已知 Sci-Hub 域名候选列表（按可用性排序） ───
 

@@ -24,9 +24,9 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../core/store';
 import { getAPI } from '../../core/ipc/bridge';
+import { isShutdownError } from '../../core/errors/types';
 import type { TaskUIState } from '../../../shared-types/models';
 import { WORKFLOW_I18N_KEYS } from '../../core/constants/workflow';
-import { TaskDetailPopover } from './TaskDetailPopover';
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Claude',
@@ -86,8 +86,10 @@ export function StatusBar() {
         setLlmStatus(result.ok ? 'ok' : 'error');
       } catch (err) {
         if (seq !== llmRefreshSeqRef.current) return;
-        console.warn('[StatusBar] Failed to refresh LLM indicator:', err);
-        setLlmStatus('error');
+        if (!isShutdownError(err)) {
+          console.warn('[StatusBar] Failed to refresh LLM indicator:', err);
+          setLlmStatus('error');
+        }
       }
     };
 
@@ -179,59 +181,63 @@ export function StatusBar() {
       >
         {/* 左组 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* 任务活动按钮 + 详情浮层 */}
-          <TaskDetailPopover>
-            <button
-              className="statusbar-btn"
-              style={taskBtnStyle}
-              onClick={toggleTaskPanel}
-              title={t('statusBar.taskPanel')}
-            >
-              {hasRunning ? (
-                <Activity
-                  size={12}
-                  aria-hidden="true"
-                  style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
-                />
-              ) : (
-                <PanelBottom size={12} aria-hidden="true" />
-              )}
-              {firstRunning ? (
-                <span>
-                  {WORKFLOW_I18N_KEYS[firstRunning[1].workflow] ? t(WORKFLOW_I18N_KEYS[firstRunning[1].workflow]!) : firstRunning[1].workflow}{' '}
-                  {firstRunning[1].progress.current}/{firstRunning[1].progress.total}
-                  {runningCount > 1 && ` (+${runningCount - 1})`}
-                </span>
-              ) : (
-                <span>{t('statusBar.tasks')}</span>
-              )}
+          {/* 任务活动按钮 */}
+          <button
+            className="statusbar-btn"
+            style={taskBtnStyle}
+            onClick={toggleTaskPanel}
+            title={t('statusBar.taskPanel')}
+          >
+            {hasRunning ? (
+              <Activity
+                size={12}
+                aria-hidden="true"
+                style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
+              />
+            ) : (
+              <PanelBottom size={12} aria-hidden="true" />
+            )}
+            {firstRunning ? (
+              <span>
+                {WORKFLOW_I18N_KEYS[firstRunning[1].workflow] ? t(WORKFLOW_I18N_KEYS[firstRunning[1].workflow]!) : firstRunning[1].workflow}{' '}
+                {firstRunning[1].progress.current}/{firstRunning[1].progress.total}
+                {runningCount > 1 && ` (+${runningCount - 1})`}
+                {firstRunning[1].currentStep && ['analyzing', 'synthesizing', 'writing', 'generic_analysis', 'intermediate_analysis'].includes(firstRunning[1].currentStep) && (
+                  <span style={{ marginLeft: 4, opacity: 0.7 }}>
+                    · {t(`workflowMonitor.stages.${firstRunning[1].currentStep}`, { defaultValue: firstRunning[1].currentStep })}
+                    <span style={{ animation: 'pulse 1.5s ease-in-out infinite' }}> ...</span>
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span>{t('statusBar.tasks')}</span>
+            )}
 
-              {/* 未读失败红点 */}
-              {unseenFailures > 0 && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: -2,
-                    right: -4,
-                    minWidth: 14,
-                    height: 14,
-                    borderRadius: 7,
-                    backgroundColor: 'var(--danger, #ef4444)',
-                    color: '#fff',
-                    fontSize: 9,
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '0 3px',
-                    lineHeight: 1,
-                  }}
-                >
-                  {unseenFailures}
-                </span>
-              )}
-            </button>
-          </TaskDetailPopover>
+            {/* 未读失败红点 */}
+            {unseenFailures > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -4,
+                  minWidth: 14,
+                  height: 14,
+                  borderRadius: 7,
+                  backgroundColor: 'var(--danger, #ef4444)',
+                  color: '#fff',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 3px',
+                  lineHeight: 1,
+                }}
+              >
+                {unseenFailures}
+              </span>
+            )}
+          </button>
 
           {/* DBStatus */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

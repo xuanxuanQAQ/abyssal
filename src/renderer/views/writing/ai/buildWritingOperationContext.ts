@@ -39,7 +39,7 @@ let continuityCache: {
 } | null = null;
 
 export function buildWritingOperationContext(params: WritingContextParams): ContextSnapshot {
-  const { articleId, draftId, sectionId, documentJson, writingTarget } = params;
+  const { articleId, draftId: _draftId, sectionId, documentJson, writingTarget } = params;
   const editorState = useEditorStore.getState();
   const unsavedChanges = editorState.unsavedChanges;
   const documentHash = editorState.liveDocumentHash;

@@ -92,6 +92,7 @@ function throttle<TArgs extends unknown[]>(
 export function PipelineListener() {
   const queryClient = useQueryClient();
   const updateTask = useAppStore((s) => s.updateTask);
+  const updateStreamPreview = useAppStore((s) => s.updateStreamPreview);
   const removeTask = useAppStore((s) => s.removeTask);
   const pushTaskHistory = useAppStore((s) => s.pushTaskHistory);
 
@@ -169,10 +170,10 @@ export function PipelineListener() {
       }
     );
 
-    // 流式输出事件监听（当前仅用于 AI 聊天/生成场景）
+    // 流式输出事件监听 — 将 AI 生成的 chunk 推送到任务面板的实时预览
     const unsubStream = api.pipeline.onStreamChunk(
-      (_event: StreamChunkEvent) => {
-        // TODO: 接入 useChatStore 或 useEditorStore 的流式内容追加
+      (event: StreamChunkEvent) => {
+        updateStreamPreview(event.taskId, event.chunk, event.isLast);
       }
     );
 
@@ -210,7 +211,7 @@ export function PipelineListener() {
       }
       pendingTimersRef.current.clear();
     };
-  }, [queryClient, updateTask, removeTask, pushTaskHistory]);
+  }, [queryClient, updateTask, updateStreamPreview, removeTask, pushTaskHistory]);
 
   return null;
 }

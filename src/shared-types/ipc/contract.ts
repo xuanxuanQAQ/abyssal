@@ -14,7 +14,7 @@ import type {
   HistoryEntry, HeatmapMatrix,
   ChangeImpactReport, ConceptHealthScore, KeywordCandidate, PaperAnalysisBase,
   Annotation, NewAnnotation,
-  ArticleOutline, ArticleWorkspaceSummary, DraftSummary, DraftOutline, DraftPatch, DraftVersion, DraftDocumentPayload, WritingContextRequest, SectionNode, SectionOrder, SectionContent, SectionPatch, SectionVersion,
+  ArticleOutline, DraftSummary, DraftOutline, DraftPatch, DraftVersion, DraftDocumentPayload, WritingContextRequest, SectionNode, SectionOrder, SectionContent, SectionPatch, SectionVersion,
   FullDocumentContent, SectionSave, ArticleAsset, ArticleDocumentPayload,
   Memo, NewMemo, MemoFilter, NoteMeta, NewNote, NoteFilter, SaveNoteContentResult,
   SuggestedConcept,
@@ -36,7 +36,7 @@ import type {
 import type {
   PaperFilter, GraphFilter, RAGFilter,
   PipelineProgressEvent, StreamChunkEvent, WorkflowConfig,
-  ChatContext, WindowMaximizedEvent, SectionSearchResult,
+  WindowMaximizedEvent, SectionSearchResult,
   AcquireStatusInfo,
   InstitutionalSessionStatus, InstitutionListItem, InstitutionalLoginResult,
 } from './index';

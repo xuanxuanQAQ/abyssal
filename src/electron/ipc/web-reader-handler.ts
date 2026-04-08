@@ -72,6 +72,7 @@ export function registerWebReaderHandlers(ctx: AppContext): void {
       .replace(/^#+\s+/gm, '')
       .replace(/\*\*([^*]+)\*\*/g, '$1')
       .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, '')    // 去掉图片标记
       .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
     await fs.writeFile(textPath, plainText, 'utf-8');
 

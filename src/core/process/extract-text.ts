@@ -7,9 +7,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TextExtractionResult, PdfEmbeddedMetadata, FirstPageMetadata, StyledLine } from './types';
-import type { PageCharData, CharWithPosition, OcrLine, OcrWord, PageOcrLines, NormalizedBBox } from '../dla/types';
+import type { PageCharData, CharWithPosition, OcrLine, OcrWord, NormalizedBBox } from '../dla/types';
 import { PdfCorruptedError, ProcessError, OcrFailedError } from '../types/errors';
-import { countTokens, estimateTokens } from '../infra/token-counter';
+import { estimateTokens } from '../infra/token-counter';
 import { deriveExtractionMethod } from './extraction-method';
 
 // ─── mupdf.js 懒加载 ───
@@ -398,7 +398,7 @@ export async function extractText(
     }
 
     // §1.4: OCR 降级（并发 Worker Pool）
-    let ocrConfidences: number[] = [];
+    const ocrConfidences: number[] = [];
     const ocrAppliedPages = new Set<number>();
     const ocrPageLinesMap = new Map<number, OcrLine[]>();
     if (ocrEnabled && scannedPageIndices.length > 0) {
@@ -428,7 +428,6 @@ export async function extractText(
             const pageIdx = result.value.pageIdx;
             const blocks = result.value.blocks;
             if (blocks && Array.isArray(blocks)) {
-              const pageArea = pageBoundsArea[pageIdx] ?? 0;
               // Image dimensions at 300 DPI
               const imgScale = 300 / 72;
               const bounds = pageBoundsRaw[pageIdx];

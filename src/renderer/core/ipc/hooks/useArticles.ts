@@ -203,7 +203,7 @@ export function useDeleteSection() {
   return useMutation({
     mutationFn: ({
       sectionId,
-      articleId,
+      articleId: _articleId,
     }: {
       sectionId: string;
       articleId: string;

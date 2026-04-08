@@ -28,7 +28,6 @@ async function resolveUniqueConceptId(dbProxy: DbProxyInstance, nameSeed: string
   let candidate = baseId;
   let suffix = 2;
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const existing = await dbProxy.getConcept(asConceptId(candidate));
     if (!existing) {
@@ -55,7 +54,6 @@ export async function createConceptFromDraft(
     : [];
   const parentId = typeof draft['parentId'] === 'string' ? draft['parentId'] : null;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (dbProxy as any).addConcept({
     id: conceptId,
     nameZh,

@@ -118,7 +118,7 @@ export function acquireLock(workspacePath: string): LockHandle {
   // original path with 'wx' immediately after rename.
 
   // Read existing lock info for error reporting
-  let existingInfo: LockInfo | null = null;
+  let existingInfo: LockInfo;
   try {
     existingInfo = JSON.parse(fs.readFileSync(lockPath, 'utf-8')) as LockInfo;
   } catch {

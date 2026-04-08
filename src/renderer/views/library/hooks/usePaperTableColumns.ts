@@ -29,6 +29,7 @@ const ANALYSIS_WEIGHT: Record<AnalysisStatus, number> = {
   not_started: 3,
   completed: 2,
   failed: 1,
+  skipped: 0,
 };
 
 const FULLTEXT_WEIGHT: Record<FulltextStatus, number> = {

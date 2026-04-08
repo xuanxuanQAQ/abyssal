@@ -31,7 +31,7 @@ import { handleToolCall, type ServiceContext } from './tool-handler';
 
 import * as path from 'node:path';
 import { acquireLock, LockError, type LockHandle } from '../electron/lock';
-import { deriveFrameworkState, type FrameworkState } from '../electron/app-context';
+import { deriveFrameworkState } from '../electron/app-context';
 
 // ─── §2.1 步骤 1: CLI 参数解析 ───
 
@@ -178,14 +178,12 @@ async function main(): Promise<void> {
 
   const startTime = Date.now();
 
-  // Step 7: Framework state evaluation
-  let frameworkState: FrameworkState = 'zero_concepts';
+  // Step 7: Framework state evaluation (log only)
   try {
     const stats = dbService.getStats() as {
       concepts: { total: number; tentative: number; working: number; established: number };
     };
-    frameworkState = deriveFrameworkState(stats.concepts);
-    logger.info('Framework state evaluated', { state: frameworkState });
+    logger.info('Framework state evaluated', { state: deriveFrameworkState(stats.concepts) });
   } catch (err) {
     logger.warn('Framework state evaluation failed', { error: (err as Error).message });
   }

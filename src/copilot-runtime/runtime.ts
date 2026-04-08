@@ -17,13 +17,12 @@ import type {
   CopilotSessionState,
   OperationStatusSnapshot,
   ResumeOperationRequest,
-  CopilotOperationEvent,
   OperationRecipe,
 } from './types';
 import { IntentRouter } from './intent-router';
 import { ContextSnapshotBuilder, type ContextBuildDeps } from './context-builder';
 import { RecipeRegistry } from './recipe-registry';
-import { ExecutionCoordinator, type ExecutionCoordinatorDeps } from './execution-coordinator';
+import { ExecutionCoordinator } from './execution-coordinator';
 import { OperationEventEmitter, type CopilotEventListener } from './event-emitter';
 import { CopilotSessionManager } from './session-manager';
 import { TraceStore } from './trace-store';

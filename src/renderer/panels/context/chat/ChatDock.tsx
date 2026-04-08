@@ -21,6 +21,7 @@ import { buildChatCopilotEnvelope, mapCopilotToolStatus } from './copilotBridge'
 import { useChatStore, type ChatDockMode } from '../../../core/store/useChatStore';
 import { useEditorStore } from '../../../core/store/useEditorStore';
 import { getAPI } from '../../../core/ipc/bridge';
+import { isShutdownError } from '../../../core/errors/types';
 import type { ChatMessage, MessageAttachment } from '../../../../shared-types/models';
 import { useReaderStore } from '../../../core/store/useReaderStore';
 import type { CopilotOperationEvent, CopilotSessionState } from '../../../../copilot-runtime/types';
@@ -586,6 +587,7 @@ export const ChatDock = React.memo(function ChatDock() {
           msg.status = 'sent';
         });
       } catch (err) {
+        if (isShutdownError(err)) return;
         const errorMessage = (err as Error).message ?? 'Send failed';
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {
           msg.status = 'error';
@@ -665,6 +667,7 @@ export const ChatDock = React.memo(function ChatDock() {
           msg.status = 'sent';
         });
       } catch (err) {
+        if (isShutdownError(err)) return;
         const errorMessage = (err as Error).message ?? 'Send failed';
         useChatStore.getState().updateMessage(userMessage.id, (msg) => {
           msg.status = 'error';
@@ -720,7 +723,7 @@ export const ChatDock = React.memo(function ChatDock() {
   const handleAbort = useCallback(() => {
     const operationId = sessionOperationRef.current.get(sessionKey);
     if (operationId) {
-      void getAPI().copilot.abort(operationId);
+      getAPI().copilot.abort(operationId).catch(() => {});
       finalizeOperation(operationId);
     }
   }, [finalizeOperation, sessionKey]);
@@ -761,6 +764,7 @@ export const ChatDock = React.memo(function ChatDock() {
       });
       rebindOperation(clarification.operationId, result.operationId);
     } catch (err) {
+      if (isShutdownError(err)) return;
       const errorMessage = (err as Error).message ?? 'Resume failed';
       clearOperationState(clarification.operationId, false);
       useChatStore.getState().updateMessageInSession(sessionKey, assistantMessage.id, (entry) => {

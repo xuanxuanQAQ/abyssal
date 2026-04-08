@@ -1,7 +1,7 @@
 // ═══ 上下文组装 ═══
 // §5: 分组排序 → 连续段落合并 → 元数据头 → token 预算裁剪
 
-import type { RankedChunk, ChunkSource } from '../types/chunk';
+import type { RankedChunk } from '../types/chunk';
 import type { ContextBudgetMode } from '../types/retrieval';
 import { countTokens } from '../infra/token-counter';
 
@@ -233,11 +233,6 @@ export function assembleContext(
   // Fix: 不从 maxTokens 中扣除 forced chunks 预算。
   // adapter 层的 BudgetAllocation 已将 researcher_memos/annotations 作为 ABSOLUTE 源
   // 单独预扣（sourceAllocations），传入的 maxTokens 已是非 ABSOLUTE 源（rag_passages 等）的预算。
-  // 此处仅统计 forced tokens 用于日志/诊断，不影响 remainingBudget。
-  const forcedTokens = [...memoChunks, ...annotationChunks].reduce(
-    (s, c) => s + c.tokenCount + estimateMetadataOverhead(c),
-    0,
-  );
   let remainingBudget = maxTokens;
 
   // 按优先级填充主检索区域

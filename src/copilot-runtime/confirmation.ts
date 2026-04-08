@@ -4,7 +4,6 @@
  */
 
 import type {
-  OutputTarget,
   ConfirmationPolicy,
   ConfirmationMode,
   ConfirmationRule,

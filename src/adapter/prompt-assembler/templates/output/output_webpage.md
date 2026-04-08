@@ -1,43 +1,44 @@
 ## Output Format
 
-Output your analysis as a YAML frontmatter block (between --- markers) followed by a Markdown body.
+Output your analysis as a **JSON object**. Do NOT wrap it in markdown code fences or any other markup.
 
-### YAML Schema
+### JSON Schema
 
-```yaml
----
-paper_id: "{paper_id}"
-paper_type: "webpage"
-concept_mappings:
-  - concept_id: "concept_identifier"
-    relation: "supports" | "challenges" | "extends" | "operationalizes" | "irrelevant"
-    confidence: 0.75
-    evidence:
-      en: "English evidence text"
-      original: "Original language text"
-      original_lang: "zh-CN"
-  # ... one entry per concept in the framework
-suggested_new_concepts:
-  - term: "concept_name"
-    frequency_in_paper: 5
-    closest_existing: "related_concept_id"  # or null
-    reason: "Why this concept matters"
-source_assessment:
-  author_type: "government_agency" | "news_outlet" | "think_tank" | "corporation" | "individual_expert" | "anonymous" | "unknown"
-  document_type: "policy" | "regulation" | "notice" | "news" | "opinion" | "blog" | "report" | "press_release" | "other"
-  credibility: "high" | "moderate" | "low" | "unknown"
-  bias_indicators:
-    - "Any identified biases or institutional interests"
-core_claims:
-  - claim: "One-sentence assertion or policy position"
-    evidence_basis: "data-backed" | "expert-cited" | "regulation-based" | "anecdotal" | "assertion-only"
-    strength: "strong" | "moderate" | "weak"
-practical_implications:
-  - stakeholder: "Who is affected"
-    implication: "What the impact is"
-temporal_relevance:
-  key_dates:
-    - "2025-06-30: deadline for X"
-  is_time_sensitive: true | false
----
+```json
+{
+  "summary": "200-300 word summary of the source",
+  "analysis_markdown": "Full analysis in Markdown format",
+  "concept_mappings": [
+    {
+      "concept_id": "concept_identifier",
+      "relation": "supports | challenges | extends | operationalizes | irrelevant",
+      "confidence": 0.75,
+      "evidence": {
+        "en": "English evidence text",
+        "original": "Original language text",
+        "original_lang": "zh-CN",
+        "chunk_id": null,
+        "page": null,
+        "annotation_id": null
+      }
+    }
+  ],
+  "suggested_new_concepts": [
+    {
+      "term": "concept_name",
+      "frequency_in_paper": 5,
+      "closest_existing": "related_concept_id or null",
+      "reason": "Why this concept matters",
+      "suggested_definition": null,
+      "suggested_keywords": null
+    }
+  ]
+}
 ```
+
+The `analysis_markdown` field should contain your detailed analysis with these sections:
+1. **Source Assessment** — author type, document type, credibility, bias indicators
+2. **Core Claims** — assertions with evidence basis (data-backed/expert-cited/regulation-based/anecdotal/assertion-only)
+3. **Concept Mapping Rationale** — why each mapping was assigned
+4. **Practical Implications** — stakeholder impacts
+5. **Temporal Relevance** — key dates and time sensitivity

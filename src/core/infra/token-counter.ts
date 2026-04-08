@@ -18,7 +18,6 @@ function getEncoder(): Encoder | null {
 
   try {
     // js-tiktoken 已在 package.json dependencies 中声明
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getEncoding } = require('js-tiktoken');
     encoder = getEncoding('cl100k_base') as Encoder;
     return encoder;

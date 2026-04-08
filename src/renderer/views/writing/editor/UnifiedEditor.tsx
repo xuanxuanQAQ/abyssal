@@ -9,16 +9,15 @@
  */
 
 import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { JSONContent } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { useAppStore } from '../../../core/store';
 import { useEditorStore } from '../../../core/store/useEditorStore';
-import type { PersistedWritingTarget } from '../../../core/store/useEditorStore';
 import { useEditorCommandBridge } from '../ai/useEditorCommandBridge';
 import { useSelectionPreview } from '../ai/useSelectionPreview';
 import { EditorToolbar } from './EditorToolbar';
 import { TiptapEditor } from './TiptapEditor';
-import { FloatingToolbar } from './FloatingToolbar';
 import { SelectionPreviewOverlay } from './SelectionPreviewOverlay';
 import { useDocumentAutoSave } from '../hooks/useDocumentAutoSave';
 import { useImageUpload } from './ImageUploadHandler';
@@ -55,8 +54,8 @@ interface UnifiedEditorProps {
 }
 
 export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocumentJsonChange }: UnifiedEditorProps) {
+  const { t } = useTranslation();
   const selectedSectionId = useAppStore((s) => s.selectedSectionId);
-  const selectSection = useAppStore((s) => s.selectSection);
   const setLiveDocumentState = useEditorStore((s) => s.setLiveDocumentState);
   const clearLiveDocumentState = useEditorStore((s) => s.clearLiveDocumentState);
   const setEditorSelection = useEditorStore((s) => s.setEditorSelection);
@@ -337,10 +336,6 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
       if (!view || editor.isDestroyed) return;
       const nodeType = view.state.schema.nodes.citationNode;
       if (!nodeType) return;
-      const node = nodeType.create({
-        paperId,
-        displayText: displayText ?? `@${paperId}`,
-      });
       editor.chain().focus().insertContent({
         type: 'citationNode',
         attrs: { paperId, displayText: displayText ?? `@${paperId}` },
@@ -404,7 +399,7 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         height: '100%', color: 'var(--text-muted)', fontSize: 'var(--text-sm)',
       }}>
-        正在加载文档…
+        {t('editor.loading', '正在加载文档…')}
       </div>
     );
   }
@@ -440,13 +435,6 @@ export function UnifiedEditor({ articleId, draftId, outlineStructureKey, onDocum
         unifiedMode
         sectionPaperIds={currentSectionPaperIds}
       />
-
-      {/* ── Floating toolbar — formatting only, AI buttons removed ── */}
-      {editor && (
-        <FloatingToolbar
-          editor={editor}
-        />
-      )}
 
       {/* ── Selection preview (Phase 2: in-place accept/reject) ── */}
       {selectionPreview && (

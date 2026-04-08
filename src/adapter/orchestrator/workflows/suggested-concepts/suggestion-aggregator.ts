@@ -137,8 +137,8 @@ export async function aggregateSuggestions(
           retries++;
           continue;
         }
-        // Non-retryable error — skip this suggestion
-        break;
+        // Non-retryable error — rethrow so caller can log with full context
+        throw new Error(`Suggestion aggregation failed for term "${suggestion.term}": ${msg}`, { cause: err });
       }
     }
   }

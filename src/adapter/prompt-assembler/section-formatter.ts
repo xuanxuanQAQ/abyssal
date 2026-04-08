@@ -28,9 +28,9 @@ export interface FormattedSection {
 export function formatSectionBlock(
   title: string,
   content: string,
-  sourceType: SourceType,
-  priority: SourcePriority,
-  tokenCount: number,
+  _sourceType: SourceType,
+  _priority: SourcePriority,
+  _tokenCount: number,
 ): string {
   if (!content || content.trim().length === 0) return '';
 

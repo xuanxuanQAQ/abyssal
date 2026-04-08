@@ -6,7 +6,7 @@
 
 import { BrowserWindow, screen, ipcMain } from 'electron';
 import * as path from 'node:path';
-import { loadWindowState, saveWindowState, type WindowState } from './windowState';
+import { loadWindowState, saveWindowState } from './windowState';
 // Event channel names (from IpcEventContract)
 const WINDOW_MAXIMIZED_EVENT = 'app:window:maximizedChange$event';
 import type { Logger } from '../core/infra/logger';
@@ -154,8 +154,8 @@ export function createMainWindow(opts: WindowManagerOptions): BrowserWindow {
   mainWindow.webContents.session.webRequest.onHeadersReceived(
     (details, callback) => {
       const csp = opts.isDev
-        ? "default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://localhost:5173; connect-src 'self' ws://localhost:5173 http://localhost:5173;"
-        : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;";
+        ? "default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http://localhost:5173; connect-src 'self' ws://localhost:5173 http://localhost:5173; worker-src 'self' blob:;"
+        : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; worker-src 'self' blob:;";
       callback({
         responseHeaders: {
           ...details.responseHeaders,

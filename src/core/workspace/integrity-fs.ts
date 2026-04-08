@@ -7,7 +7,7 @@ import type Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { PaperId, NoteId, MemoId } from '../types/common';
+import type { PaperId, NoteId } from '../types/common';
 import type { PathResolver } from '../infra/path-resolver';
 import type { Logger } from '../infra/logger';
 import { isInternalDbNoteFilePath } from '../database/note-file-path';

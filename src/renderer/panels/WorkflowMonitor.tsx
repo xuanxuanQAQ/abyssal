@@ -1,12 +1,11 @@
 /**
- * WorkflowMonitor — 任务活动面板
+ * WorkflowMonitor — 任务活动浮动面板
  *
- * 从 StatusBar 弹出的底部面板，显示：
+ * 左下角浮动叠加层，显示：
  * - 当前运行中的任务（进度条、当前步骤、取消按钮）
  * - 历史任务记录（状态、时间、错误详情）
  *
  * 功能：
- * - 顶部拖拽手柄可自由调整面板高度
  * - 点击任务行高亮选中（底色+边框变化）
  * - 右键菜单支持删除 / 重新执行
  *
@@ -129,35 +128,11 @@ export function WorkflowMonitor() {
   const selectedTaskId = useAppStore((s) => s.selectedTaskId);
   const setSelectedTask = useAppStore((s) => s.setSelectedTask);
   const removeHistoryTask = useAppStore((s) => s.removeHistoryTask);
-  const taskPanelHeight = useAppStore((s) => s.taskPanelHeight);
-  const setTaskPanelHeight = useAppStore((s) => s.setTaskPanelHeight);
-
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   const runningTasks = Object.values(activeTasks).filter(
     (task) => task.status === 'running',
   ) as TaskUIState[];
-
-  // ── Resize drag ──
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-
-  const onDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragRef.current = { startY: e.clientY, startH: taskPanelHeight };
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current) return;
-      const delta = dragRef.current.startY - ev.clientY;
-      setTaskPanelHeight(dragRef.current.startH + delta);
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, [taskPanelHeight, setTaskPanelHeight]);
 
   // ── Handlers ──
 
@@ -193,36 +168,15 @@ export function WorkflowMonitor() {
   return (
     <div
       style={{
-        height: taskPanelHeight,
-        backgroundColor: 'var(--bg-surface)',
-        borderTop: '1px solid var(--border-default)',
         display: 'flex',
         flexDirection: 'column',
+        maxHeight: '100%',
       }}
     >
-      {/* Resize drag handle */}
-      <div
-        onMouseDown={onDragStart}
-        style={{
-          height: 5,
-          cursor: 'ns-resize',
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <div style={{
-          width: 36, height: 3, borderRadius: 2,
-          background: 'var(--border-subtle)',
-          transition: 'background 150ms',
-        }} />
-      </div>
-
       {/* Header */}
       <div
         style={{
-          padding: '4px 16px 6px',
+          padding: '8px 12px',
           borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           alignItems: 'center',
@@ -337,6 +291,16 @@ export function WorkflowMonitor() {
 
 // ─── Running task row ───
 
+/** AI generation stages that show stream preview */
+const AI_STAGES = new Set(['analyzing', 'synthesizing', 'writing', 'generic_analysis', 'intermediate_analysis']);
+
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
 function RunningTaskRow({
   task, selected, onCancel, onClick, onContextMenu,
 }: {
@@ -350,6 +314,17 @@ function RunningTaskRow({
   const pct = task.progress.total > 0
     ? (task.progress.current / task.progress.total) * 100
     : 0;
+  const isAiStage = AI_STAGES.has(task.currentStep);
+
+  // Elapsed time — ticks every second
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!task.startedAt) return;
+    const tick = () => setElapsed(Date.now() - task.startedAt!);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [task.startedAt]);
 
   return (
     <div
@@ -369,7 +344,8 @@ function RunningTaskRow({
         transition: 'background 120ms, border-color 120ms',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+      {/* Header: workflow name + progress + cancel */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
         <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
           {t('workflowMonitor.workflows.' + task.workflow)}
         </span>
@@ -392,6 +368,16 @@ function RunningTaskRow({
         </div>
       </div>
 
+      {/* Current item label (e.g. paper title / concept name) */}
+      {task.currentItemLabel && (
+        <div style={{
+          fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {task.currentItemLabel}
+        </div>
+      )}
+
       {/* Progress bar */}
       <div style={{
         height: 4, borderRadius: 2, marginBottom: 4,
@@ -405,19 +391,76 @@ function RunningTaskRow({
         }} />
       </div>
 
-      <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-        {task.currentStep || t('common.loading')}
+      {/* Step label + elapsed/ETA */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', flex: 1, minWidth: 0 }}>
+          {isAiStage && (
+            <Loader2
+              size={11}
+              style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-color)', flexShrink: 0 }}
+            />
+          )}
+          <span style={{ flexShrink: 0 }}>
+            {task.currentStep
+              ? t(`workflowMonitor.stages.${task.currentStep}`, { defaultValue: task.currentStep })
+              : t('common.loading')}
+          </span>
+          {isAiStage && task.streamPreview && (
+            <span style={{
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              color: 'var(--text-muted)', opacity: 0.55,
+              fontFamily: 'var(--font-mono, monospace)', fontSize: 10,
+            }}>
+              {task.streamPreview.slice(-60)}
+              <span style={{ animation: 'pulse 1s ease-in-out infinite' }}>|</span>
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', gap: 8 }}>
+          {elapsed > 0 && <span>{formatDuration(elapsed)}</span>}
+          {task.estimatedRemainingMs != null && task.estimatedRemainingMs > 0 && (
+            <span style={{ color: 'var(--accent-color)' }}>
+              ~{formatDuration(task.estimatedRemainingMs)} {t('workflowMonitor.remaining')}
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Substeps */}
+
+      {/* Substeps timeline */}
       {task.substeps && task.substeps.length > 0 && (
-        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {task.substeps.map((sub) => (
-            <SubstepRow key={sub.name} name={sub.name} status={sub.status} detail={sub.detail ?? ''} />
+            <SubstepBadge key={sub.name} name={sub.name} status={sub.status} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/** Compact substep badge for the compact timeline */
+function SubstepBadge({ name, status }: { name: string; status: string }) {
+  const { t } = useTranslation();
+  const cfg = SUBSTEP_ICON_MAP[status] ?? SUBSTEP_ICON_MAP.pending!;
+  const { Icon } = cfg;
+  return (
+    <span
+      title={t(`workflowMonitor.stages.${name}`, { defaultValue: name })}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+        fontSize: 10, color: cfg.color,
+        padding: '1px 5px', borderRadius: 3,
+        background: status === 'running'
+          ? 'color-mix(in srgb, var(--accent-color) 10%, transparent)'
+          : status === 'success'
+            ? 'color-mix(in srgb, var(--success) 8%, transparent)'
+            : 'transparent',
+      }}
+    >
+      <Icon size={10} style={cfg.spin ? { animation: 'spin 1s linear infinite' } : undefined} />
+      {t(`workflowMonitor.stages.${name}`, { defaultValue: name })}
+    </span>
   );
 }
 
@@ -430,34 +473,6 @@ const SUBSTEP_ICON_MAP: Record<string, { Icon: typeof CheckCircle; color: string
   failed:   { Icon: XCircle,     color: 'var(--danger, #ef4444)' },
   skipped:  { Icon: MinusCircle, color: 'var(--text-muted)' },
 };
-
-function SubstepRow({ name, status, detail }: { name: string; status: string; detail?: string }) {
-  const { t } = useTranslation();
-  const cfg = SUBSTEP_ICON_MAP[status] ?? SUBSTEP_ICON_MAP.pending!;
-  const { Icon } = cfg;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-      <Icon
-        size={12}
-        style={{
-          color: cfg.color,
-          flexShrink: 0,
-          ...(cfg.spin ? { animation: 'spin 1s linear infinite' } : {}),
-        }}
-      />
-      <span style={{ minWidth: 64 }}>{t('workflowMonitor.substeps.' + name, { defaultValue: name })}</span>
-      {detail && status !== 'success' && status !== 'pending' && (
-        <span style={{
-          flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: status === 'failed' ? 'var(--danger, #ef4444)' : 'var(--text-muted)',
-          fontSize: 10,
-        }}>
-          {detail}
-        </span>
-      )}
-    </div>
-  );
-}
 
 // ─── History row ───
 
