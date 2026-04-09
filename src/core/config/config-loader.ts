@@ -428,6 +428,9 @@ const DEFAULT_DISCOVERY: DiscoveryConfig = {
   traversalDepth: 2,
   concurrency: 5,
   maxResultsPerQuery: 100,
+  enableGoogleScholar: false,
+  enableTavilyScholar: true,
+  enableBaiduXueshu: true,
 };
 
 const DEFAULT_ANALYSIS: AnalysisConfig = {
@@ -739,9 +742,15 @@ export function loadUnifiedConfig(opts: LoadUnifiedConfigOptions): Readonly<Abys
   }
 
   // Layer 3: 本地覆盖（.abyssal/config.toml）
+  // Strip global-only sections to prevent workspace config from shadowing
+  // global-config.toml changes (global sections are authoritative from Layer 1).
+  const GLOBAL_ONLY_SECTIONS = ['llm', 'rag', 'acquire', 'apiKeys', 'webSearch'];
   const localTomlPath = path.join(workspaceRoot, '.abyssal', 'config.toml');
   const localToml = readAndParseToml(localTomlPath, warn);
   if (localToml) {
+    for (const key of GLOBAL_ONLY_SECTIONS) {
+      delete localToml[key];
+    }
     config = deepMerge(config, localToml);
   }
 

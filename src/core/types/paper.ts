@@ -31,6 +31,9 @@ export const PAPER_SOURCES = [
   'ris',
   'manual',
   'web',
+  'google_scholar',
+  'tavily_scholar',
+  'baidu_xueshu',
 ] as const;
 export type PaperSource = (typeof PAPER_SOURCES)[number];
 

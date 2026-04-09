@@ -80,6 +80,9 @@ export function createTestConfig(overrides?: Partial<AbyssalConfig>): AbyssalCon
       traversalDepth: 2,
       concurrency: 5,
       maxResultsPerQuery: 100,
+      enableGoogleScholar: false,
+      enableTavilyScholar: true,
+      enableBaiduXueshu: true,
     },
     analysis: {
       templateDir: 'templates/',

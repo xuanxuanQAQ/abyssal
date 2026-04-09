@@ -210,6 +210,9 @@ export interface IpcContract {
   'search:citations':                 { args: [identifier: string, direction: 'references' | 'citations', limit?: number]; result: unknown[] };
   'search:related':                   { args: [identifier: string, limit?: number];      result: unknown[] };
   'search:byAuthor':                  { args: [authorName: string, limit?: number];      result: unknown[] };
+  'search:googleScholar':             { args: [query: string, limit?: number, yearRange?: unknown]; result: unknown[] };
+  'search:tavilyScholar':             { args: [query: string, limit?: number];            result: unknown[] };
+  'search:baiduXueshu':               { args: [query: string, limit?: number];            result: unknown[] };
 
   // ── rag ──
   'rag:search':                       { args: [query: string, filter?: RAGFilter];       result: RAGResult[] };

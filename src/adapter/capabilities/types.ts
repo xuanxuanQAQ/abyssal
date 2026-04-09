@@ -120,7 +120,11 @@ export interface CapabilityServices {
     searchSemanticScholar: (query: string, options?: { limit?: number }) => Promise<unknown>;
     searchOpenAlex: (concepts: string[], options?: { limit?: number }) => Promise<unknown>;
     searchArxiv: (query: string, options?: { limit?: number }) => Promise<unknown>;
+    searchGoogleScholar: (query: string, options?: { limit?: number }) => Promise<unknown>;
+    searchTavilyScholar: (query: string, options?: { limit?: number }) => Promise<unknown>;
   } | null;
+  /** 百度学术搜索（Electron BrowserWindow，仅主进程可用） */
+  baiduXueshuSearch?: ((query: string, limit?: number) => Promise<unknown[]>) | null;
   ragService?: {
     searchSemantic: (query: string, topK?: number) => Promise<unknown>;
     retrieve: (request: Record<string, unknown>) => Promise<unknown>;

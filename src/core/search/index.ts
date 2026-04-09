@@ -14,6 +14,8 @@ import { HttpClient } from '../infra/http-client';
 import * as ss from './semantic-scholar';
 import * as oa from './openalex';
 import * as ax from './arxiv';
+import * as gs from './google-scholar';
+import * as ts from './tavily-scholar';
 import { deduplicatePapers } from './dedup';
 import { detectBridgePapers } from './bridge-detection';
 
@@ -23,6 +25,8 @@ export type { CitationDirection } from './types';
 export type { SSSearchOptions } from './semantic-scholar';
 export type { OASearchOptions } from './openalex';
 export type { ArxivSearchOptions } from './arxiv';
+export type { GoogleScholarSearchOptions } from './google-scholar';
+export type { TavilyScholarSearchOptions } from './tavily-scholar';
 export { parseAuthorName, parseAuthorNames } from './author-name';
 export { generatePaperId, titleNormalize, normalizeDoi, normalizeArxivId } from './paper-id';
 export { deduplicatePapers } from './dedup';
@@ -42,10 +46,13 @@ export class SearchService {
   private readonly ssLimiter: RateLimiter;
   private readonly oaLimiter: RateLimiter;
   private readonly axLimiter: RateLimiter;
+  private readonly gsLimiter: RateLimiter;
+  private readonly tsLimiter: RateLimiter;
 
   private readonly ssApiKey: string | null;
   private readonly oaApiKey: string | null;
   private readonly oaEmail: string | null;
+  private readonly webSearchApiKey: string | null;
 
   constructor(config: AbyssalConfig, logger: Logger) {
     this.config = config;
@@ -59,12 +66,15 @@ export class SearchService {
     this.ssApiKey = config.apiKeys.semanticScholarApiKey ?? null;
     this.oaApiKey = config.apiKeys.openalexApiKey ?? null;
     this.oaEmail = config.apiKeys.openalexEmail ?? null;
+    this.webSearchApiKey = config.apiKeys.webSearchApiKey ?? null;
 
     this.ssLimiter = this.ssApiKey
       ? createRateLimiter('semanticScholarWithKey')
       : createRateLimiter('semanticScholarNoKey');
     this.oaLimiter = createRateLimiter('openAlex');
     this.axLimiter = createRateLimiter('arxiv');
+    this.gsLimiter = createRateLimiter('googleScholar');
+    this.tsLimiter = createRateLimiter('tavilyScholar');
   }
 
   // ─── §2 Semantic Scholar ───
@@ -135,6 +145,36 @@ export class SearchService {
   ): Promise<PaperMetadata[]> {
     return ax.searchArxiv(
       this.http, this.axLimiter, this.logger,
+      query, options,
+    );
+  }
+
+  // ─── §6 Google Scholar (SerpAPI) ───
+
+  async searchGoogleScholar(
+    query: string,
+    options?: gs.GoogleScholarSearchOptions,
+  ): Promise<PaperMetadata[]> {
+    if (!this.webSearchApiKey) {
+      throw new Error('SerpAPI key required for Google Scholar search (set api_keys.web_search_api_key)');
+    }
+    return gs.searchGoogleScholar(
+      this.http, this.gsLimiter, this.webSearchApiKey, this.logger,
+      query, options,
+    );
+  }
+
+  // ─── §7 Tavily Scholar ───
+
+  async searchTavilyScholar(
+    query: string,
+    options?: ts.TavilyScholarSearchOptions,
+  ): Promise<PaperMetadata[]> {
+    if (!this.webSearchApiKey) {
+      throw new Error('Tavily API key required for Tavily Scholar search (set api_keys.web_search_api_key)');
+    }
+    return ts.searchTavilyScholar(
+      this.http, this.tsLimiter, this.webSearchApiKey, this.logger,
       query, options,
     );
   }

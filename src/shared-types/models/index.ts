@@ -1113,10 +1113,13 @@ export interface SettingsData {
     proxyMode: 'all' | 'blocked-only';
   };
   discovery: {
-    searchBackend: 'openalex' | 'semantic_scholar' | 'arxiv';
+    searchBackend: 'openalex' | 'semantic_scholar' | 'arxiv' | 'google_scholar' | 'tavily_scholar' | 'baidu_xueshu';
     traversalDepth: number;
     maxResultsPerQuery: number;
     concurrency: number;
+    enableGoogleScholar: boolean;
+    enableTavilyScholar: boolean;
+    enableBaiduXueshu: boolean;
   };
   analysis: {
     maxTokensPerChunk: number;

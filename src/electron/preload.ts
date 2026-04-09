@@ -86,6 +86,7 @@ const INVOKE_CHANNELS = [
   // search
   'search:semanticScholar', 'search:openAlex', 'search:arxiv',
   'search:paperDetails', 'search:citations', 'search:related', 'search:byAuthor',
+  'search:googleScholar', 'search:tavilyScholar', 'search:baiduXueshu',
   // rag
   'rag:search', 'rag:searchWithReport', 'rag:getWritingContext',
   // pipeline

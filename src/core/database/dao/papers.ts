@@ -82,7 +82,7 @@ export function addPaper(
     pmcid: paper.pmcid,
     url: paper.url,
     bibtexKey: paper.bibtexKey,
-    biblioComplete: paper.biblioComplete,
+    biblioComplete: paper.biblioComplete ?? 0,
     fulltextStatus: status?.fulltextStatus ?? 'not_attempted',
     fulltextPath: status?.fulltextPath ?? null,
     textPath: status?.textPath ?? null,

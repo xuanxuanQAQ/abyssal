@@ -509,6 +509,10 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   );
   acquireModule.setBrowserSearch(browserSearchFn);
 
+  // ── BrowserWindow-based search for 百度学术 ──
+  const { createBaiduXueshuSearchFn } = await import('./baidu-xueshu-search');
+  ctx.appContext!.baiduXueshuSearch = createBaiduXueshuSearchFn(logger);
+
   // ── ReconCache for acquire pipeline v2 ──
   const reconCacheDb: ReconCacheDb = {
     getRecon: (doi: string) => (dbProxy as any).getRecon(doi),
@@ -557,14 +561,20 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   };
 
   // Register all workflows
-  workflowRunner.registerWorkflow('discover', createDiscoverWorkflow({
+  const discoverFn = createDiscoverWorkflow({
     dbProxy: dbProxy as any,
     searchService: searchModule,
     llmClient,
     logger,
     config: { discovery: config.discovery as any, project: config.project as any },
     frameworkState: () => ctx.appContext!.frameworkState,
-  }));
+  });
+  workflowRunner.registerWorkflow('discover', async (options, runner) => {
+    await discoverFn(options, runner);
+    if (runner.progress.completedItems > 0) {
+      pushManager.enqueueDbChange(['papers'], 'insert');
+    }
+  });
   // ── LLM-enhanced acquire services (Feature 1/2/3) ──
   const llmCallFn = llmClient
     ? async (systemPrompt: string, userPrompt: string, workflowId: string) => {
@@ -703,6 +713,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
   const capabilityServices: CapabilityServices = {
     dbProxy: dbProxy as any,
     searchService: searchModule,
+    baiduXueshuSearch: ctx.appContext!.baiduXueshuSearch ?? null,
     ragService: ragService as any,
     orchestrator: workflowRunner as any,
     addPaper: async (paper) => {
@@ -713,6 +724,7 @@ async function step6_instantiateModules(ctx: BootstrapContext): Promise<void> {
         (paper['title'] as string) ?? '',
       );
       await dbProxy.addPaper({ ...paper, id } as any, { fulltextStatus: 'not_attempted' } as any);
+      pushManager.enqueueDbChange(['papers'], 'insert');
       return id;
     },
     updatePaper: async (id, fields) => {
@@ -1082,6 +1094,7 @@ async function bootstrapLobbyMode(ctx: BootstrapContext): Promise<void> {
     processModule: null,
     ragModule: null,
     bibliographyModule: null,
+    baiduXueshuSearch: null,
     llmClient: null,
     contextBudgetManager: null,
     orchestrator: null,

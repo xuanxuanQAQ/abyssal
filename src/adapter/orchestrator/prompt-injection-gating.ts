@@ -40,7 +40,7 @@ const ASSISTANT_PROFILE_RE = /^(?:\s*)(?:(?:请问|想问下)?\s*)?(?:你是谁|
 const SMALLTALK_RE = /(天气|心情|状态|最近怎么样|how are you|what's up|聊聊)/i;
 const UI_HELP_RE = /(怎么|在哪|哪里|设置|导出|导入|按钮|面板|功能|操作|无法|报错|卡住|打不开|无法运行|how to|setting|export|import|ui|panel)/i;
 const CROSS_SYNTHESIS_RE = /(比较|对比|综述|综\s*合|synthesi[sz]e|review|survey|across papers|cross paper)/i;
-const TASK_EXEC_RE = /(帮我|请|创建|新建|生成|搜索|检索|写入|导出|整理|提纲|计划|run|execute|create|search|import|write)/i;
+const TASK_EXEC_RE = /(帮我|请|创建|新建|生成|搜索|检索|写入|导出|下载|整理|提纲|计划|run|execute|create|search|import|write|download)/i;
 const QUICK_FACT_RE = /(是什么|什么意思|定义|概念|解释一下|what is|define|meaning)/i;
 const RESEARCH_RE = /(论文|文献|方法|实验|结论|risk spillover|causal|因果|模型|指标|概念|研究)/i;
 const SELECTION_REF_RE = /(这段|选中|高亮|划线|selected|selection|highlight|quoted|引用的段落)/i;
@@ -78,7 +78,7 @@ export function classifyPromptGate(inputs: PromptGateInputs): PromptGateDecision
     return finalize({ type: 'cross-paper-synthesis', confidence: 0.95, bundles: BUNDLE_MAP['cross-paper-synthesis'], usedRule: true }, inputs);
   }
 
-  if (TASK_EXEC_RE.test(text) && /创建|新建|生成|搜索|检索|导出|import|create|execute|search|write/i.test(text)) {
+  if (TASK_EXEC_RE.test(text) && /创建|新建|生成|搜索|检索|导出|下载|import|create|execute|search|write|download/i.test(text)) {
     return finalize({ type: 'task-execution', confidence: 0.92, bundles: BUNDLE_MAP['task-execution'], usedRule: true }, inputs);
   }
 

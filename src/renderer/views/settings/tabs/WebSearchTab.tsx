@@ -9,6 +9,9 @@ const ACADEMIC_SEARCH_BACKENDS = [
   { value: 'openalex', label: 'OpenAlex' },
   { value: 'semantic_scholar', label: 'Semantic Scholar' },
   { value: 'arxiv', label: 'arXiv' },
+  { value: 'google_scholar', label: 'Google Scholar (SerpAPI)' },
+  { value: 'tavily_scholar', label: 'Tavily Scholar' },
+  { value: 'baidu_xueshu', label: '百度学术' },
 ] as const;
 
 const WEB_SEARCH_BACKENDS = [
@@ -30,7 +33,28 @@ export function WebSearchTab({ settings, onUpdate }: { settings: SettingsData; o
           <Select
             value={disc.searchBackend}
             options={ACADEMIC_SEARCH_BACKENDS.map((b) => ({ value: b.value, label: b.label }))}
-            onChange={(v) => onUpdate('discovery', { searchBackend: v as 'openalex' | 'semantic_scholar' | 'arxiv' })}
+            onChange={(v) => onUpdate('discovery', { searchBackend: v as any })}
+          />
+        </Row>
+      </Section>
+
+      <Section icon={<BookOpen size={16} />} title={t('settings.academicSearch.chineseTitle', '中文文献搜索')} description={t('settings.academicSearch.chineseDesc', '启用后，搜索中文内容时自动路由到对应后端')}>
+        <Row label="Google Scholar (SerpAPI)" hint={t('settings.academicSearch.googleScholarHint', '通过 SerpAPI 搜索 Google Scholar，中文覆盖极好。需要 SerpAPI key（免费100次/月）')}>
+          <Toggle
+            checked={disc.enableGoogleScholar}
+            onChange={(v) => onUpdate('discovery', { enableGoogleScholar: v })}
+          />
+        </Row>
+        <Row label="Tavily Scholar" hint={t('settings.academicSearch.tavilyScholarHint', '使用 Tavily 深度搜索学术网页，提取元数据。使用已配置的 Tavily API key')}>
+          <Toggle
+            checked={disc.enableTavilyScholar}
+            onChange={(v) => onUpdate('discovery', { enableTavilyScholar: v })}
+          />
+        </Row>
+        <Row label={t('settings.academicSearch.baiduXueshu', '百度学术')} hint={t('settings.academicSearch.baiduXueshuHint', '通过内置浏览器搜索百度学术，中文覆盖最全。无需 API key，首次使用需完成验证码')} noBorder>
+          <Toggle
+            checked={disc.enableBaiduXueshu}
+            onChange={(v) => onUpdate('discovery', { enableBaiduXueshu: v })}
           />
         </Row>
       </Section>
@@ -42,6 +66,9 @@ export function WebSearchTab({ settings, onUpdate }: { settings: SettingsData; o
             <li><strong>OpenAlex</strong> — {t('settings.academicSearch.openalexDesc')}</li>
             <li><strong>Semantic Scholar</strong> — {t('settings.academicSearch.semanticScholarDesc')}</li>
             <li><strong>arXiv</strong> — {t('settings.academicSearch.arxivDesc')}</li>
+            <li><strong>Google Scholar (SerpAPI)</strong> — {t('settings.academicSearch.googleScholarDesc', '通过 SerpAPI 搜索 Google Scholar，中文文献覆盖极好，返回结构化元数据。需要 SerpAPI key（免费100次/月）')}</li>
+            <li><strong>Tavily Scholar</strong> — {t('settings.academicSearch.tavilyScholarDesc', '使用 Tavily 深度搜索学术网页，从知网/万方等页面提取元数据。需要 Tavily API key')}</li>
+            <li><strong>百度学术</strong> — {t('settings.academicSearch.baiduXueshuDesc', '通过内置浏览器搜索百度学术，中文文献覆盖最全，返回标题/作者/期刊/年份/摘要。首次使用需完成一次验证码')}</li>
           </ul>
         </div>
       </Section>

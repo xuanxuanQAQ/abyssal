@@ -31,7 +31,7 @@ const WRITING_PATTERN = /撰写|草稿|draft|outline|提纲|综述|总结成文|
 const CONTROL_PATTERN = /运行|执行|启动|导入|下载|获取全文|acquire|analy[sz]e|synthesi[sz]e|pipeline|创建|更新|保存/;
 
 // Search intent signals
-const ONLINE_MARKERS = /在线|网上|online|数据库|database|arxiv|scholar|openalex|下载论文|download paper/;
+const ONLINE_MARKERS = /在线|网上|online|数据库|database|arxiv|scholar|openalex|下载论文|下载全文|下载pdf|download paper|download fulltext/;
 const LOCAL_MARKERS = /我的|库里|本地|local|已有|existing|library|知识库|笔记里|我的文献/;
 const FIND_PAPER_PATTERN = /(?:搜索|查找|找|search|find|look\s*up).*?(?:论文|文章|文献|paper|article)/;
 const RECALL_PATTERN = /(?:检索|retrieve|回顾|recall|证据|evidence|passage).*?(?:内容|content|信息|info|观点|argument|证据|evidence)|(?:内容|证据|观点|信息).*?(?:检索|retrieve|recall)/;

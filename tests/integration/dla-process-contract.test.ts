@@ -19,24 +19,27 @@ vi.mock('../../src/dla-process/inference-engine', () => ({
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
+  const readFileMock = async (path: string, ...args: unknown[]) => {
+    if (typeof path === 'string' && path.includes('package.json')) {
+      return Buffer.from('%PDF-1.4 dummy');
+    }
+    return actual.promises.readFile(path, ...args as [any]);
+  };
+  const readFileSyncMock = (path: string, ...args: unknown[]) => {
+    if (typeof path === 'string' && path.includes('package.json')) {
+      return Buffer.from('%PDF-1.4 dummy');
+    }
+    return actual.readFileSync(path, ...args as [any]);
+  };
   return {
     ...actual,
     default: {
       ...actual,
-      readFileSync: (path: string, ...args: unknown[]) => {
-        // Return a dummy buffer for test PDF paths to avoid filesystem dependency
-        if (typeof path === 'string' && path.includes('package.json')) {
-          return Buffer.from('%PDF-1.4 dummy');
-        }
-        return actual.readFileSync(path, ...args as [any]);
-      },
+      readFileSync: readFileSyncMock,
+      promises: { ...actual.promises, readFile: readFileMock },
     },
-    readFileSync: (path: string, ...args: unknown[]) => {
-      if (typeof path === 'string' && path.includes('package.json')) {
-        return Buffer.from('%PDF-1.4 dummy');
-      }
-      return actual.readFileSync(path, ...args as [any]);
-    },
+    readFileSync: readFileSyncMock,
+    promises: { ...actual.promises, readFile: readFileMock },
   };
 });
 

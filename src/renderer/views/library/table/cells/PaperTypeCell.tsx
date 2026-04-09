@@ -16,6 +16,7 @@ const TYPE_CONFIG: Record<string, { label: string; bg: string }> = {
   preprint: { label: 'Pre', bg: 'rgba(245, 158, 11, 0.2)' },
   review: { label: 'Rev', bg: 'rgba(16, 185, 129, 0.2)' },
   webpage: { label: 'Web', bg: 'rgba(236, 72, 153, 0.2)' },
+  unknown: { label: '—', bg: 'rgba(107, 114, 128, 0.15)' },
   // 前端旧类型（向后兼容）
   empirical: { label: 'Emp', bg: 'rgba(59, 130, 246, 0.2)' },
   theoretical: { label: 'Thr', bg: 'rgba(139, 92, 246, 0.2)' },

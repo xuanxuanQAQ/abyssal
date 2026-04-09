@@ -65,13 +65,19 @@ export interface AcquireConfig {
   proxyMode: 'all' | 'blocked-only'; // 默认 'blocked-only'
 }
 
-export type AcademicSearchBackend = 'openalex' | 'semantic_scholar' | 'arxiv';
+export type AcademicSearchBackend = 'openalex' | 'semantic_scholar' | 'arxiv' | 'google_scholar' | 'tavily_scholar' | 'baidu_xueshu';
 
 export interface DiscoveryConfig {
   searchBackend: AcademicSearchBackend; // 默认 "openalex"
   traversalDepth: number; // 默认 2
   concurrency: number; // 默认 5
   maxResultsPerQuery: number; // 默认 100
+  /** 启用 Google Scholar（通过 SerpAPI，需要 web_search_api_key） */
+  enableGoogleScholar: boolean; // 默认 false
+  /** 启用 Tavily Scholar（需要 web_search_api_key） */
+  enableTavilyScholar: boolean; // 默认 true（已有 Tavily key 即可用）
+  /** 启用百度学术（内置浏览器爬取，无需 API key） */
+  enableBaiduXueshu: boolean; // 默认 true
 }
 
 export interface AnalysisConfig {

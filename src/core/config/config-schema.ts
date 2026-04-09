@@ -100,7 +100,7 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     type: 'enum',
     default: 'openalex',
     required: false,
-    constraints: { enum: ['openalex', 'semantic_scholar', 'arxiv'] },
+    constraints: { enum: ['openalex', 'semantic_scholar', 'arxiv', 'google_scholar', 'tavily_scholar', 'baidu_xueshu'] },
   },
   'discovery.traversalDepth': {
     type: 'integer',
@@ -119,6 +119,21 @@ export const CONFIG_FIELD_DEFS: Record<string, FieldDefinition> = {
     default: 5,
     required: false,
     constraints: { min: 1, max: 20 },
+  },
+  'discovery.enableGoogleScholar': {
+    type: 'boolean',
+    default: false,
+    required: false,
+  },
+  'discovery.enableTavilyScholar': {
+    type: 'boolean',
+    default: true,
+    required: false,
+  },
+  'discovery.enableBaiduXueshu': {
+    type: 'boolean',
+    default: true,
+    required: false,
   },
 
   // ── acquire ──

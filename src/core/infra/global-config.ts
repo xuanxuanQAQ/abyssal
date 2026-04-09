@@ -147,10 +147,11 @@ export function saveGlobalConfig(
       ? {
         ...current.llm,
         ...updates.llm,
-        workflowOverrides: normalizeWorkflowOverrides({
-          ...current.llm.workflowOverrides,
-          ...(updates.llm.workflowOverrides ?? {}),
-        }),
+        workflowOverrides: normalizeWorkflowOverrides(
+          updates.llm.workflowOverrides
+            ? updates.llm.workflowOverrides
+            : current.llm.workflowOverrides,
+        ),
       }
       : current.llm,
     rag: updates.rag ? { ...current.rag, ...updates.rag } : current.rag,
@@ -193,7 +194,17 @@ export function saveGlobalConfig(
           lines.push(`[llm.${key}.${sk}]`);
           for (const [ssk, ssv] of Object.entries(sv as Record<string, unknown>)) {
             if (ssv === null || ssv === undefined) continue;
-            lines.push(`${ssk} = ${toTomlValue(ssv)}`);
+            if (typeof ssv === 'object' && !Array.isArray(ssv)) {
+              // 4th-level nesting (e.g. workflowOverrides.analyze.reasoning)
+              lines.push('');
+              lines.push(`[llm.${key}.${sk}.${ssk}]`);
+              for (const [k4, v4] of Object.entries(ssv as Record<string, unknown>)) {
+                if (v4 === null || v4 === undefined) continue;
+                lines.push(`${k4} = ${toTomlValue(v4)}`);
+              }
+            } else {
+              lines.push(`${ssk} = ${toTomlValue(ssv)}`);
+            }
           }
         } else {
           lines.push(`${sk} = ${toTomlValue(sv)}`);

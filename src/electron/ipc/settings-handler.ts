@@ -25,6 +25,40 @@ function maskKey(key: string | null | undefined): string | null {
   return key.slice(0, 8) + '****' + key.slice(-4);
 }
 
+/** Serialize a JS value to a TOML literal */
+function toTomlValue(val: unknown): string {
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  return JSON.stringify(val); // strings, arrays
+}
+
+/**
+ * Recursively emit a plain object as TOML table entries.
+ * Scalar/array values are written inline; nested objects become sub-tables.
+ */
+function emitTomlTable(
+  lines: string[],
+  tablePath: string,
+  obj: Record<string, unknown>,
+): void {
+  // First pass: write scalar / array values under the current table header
+  const subtables: Array<[string, Record<string, unknown>]> = [];
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === null || val === undefined) continue;
+    if (typeof val === 'object' && !Array.isArray(val)) {
+      subtables.push([key, val as Record<string, unknown>]);
+    } else {
+      lines.push(`${key} = ${toTomlValue(val)}`);
+    }
+  }
+  // Second pass: recurse into sub-tables (emitted after all scalars)
+  for (const [key, subObj] of subtables) {
+    const subPath = `${tablePath}.${key}`;
+    lines.push('');
+    lines.push(`[${subPath}]`);
+    emitTomlTable(lines, subPath, subObj);
+  }
+}
+
 /** Save workspace-level config sections to .abyssal/config.toml */
 async function saveWorkspaceConfig(
   workspaceRoot: string,
@@ -45,25 +79,12 @@ async function saveWorkspaceConfig(
   const existing = (raw[section] ?? {}) as Record<string, unknown>;
   raw[section] = { ...existing, ...patch };
 
-  // Write back as simple TOML
+  // Write back as TOML (recursive, supports arbitrary nesting depth)
   const lines: string[] = ['# Abyssal workspace config (auto-generated)', ''];
   for (const [sectionName, sectionValue] of Object.entries(raw)) {
     if (sectionValue && typeof sectionValue === 'object' && !Array.isArray(sectionValue)) {
       lines.push(`[${sectionName}]`);
-      for (const [key, val] of Object.entries(sectionValue as Record<string, unknown>)) {
-        if (val === null || val === undefined) continue;
-        if (typeof val === 'object' && !Array.isArray(val)) {
-          // Nested table (e.g. workflowOverrides) — write as sub-table
-          lines.push('');
-          lines.push(`[${sectionName}.${key}]`);
-          for (const [sk, sv] of Object.entries(val as Record<string, unknown>)) {
-            if (sv === null || sv === undefined) continue;
-            lines.push(`${sk} = ${JSON.stringify(sv)}`);
-          }
-        } else {
-          lines.push(`${key} = ${JSON.stringify(val)}`);
-        }
-      }
+      emitTomlTable(lines, sectionName, sectionValue as Record<string, unknown>);
       lines.push('');
     }
   }
@@ -130,6 +151,9 @@ export function registerSettingsHandlers(ctx: AppContext): void {
         traversalDepth: c.discovery.traversalDepth,
         maxResultsPerQuery: c.discovery.maxResultsPerQuery,
         concurrency: c.discovery.concurrency,
+        enableGoogleScholar: c.discovery.enableGoogleScholar ?? false,
+        enableTavilyScholar: c.discovery.enableTavilyScholar ?? true,
+        enableBaiduXueshu: c.discovery.enableBaiduXueshu ?? true,
       },
       analysis: {
         maxTokensPerChunk: c.analysis.maxTokensPerChunk,

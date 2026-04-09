@@ -7,8 +7,89 @@
 
 import type { Capability } from '../types';
 import type { WorkflowType } from '../../../shared-types/enums';
+import type { AcademicSearchBackend } from '../../../core/types/config';
 
 const WORKFLOW_ACQUIRE: WorkflowType = 'acquire';
+
+// ── 中文检测 ──
+
+const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+function containsChinese(text: string): boolean {
+  return CJK_RE.test(text);
+}
+
+// ── 智能路由：根据查询语言和可用 API key 选择最佳后端 ──
+
+type SearchServices = {
+  searchService: any;
+  configProvider?: { config: Record<string, any> } | null;
+  baiduXueshuSearch?: ((query: string, limit?: number) => Promise<unknown[]>) | null;
+};
+
+function resolveBackend(
+  query: string,
+  configured: AcademicSearchBackend,
+  services: SearchServices,
+): AcademicSearchBackend {
+  // 用户显式指定了中文后端 → 直接使用
+  if (['google_scholar', 'tavily_scholar', 'baidu_xueshu'].includes(configured)) {
+    return configured;
+  }
+
+  // 查询不含中文 → 使用配置的英文后端
+  if (!containsChinese(query)) return configured;
+
+  // 查询含中文 → 按优先级选择已启用且可用的中文后端
+  const disc = services.configProvider?.config?.discovery as Record<string, unknown> | undefined;
+  const enableBaidu = disc?.enableBaiduXueshu !== false;
+  const enableGoogle = disc?.enableGoogleScholar === true;
+  const enableTavily = disc?.enableTavilyScholar !== false;
+
+  const webKey = services.configProvider?.config?.apiKeys?.webSearchApiKey;
+
+  if (enableBaidu && services.baiduXueshuSearch) return 'baidu_xueshu';
+  if (enableGoogle && webKey) return 'google_scholar';
+  if (enableTavily && webKey) return 'tavily_scholar';
+
+  // 无中文后端可用或全部禁用，回退
+  return configured;
+}
+
+// ── 统一搜索分发 ──
+
+async function dispatchSearch(
+  backend: AcademicSearchBackend,
+  query: string,
+  limit: number,
+  services: SearchServices,
+): Promise<{ results: unknown[]; backend: string }> {
+  const ss = services.searchService;
+
+  switch (backend) {
+    case 'semantic_scholar':
+      return { results: await ss.searchSemanticScholar(query, { limit }), backend };
+    case 'arxiv':
+      return { results: await ss.searchArxiv(query, { limit }), backend };
+    case 'google_scholar':
+      return { results: await ss.searchGoogleScholar(query, { limit }), backend };
+    case 'tavily_scholar':
+      return { results: await ss.searchTavilyScholar(query, { limit }), backend };
+    case 'baidu_xueshu': {
+      if (!services.baiduXueshuSearch) {
+        // fallback: 百度学术不可用（非 Electron 环境），尝试其他中文后端
+        const webKey = services.configProvider?.config?.apiKeys?.webSearchApiKey;
+        if (webKey) {
+          return { results: await ss.searchTavilyScholar(query, { limit }), backend: 'tavily_scholar' };
+        }
+        return { results: await ss.searchOpenAlex([query], { limit }), backend: 'openalex' };
+      }
+      return { results: await services.baiduXueshuSearch(query, limit), backend };
+    }
+    case 'openalex':
+    default:
+      return { results: await ss.searchOpenAlex([query], { limit }), backend: 'openalex' };
+  }
+}
 
 export function createDiscoveryCapability(): Capability {
   return {
@@ -25,14 +106,14 @@ export function createDiscoveryCapability(): Capability {
           'Find a specific paper by title, DOI, or arXiv ID. ' +
           'Automatically checks the local library first; if not found, searches online academic databases and imports the best match. ' +
           'Use this when the user wants to locate and add a particular paper.',
-        routeFamilies: ['discovery_online', 'retrieval_search'],
-        semanticKeywords: ['搜索论文', '找文章', '查找论文', 'find paper', 'search paper', 'look up paper', '搜索这篇'],
+        routeFamilies: ['discovery_online', 'retrieval_search', 'workspace_control'],
+        semanticKeywords: ['搜索论文', '找文章', '查找论文', 'find paper', 'search paper', 'look up paper', '搜索这篇', '下载论文', '获取全文', 'download paper', 'get fulltext'],
         params: [
           { name: 'title', type: 'string', description: 'Paper title or search query', required: true },
           { name: 'doi', type: 'string', description: 'DOI identifier (if known)' },
           { name: 'arxivId', type: 'string', description: 'arXiv ID (if known)' },
           { name: 'autoImport', type: 'boolean', description: 'Automatically import the best match into library (default true)' },
-          { name: 'autoAcquire', type: 'boolean', description: 'Trigger fulltext PDF download after import (default false — use acquire_fulltext separately)' },
+          { name: 'autoAcquire', type: 'boolean', description: 'Trigger fulltext PDF download after import (default true)' },
         ],
         permissionLevel: 1,
         execute: async (params, ctx) => {
@@ -61,35 +142,35 @@ export function createDiscoveryCapability(): Capability {
             }
           }
 
-          // ── Step 2: Search online ──
+          // ── Step 2: Search online (智能路由) ──
           if (!ctx.services.searchService) {
             return { success: false, summary: 'Search service not configured. Add API keys in settings.' };
           }
-          const backend =
-            ((ctx.services.configProvider?.config as Record<string, any>)?.discovery?.searchBackend as string) ??
+          const configuredBackend =
+            ((ctx.services.configProvider?.config as Record<string, any>)?.discovery?.searchBackend as AcademicSearchBackend) ??
             'openalex';
           const limit = 10;
 
-          let results: unknown[];
-          switch (backend) {
-            case 'semantic_scholar':
-              results = (await ctx.services.searchService.searchSemanticScholar(title, { limit })) as unknown[];
-              break;
-            case 'arxiv':
-              results = (await ctx.services.searchService.searchArxiv(title, { limit })) as unknown[];
-              break;
-            case 'openalex':
-            default:
-              results = (await ctx.services.searchService.searchOpenAlex([title], { limit })) as unknown[];
-              break;
-          }
+          const backend = resolveBackend(title, configuredBackend, {
+            searchService: ctx.services.searchService,
+            configProvider: ctx.services.configProvider as any,
+            baiduXueshuSearch: (ctx.services as any).baiduXueshuSearch ?? null,
+          });
+          const { results, backend: usedBackend } = await dispatchSearch(
+            backend, title, limit,
+            {
+              searchService: ctx.services.searchService,
+              configProvider: ctx.services.configProvider as any,
+              baiduXueshuSearch: (ctx.services as any).baiduXueshuSearch ?? null,
+            },
+          );
           const list = Array.isArray(results) ? results : [];
 
           if (list.length === 0) {
             return {
               success: true,
               data: { status: 'not_found' },
-              summary: `No papers found matching "${title}" in ${backend}`,
+              summary: `No papers found matching "${title}" in ${usedBackend}`,
             };
           }
 
@@ -121,13 +202,13 @@ export function createDiscoveryCapability(): Capability {
               arxivId: (best['arxivId'] as string) ?? null,
               abstract: best['abstract'] ?? null,
               venue: best['venue'] ?? null,
-              paperType: 'unknown',
-              source: backend,
+              paperType: (best['paperType'] as string) || (best['journal'] || best['venue'] ? 'journal' : 'unknown'),
+              source: usedBackend,
             };
             const paperId = await ctx.services.addPaper(paper);
 
             // Trigger fulltext acquisition only if explicitly requested
-            const shouldAcquire = params['autoAcquire'] === true;
+            const shouldAcquire = params['autoAcquire'] !== false;
             let taskId: string | null = null;
             if (shouldAcquire && ctx.services.orchestrator) {
               if (ctx.services.updatePaper) {
@@ -145,7 +226,7 @@ export function createDiscoveryCapability(): Capability {
 
             ctx.session.memory.add({
               type: 'finding',
-              content: `Found and imported "${best['title']}" via ${backend}`,
+              content: `Found and imported "${best['title']}" via ${usedBackend}`,
               source: 'discovery.find_paper',
               linkedEntities: [paperId],
               importance: 0.6,
@@ -160,7 +241,7 @@ export function createDiscoveryCapability(): Capability {
                 paper: best,
                 otherResults: list.slice(1, 5),
               },
-              summary: `Found and imported "${best['title']}"${taskId ? ' — fulltext acquisition started' : ''}. ${!shouldAcquire ? 'Use acquire_fulltext to download the PDF.' : ''} ${list.length > 1 ? `Also found ${list.length - 1} other candidates.` : ''}`,
+              summary: `Found and imported "${best['title']}"${taskId ? ' — fulltext acquisition started' : ''}. ${list.length > 1 ? `Also found ${list.length - 1} other candidates.` : ''}`,
               emittedEvents: ['data:paperAdded'],
             };
           }
@@ -194,29 +275,29 @@ export function createDiscoveryCapability(): Capability {
           }
           const query = params['query'] as string;
           const limit = Math.min((params['limit'] as number) ?? 10, 20);
-          const backend =
-            ((ctx.services.configProvider?.config as Record<string, any>)?.discovery?.searchBackend as string) ??
+          const configuredBackend2 =
+            ((ctx.services.configProvider?.config as Record<string, any>)?.discovery?.searchBackend as AcademicSearchBackend) ??
             'openalex';
 
-          let results;
-          switch (backend) {
-            case 'semantic_scholar':
-              results = await ctx.services.searchService.searchSemanticScholar(query, { limit });
-              break;
-            case 'arxiv':
-              results = await ctx.services.searchService.searchArxiv(query, { limit });
-              break;
-            case 'openalex':
-            default:
-              results = await ctx.services.searchService.searchOpenAlex([query], { limit });
-              break;
-          }
-          const list = Array.isArray(results) ? results : [];
+          const resolvedBackend = resolveBackend(query, configuredBackend2, {
+            searchService: ctx.services.searchService,
+            configProvider: ctx.services.configProvider as any,
+            baiduXueshuSearch: (ctx.services as any).baiduXueshuSearch ?? null,
+          });
+          const { results: searchResults, backend: usedBackend2 } = await dispatchSearch(
+            resolvedBackend, query, limit,
+            {
+              searchService: ctx.services.searchService,
+              configProvider: ctx.services.configProvider as any,
+              baiduXueshuSearch: (ctx.services as any).baiduXueshuSearch ?? null,
+            },
+          );
+          const list = Array.isArray(searchResults) ? searchResults : [];
 
           if (list.length > 0) {
             ctx.session.memory.add({
               type: 'finding',
-              content: `Literature search "${query}": found ${list.length} papers`,
+              content: `Literature search "${query}": found ${list.length} papers via ${usedBackend2}`,
               source: 'discovery.search_literature',
               linkedEntities: [],
               importance: 0.4,
@@ -226,7 +307,7 @@ export function createDiscoveryCapability(): Capability {
           return {
             success: true,
             data: list.slice(0, 10),
-            summary: `Found ${list.length} papers matching "${query}" in ${backend}`,
+            summary: `Found ${list.length} papers matching "${query}" in ${usedBackend2}`,
           };
         },
       },
@@ -308,6 +389,7 @@ export function createDiscoveryCapability(): Capability {
           { name: 'arxivId', type: 'string', description: 'arXiv ID' },
           { name: 'abstract', type: 'string', description: 'Abstract' },
           { name: 'venue', type: 'string', description: 'Journal/conference' },
+          { name: 'paperType', type: 'string', description: 'Paper type: journal, conference, book, chapter, preprint, review, webpage' },
           { name: WORKFLOW_ACQUIRE, type: 'boolean', description: 'Auto-download fulltext (default true)' },
         ],
         permissionLevel: 1,
@@ -335,7 +417,7 @@ export function createDiscoveryCapability(): Capability {
             arxivId: (params['arxivId'] as string) ?? null,
             abstract: (params['abstract'] as string) ?? null,
             venue: (params['venue'] as string) ?? null,
-            paperType: 'unknown',
+            paperType: (params['paperType'] as string) || 'unknown',
             source: 'manual',
           };
           const paperId = await ctx.services.addPaper(paper);
@@ -364,7 +446,8 @@ export function createDiscoveryCapability(): Capability {
       {
         name: 'acquire_fulltext',
         description: 'Trigger fulltext acquisition (PDF download + text extraction + indexing) for a paper in the library.',
-        routeFamilies: ['workspace_control'],
+        routeFamilies: ['workspace_control', 'discovery_online'],
+        semanticKeywords: ['下载全文', '获取PDF', '下载PDF', 'download fulltext', 'acquire PDF', 'get PDF', '获取全文', '全文下载'],
         params: [
           { name: 'paperId', type: 'string', description: 'Paper ID (12-char hex hash). Get IDs from query_papers.', required: true },
         ],

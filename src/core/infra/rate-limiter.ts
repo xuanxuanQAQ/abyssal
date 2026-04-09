@@ -151,6 +151,8 @@ export const API_RATE_LIMITS = {
   crossRef: { capacity: 50, refillRate: 50 / 1000 },
   unpaywall: { capacity: 10, refillRate: 10 / 1000 },
   webSearch: { capacity: 5, refillRate: 1 / 1000 },
+  googleScholar: { capacity: 5, refillRate: 1 / 1000 },
+  tavilyScholar: { capacity: 5, refillRate: 1 / 1000 },
 } as const;
 
 export function createRateLimiter(

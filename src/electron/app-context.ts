@@ -32,6 +32,7 @@ import type { EventBus } from '../core/event-bus';
 import type { ResearchSession } from '../core/session';
 import type { CapabilityRegistry } from '../adapter/capabilities';
 import type { SessionOrchestrator } from '../adapter/orchestrator/session-orchestrator';
+import type { BaiduXueshuSearchFn } from './baidu-xueshu-search';
 
 // ─── FrameworkState (re-export from canonical location) ───
 
@@ -77,6 +78,8 @@ export interface AppContext {
   processModule: ProcessService | null;
   ragModule: RagServiceLike | null;
   bibliographyModule: BibliographyService | null;
+  /** 百度学术搜索 — Electron BrowserWindow 实现 */
+  baiduXueshuSearch: BaiduXueshuSearchFn | null;
 
   // ── Adaptation layer modules ──
   /** LlmClient — multi-backend adapter (Claude/OpenAI/DeepSeek/Gemini/SiliconFlow/vLLM) */
@@ -166,6 +169,7 @@ export function createAppContext(opts: CreateAppContextOpts): AppContext {
     processModule: opts.processModule ?? null,
     ragModule: opts.ragModule ?? null,
     bibliographyModule: opts.bibliographyModule ?? null,
+    baiduXueshuSearch: null, // injected during bootstrap
 
     // Adaptation layer — TODO
     llmClient: null,

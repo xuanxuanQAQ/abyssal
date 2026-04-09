@@ -93,8 +93,7 @@ export function isAlwaysReasoningModel(model: string): boolean {
   return model.startsWith('o3') || model.startsWith('o4')
     || model === 'deepseek-reasoner'
     || model.includes('DeepSeek-R1')
-    || model.includes('kimi-k2-thinking')
-    || model.startsWith('doubao-seed');
+    || model.includes('kimi-k2-thinking');
 }
 
 const MODEL_PROVIDER_PREFIXES: Array<{ prefix: string; provider: string }> = [
