@@ -157,9 +157,13 @@ export class DlaProxy extends EventEmitter {
   // ─── Internal ───
 
   private spawnChild(): void {
+    const isElectronPackaged = !!process.versions['electron'] && !(process as unknown as { defaultApp?: boolean }).defaultApp;
     this.child = fork(this.opts.dlaProcessPath, [], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        ...(isElectronPackaged ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      },
     });
 
     this.child.on('message', (msg: DlaProcessResponse) => this.handleMessage(msg));

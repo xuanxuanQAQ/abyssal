@@ -10,6 +10,7 @@
  * - 逐页返回结果 + 进度
  */
 
+import * as fs from 'node:fs';
 import { initSession, detectPage, destroySession } from './inference-engine';
 import type { RawImage } from './preprocess';
 import type {
@@ -93,7 +94,6 @@ async function getOrOpenDocument(mupdf: any, pdfPath: string): Promise<any> {
   }
   closeCachedDocument();
 
-  const fs = require('node:fs') as typeof import('node:fs');
   const pdfBuffer = await fs.promises.readFile(pdfPath);
   cachedDoc = mupdf.Document.openDocument(pdfBuffer, 'application/pdf');
   cachedDocPath = pdfPath;

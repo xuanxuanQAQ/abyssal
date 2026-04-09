@@ -30,6 +30,9 @@ const MACOS_EXTRA_PRAGMAS: [string, string | number][] = [
 // ─── §1.4 sqlite-vec 扩展路径解析 ───
 
 function resolveVecExtensionPath(): string {
+  // Native DLL 不能从 asar 归档内加载，必须指向 app.asar.unpacked
+  const fixAsarPath = (p: string) => p.replace(/app\.asar(?![.]unpacked)/, 'app.asar.unpacked');
+
   // 优先级 1：环境变量覆盖
   const envPath = process.env['ABYSSAL_SQLITE_VEC_PATH'];
   if (envPath) {
@@ -40,10 +43,9 @@ function resolveVecExtensionPath(): string {
   }
 
   // 优先级 2：使用 sqlite-vec npm 包的官方路径解析
-  // sqlite-vec 按平台拆包（sqlite-vec-windows-x64 等），通过 require.resolve 定位
   try {
     const { getLoadablePath } = require('sqlite-vec') as { getLoadablePath: () => string };
-    const loadablePath = getLoadablePath();
+    const loadablePath = fixAsarPath(getLoadablePath());
     if (fs.existsSync(loadablePath)) return loadablePath;
   } catch {
     // sqlite-vec npm 包未安装，继续手动搜索
@@ -61,16 +63,36 @@ function resolveVecExtensionPath(): string {
         : 'vec0.so';
 
   const os = platform === 'win32' ? 'windows' : platform;
-  const candidates = [
-    path.join('node_modules', `sqlite-vec-${os}-${arch}`, extName),
-    path.join('node_modules', 'sqlite-vec', `${platform}-${arch}`, extName),
-    path.join('node_modules', 'sqlite-vec', extName),
-  ];
+
+  const searchBases: string[] = [];
+
+  // 通过 require.resolve 定位 node_modules（兼容 asar）
+  try {
+    const resolvedDir = path.dirname(require.resolve('sqlite-vec/package.json'));
+    searchBases.push(path.resolve(resolvedDir, '..'));
+    const unpackedDir = fixAsarPath(resolvedDir);
+    if (unpackedDir !== resolvedDir) {
+      searchBases.push(path.resolve(unpackedDir, '..'));
+    }
+  } catch { /* ignore */ }
+
+  // 开发环境
+  searchBases.push(path.resolve('node_modules'));
+  searchBases.push(path.resolve(__dirname, '..', '..', '..', 'node_modules'));
+
+  const candidates: string[] = [];
+  for (const base of searchBases) {
+    candidates.push(
+      path.join(base, `sqlite-vec-${os}-${arch}`, extName),
+      path.join(base, 'sqlite-vec', `${platform}-${arch}`, extName),
+      path.join(base, 'sqlite-vec', extName),
+    );
+  }
 
   for (const candidate of candidates) {
-    const abs = path.resolve(candidate);
-    if (fs.existsSync(abs)) {
-      return abs;
+    const fixed = fixAsarPath(candidate);
+    if (fs.existsSync(fixed)) {
+      return fixed;
     }
   }
 
@@ -209,7 +231,7 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
       db.loadExtension(vecPath);
     } catch (err) {
       throw new ExtensionLoadError({
-        message: `Failed to load sqlite-vec extension: ${(err as Error).message}`,
+        message: `Failed to load sqlite-vec extension: ${(err as Error).message} [path=${vecPath}]`,
         context: {
           dbPath,
           extensionPath: vecPath,

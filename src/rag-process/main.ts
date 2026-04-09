@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { createEmbedFunction, type ReactiveEmbedFunction } from '../adapter/llm-client/embed-function-factory';
 import { ConfigProvider } from '../core/infra/config-provider';
 import { ConsoleLogger, FileLogger, type Logger, type LogLevel } from '../core/infra/logger';
@@ -76,12 +77,14 @@ function initializeRuntime(payload: RagInitPayload): RagRuntimeState {
   logger = createLogger(payload.workspaceRoot, payload.logLevel ?? 'info');
   configProvider = new ConfigProvider(payload.config);
   embedFn = createEmbedFunction({ configProvider, logger });
+  const migrationsDir = path.resolve(__dirname, '..', 'core', 'database', 'migrations');
   dbService = createDatabaseService({
     dbPath: getWorkspacePaths(payload.workspaceRoot).db,
     config: payload.config,
     logger,
     readOnly: false,
     skipFileLock: true,
+    migrationsDir,
   });
 
   ragService = embedFn.isAvailable

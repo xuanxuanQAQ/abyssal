@@ -112,9 +112,10 @@ export class DbProxy {
   constructor(options: DbProxyOptions = {}) {
     this.dbProcessPath = options.dbProcessPath
       ?? path.resolve(__dirname, 'main.js');
+    const isElectronPackaged = !!process.versions['electron'] && !(process as unknown as { defaultApp?: boolean }).defaultApp;
     this.nodePath = options.nodePath
       ?? process.env['ABYSSAL_NODE_PATH']
-      ?? 'node';
+      ?? (isElectronPackaged ? process.execPath : 'node');
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.onHealthStatus = options.onHealthStatus;
   }
@@ -142,7 +143,10 @@ export class DbProxy {
       this.child = fork(this.dbProcessPath, [], {
         execPath: this.nodePath,
         stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          ...(this.nodePath === process.execPath ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+        },
       });
 
       // Forward subprocess stdout + stderr to main process for debugging

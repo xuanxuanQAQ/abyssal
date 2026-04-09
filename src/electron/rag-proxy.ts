@@ -57,7 +57,8 @@ class RagProcessProxy implements ManagedRagService {
 
   constructor(options: RagProxyOptions) {
     this.ragProcessPath = options.ragProcessPath ?? path.resolve(__dirname, '..', 'rag-process', 'main.js');
-    this.nodePath = options.nodePath ?? process.env['ABYSSAL_NODE_PATH'] ?? 'node';
+    const isElectronPackaged = !!process.versions['electron'] && !(process as unknown as { defaultApp?: boolean }).defaultApp;
+    this.nodePath = options.nodePath ?? process.env['ABYSSAL_NODE_PATH'] ?? (isElectronPackaged ? process.execPath : 'node');
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
@@ -144,7 +145,10 @@ class RagProcessProxy implements ManagedRagService {
       this.child = fork(this.ragProcessPath, [], {
         execPath: this.nodePath,
         stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          ...(this.nodePath === process.execPath ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+        },
       });
 
       if (this.child.stdout) {

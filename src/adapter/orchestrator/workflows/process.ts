@@ -41,7 +41,6 @@ const PROCESS_FAILURE_CODES = new Set([
   'vector_indexing_failed',
   'rag_service_unavailable',
   'reference_extraction_failed',
-  'no_references_extracted',
 ]);
 
 const PROCESS_FAILURE_PRIORITY = [
@@ -55,7 +54,6 @@ const PROCESS_FAILURE_PRIORITY = [
   'vector_indexing_failed',
   'rag_service_unavailable',
   'reference_extraction_failed',
-  'no_references_extracted',
 ] as const;
 
 interface TextQualityDiagnostics {
@@ -98,7 +96,6 @@ function stageForProcessFailure(reason: string | null | undefined): string {
     case 'rag_service_unavailable':
       return 'indexing';
     case 'reference_extraction_failed':
-    case 'no_references_extracted':
       return 'references';
     default:
       return 'process';
